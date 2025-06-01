@@ -1,0 +1,86 @@
+{
+  // Use IntelliSense to learn about possible attributes.
+  // Hover to view descriptions of existing attributes.
+  // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "format",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/main.py",
+      "args": [ "format" ],
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        // Optional: add environment variables here
+      },
+      "envFile": "${workspaceFolder}/.env"
+    },
+    {
+      "name": "dump",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/main.py",
+      "args": [ "dump" ],
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        // Optional: add environment variables here
+      },
+      "envFile": "${workspaceFolder}/.env"
+    },
+    {
+      "name": "store",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/main.py",
+      "args": [ "store", "--in", "toto", "toto" ],
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        // Optional: add environment variables here
+      },
+      "envFile": "${workspaceFolder}/.env"
+    },
+    {
+      "name": "list",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/main.py",
+      "args": [ "list" ],
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        // Optional: add environment variables here
+      },
+      "envFile": "${workspaceFolder}/.env"
+    },
+    {
+      "name": "remove",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/main.py",
+      "args": [ "remove", "titi" ],
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        // Optional: add environment variables here
+      },
+      "envFile": "${workspaceFolder}/.env"
+    },
+    {
+      "name": "fetch",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/main.py",
+      "args": [ "fetch", "--out", "aaa", "toto" ],
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        // Optional: add environment variables here
+      },
+      "envFile": "${workspaceFolder}/.env"
+    }
+  ]
+}

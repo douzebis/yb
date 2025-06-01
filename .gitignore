@@ -1,0 +1,6 @@
+/.venv/
+/dist/
+/result/
+/src/yb.egg-info/
+/yb.code-workspace
+__pycache__/
