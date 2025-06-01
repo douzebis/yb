@@ -12,6 +12,9 @@ from yb.store import Store
 @click.command(
     'rm',
     help='''
+        Remove a named blob from the YubiKey.
+
+        This permanently deletes the stored blob associated with the given name.
     ''',
 )
 @click.argument(

@@ -4,13 +4,26 @@
 
 import click
 from yb.store import Store
+import textwrap
 
 # === LS =======================================================================
 
 @click.command(
     'ls',
-    help='''
-    ''',
+    help='''List all blobs stored in the YubiKey.
+
+        \b
+        Each entry shows the following fields:
+          
+          - Encryption status: '-' for encrypted, 'U' for unencrypted
+          - Number of PIV objects used to store the blob
+          - Blob size in bytes
+          - Creation timestamp (YYYY-MM-DD HH:MM)
+          - Blob name
+          
+        Example output:
+          -  1        7  2025-06-01 13:22  public-data
+          U  1       10  2025-06-01 13:36  sensitive-data''',
 )
 @click.pass_context
 def cli_list(ctx,

@@ -25,9 +25,14 @@ from yb.parse_int import parse_int_base_0
 @click.command(
     'format',
     help='''
-    Initialize a YubiKey slot with an ECC P-256 (secp256r1) key pair for use in blob encryption/decryption.
+        Provision and format a set of custom PIV data objects in the YubiKey PIV
+        application for storing encrypted binary blob data.
 
-    This key will be used to derive shared secrets using ECDH.
+        Optionally, initialize a YubiKey slot with an ECC P-256 (secp256r1) key
+        pair for blob encryption and decryption. This key is used to derive
+        shared secrets via Elliptic-Curve Diffie-Hellman (ECDH). Once the slot
+        is initialized, you can reuse it and reformat without generating a new
+        key.
     ''',
 )
 @click.option(
@@ -36,7 +41,7 @@ from yb.parse_int import parse_int_base_0
     callback=lambda ctx, param, value: parse_int_base_0(value),
     default=DEFAULT_OBJECT_COUNT,
     show_default=True,
-    help="Count of PIV objects to use for storage.",
+    help="Number of PIV objects to allocate for blob storage.",
 )
 @click.option(
     '-s', '--object-size',
@@ -44,28 +49,28 @@ from yb.parse_int import parse_int_base_0
     callback=lambda ctx, param, value: parse_int_base_0(value),
     default=OBJECT_MAX_SIZE,
     show_default=True,
-    help='Size to use for the PIV objects.',
+    help='Size (in bytes) of each allocated PIV object.',
 )
 @click.option(
     '-k', '--key-slot',
     type=str,
     default='82',
     show_default=True,
-    help='YubiKey slot ID to generate the key pair.',
+    help='YubiKey slot ID to generate the ECC key pair in.',
 )
 @click.option(
     '-g', '--generate/--no-generate',
     is_flag=True,
     default=False,
     show_default=True,
-    help='',
+    help='Whether to generate and store a new key pair.',
 )
 @click.option(
     '-n', '--subject',
     type=str,
     default=DEFAULT_X509_SUBJECT,
-    show_default=False,
-    help='',
+    show_default=True,
+    help='Subject identifier for the key ',
 )
 @click.pass_context
 def cli_format(ctx,
