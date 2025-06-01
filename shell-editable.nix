@@ -19,6 +19,7 @@ pkgs.mkShell {
       pyscard
       pyudev
       pyusb
+      pyyaml
       reuse
       setuptools
       virtualenv
@@ -35,10 +36,12 @@ pkgs.mkShell {
     echo "PYTHONPATH: $PYTHONPATH"
 
     # Set up the virtual env
-    if [ ! -d .venv ]; then
-      python -m venv .venv
+    if [ -d .venv ]; then
+      rm -rf .venv
     fi
+    python -m venv .venv
     . .venv/bin/activate
+    pip install reuse
     pip install --editable .
   '';
 }

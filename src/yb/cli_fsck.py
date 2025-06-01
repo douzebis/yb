@@ -12,6 +12,14 @@ import yaml
 @click.command(
     'fsck',
     help='''
+        Perform an integrity check on the blob store and display low-level
+        information about all allocated PIV objects in the YubiKey.
+
+        This includes metadata such as object index, usage status, blob
+        association, chunk positions, and encryption details.
+
+        Useful for debugging, verifying store consistency, and inspecting
+        partially written or unused objects.
     ''',
 )
 @click.pass_context

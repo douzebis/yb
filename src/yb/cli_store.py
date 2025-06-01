@@ -16,19 +16,22 @@ from yb.crypto import Crypto
 @click.command(
     'store',
     help='''
+        Store data as a named blob in the YubiKey. By default, the data can be
+        stored either encrypted or unencrypted depending on the flags below.
     ''',
 )
 @click.option(
     '-e/-u', '--encrypted/--unencrypted',
     is_flag=True,
     default=True,
-    help='',
+    help='Whether to encrypt the blob before storing it.',
 )
 @click.option(
     '--in', 'input_file',
     type=click.File('rb'),
     required=False,
-    help='',
+    help='Read the data to store from the specified file.'
+         ' If omitted, data is read from standard input.',
 )
 @click.argument(
     'name',

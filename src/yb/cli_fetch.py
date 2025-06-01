@@ -16,13 +16,18 @@ import getpass
 @click.command(
     'fetch',
     help='''
+        Retrieve a named blob from the YubiKey.
+
+        By default, the blob is written to standard output unless an output file
+        is specified.
     ''',
 )
 @click.option(
     '--out',
     type=click.File('wb'),
     required=False,
-    help='',
+    help='Write the retrieved blob to the specified file.'
+         ' If omitted, output is written to standard output.',
 )
 @click.argument(
     'name',

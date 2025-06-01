@@ -26,16 +26,33 @@ PKCS11_LIB = "libykcs11.so"
 
 
 @click.group(
-    help="""
-CLI tool for securely storing and retrieving small binary blobs using a YubiKey.
+    help='''
+        Securely store, retrieve, and manage small binary blobs using a YubiKey.
 
-\b
-This tool uses hybrid encryption:
-  - An ephemeral EC key is generated to perform ECDH with a persistent key stored on the YubiKey.
-  - The resulting shared secret is used to derive an AES-256 key (HKDF-SHA256).
-  - Data is encrypted/decrypted using AES-CBC with PKCS7 padding.
-  - Encrypted data is stored into the YubiKey as a custom object
-"""
+        The yb tool uses the YubiKey's PIV application to store encrypted or
+        unencrypted binary data across a set of custom PIV data objects. Each
+        blob is stored under a user-defined name, and commands are provided to
+        create, list, retrieve, delete, and inspect these blobs.
+
+        If multiple PIV readers are connected, you must use --reader to select
+        one, otherwise yb will complain, for example:
+
+        \b
+          Error: Multiple PIV readers are connected:
+          - Yubico YubiKey OTP+FIDO+CCID 00 00
+          - Yubico YubiKey OTP+FIDO+CCID 01 00
+          
+        - When --reader is set, yb will flash the selected YubiKey and prompt for a PIN
+          to verify reader identity. This verification is skipped with the -x flag.
+          
+        yb uses hybrid encryption to protect stored data:
+          
+          - An ephemeral ECC P-256 key is generated per store operation.
+          - ECDH is performed with a persistent key stored on the YubiKey.
+          - A shared secret is derived using HKDF-SHA256 to create an AES-256 key.
+          - Data is encrypted with AES-CBC and PKCS#7 padding.
+          - Encrypted blobs are stored in the YubiKey's PIV application.
+    '''
 )
 @click.option(
     '-r', '--reader',
@@ -84,7 +101,7 @@ def cli(
 cli.add_command(cli_fsck)
 cli.add_command(cli_fetch)
 cli.add_command(cli_format)
-cli.add_command(cli_list_readers)
+#cli.add_command(cli_list_readers)
 cli.add_command(cli_list)
 cli.add_command(cli_remove)
 cli.add_command(cli_store)
