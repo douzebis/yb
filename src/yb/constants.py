@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2025 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+#
+# SPDX-License-Identifier: MIT
+
 # Fred's Fob's magic
 YBLOB_MAGIC = 0xF2ed5F0b
 OBJECT_MIN_SIZE = 10

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2025 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+#
+# SPDX-License-Identifier: MIT
+
 # Allowed RDN attribute types in Yubico/OpenSSL style
 VALID_ATTRS = {'CN', 'O', 'OU', 'C', 'L', 'ST', 'emailAddress'}
 

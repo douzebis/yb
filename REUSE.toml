@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: 2025 2025 Frederic Ruget <fred@atlant.is>
+#
+# SPDX-License-Identifier: MIT
+
+version = 1
+
+[[annotations]]
+path = "./*"
+SPDX-FileCopyrightText = "2025 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)"
+SPDX-License-Identifier = "MIT"
+
+# Note
+#
+# The information above must be explicitly provided on the command-line
+# to the reuse utility, like so:
+#
+# reuse annotate --recursive toto \
+#   --copyright "Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)" \
+#   --license MIT
