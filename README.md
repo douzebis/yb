@@ -92,7 +92,7 @@ yb format --generate
 yb store --in my-secret.txt my-blob
 
 # Fetch it back
-yb fetch --out recovered.txt my-blob
+yb fetch --out recovered.txt my-blob  # Here you'll be asked for the PIN
 
 # List blobs
 yb ls
