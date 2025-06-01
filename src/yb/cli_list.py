@@ -22,8 +22,8 @@ import textwrap
           - Blob name
           
         Example output:
-          -  1        7  2025-06-01 13:22  public-data
-          U  1       10  2025-06-01 13:36  sensitive-data''',
+          -  1        7  2025-06-01 13:22  sensitive-data
+          U  1       10  2025-06-01 13:36  public-data''',
 )
 @click.pass_context
 def cli_list(ctx,
