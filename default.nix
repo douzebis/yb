@@ -21,9 +21,15 @@ pkgs.python3Packages.buildPythonApplication rec {
   ];
 
   propagatedBuildInputs = with pkgs.python3Packages; [
-    click
-    pyyaml
-    cryptography
+    pkgs.yubikey-manager
+    pkgs.yubico-piv-tool
+    pkgs.python3Packages.click
+    pkgs.python3Packages.pyyaml
+    pkgs.python3Packages.cryptography
+  ];
+
+  makeWrapperArgs = [
+    "--set" "LD_LIBRARY_PATH" "${pkgs.yubico-piv-tool}/lib"
   ];
 
   checkPhase = ''

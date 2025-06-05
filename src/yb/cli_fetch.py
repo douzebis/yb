@@ -23,7 +23,7 @@ import getpass
     ''',
 )
 @click.option(
-    '--out',
+    '-o', '--output',
     type=click.File('wb'),
     required=False,
     help='Write the retrieved blob to the specified file.'
@@ -35,7 +35,7 @@ import getpass
 )
 @click.pass_context
 def cli_fetch(ctx,
-        out: BinaryIO | None,
+        output: BinaryIO | None,
         name: str,
     ) -> None:
     ''''''
@@ -81,7 +81,7 @@ def cli_fetch(ctx,
         )
 
     # Flush the result
-    if out is None:
+    if output is None:
         sys.stdout.buffer.write(payload)
     else:
-        out.write(payload)
+        output.write(payload)
