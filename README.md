@@ -36,7 +36,7 @@ Choose one of the following:
 nix-shell
 
 # Option 2: Use nix develop (installs into a .venv for editing)
-nix develop -f shell-editable.nix
+nix-shell shell-editable.nix
 
 # Option 3: Build the yb derivation (does not activate environment)
 nix-build

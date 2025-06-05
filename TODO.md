@@ -7,3 +7,6 @@
 - [ ] Add non-regression tests
 - [ ] Manage additional exceptions to avoid spitting stack traces to the user's
       face
+- [ ] Add a `--virtual-piv PATH` option to be able to run tests without a
+      physical device. The custom objects (and eventually ECCP256 keypair would
+      be stored under the PATH folder)

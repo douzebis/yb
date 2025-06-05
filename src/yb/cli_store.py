@@ -27,7 +27,7 @@ from yb.crypto import Crypto
     help='Whether to encrypt the blob before storing it.',
 )
 @click.option(
-    '--in', 'input_file',
+    '-i', '--input',
     type=click.File('rb'),
     required=False,
     help='Read the data to store from the specified file.'
@@ -41,7 +41,7 @@ from yb.crypto import Crypto
 def cli_store(
         ctx,
         encrypted: bool,
-        input_file: BinaryIO | None,
+        input: BinaryIO | None,
         name: str,
     ) -> None:
     ''''''
@@ -56,10 +56,10 @@ def cli_store(
 
     blob_modification_time = int(time.time())
     payload: bytes
-    if input_file is None:
+    if input is None:
         payload = sys.stdin.buffer.read()
     else:
-        payload = input_file.read()
+        payload = input.read()
     assert isinstance(payload, bytes)
     blob_unencrypted_size = len(payload)
 
