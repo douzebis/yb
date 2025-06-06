@@ -21,8 +21,9 @@ pkgs.python3Packages.buildPythonApplication rec {
   ];
 
   propagatedBuildInputs = with pkgs.python3Packages; [
-    pkgs.yubikey-manager
+    pkgs.opensc
     pkgs.yubico-piv-tool
+    pkgs.yubikey-manager
     pkgs.python3Packages.click
     pkgs.python3Packages.pyyaml
     pkgs.python3Packages.cryptography
