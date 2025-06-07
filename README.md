@@ -31,7 +31,7 @@ cryptography, leveraging the hardware-backed security of your YubiKey.
 
 Choose one of the following:
 
-```bash
+```shell
 # Option 1: Enter a dev environment with dependencies installed via nix-shell
 nix-shell
 
@@ -44,7 +44,7 @@ nix-build
 
 ### Installation (Traditional Python)
 
-```bash
+```shell
 # Create and activate a virtual environment
 python3.12 -m venv .venv
 source .venv/bin/activate
@@ -57,7 +57,7 @@ pip install --editable .
 
 ## Command Overview
 
-```bash
+```shell
 yb format   # Initialize PIV objects and optionally generate key pair
 yb store    # Store a named blob in the YubiKey
 yb fetch    # Retrieve a blob by name
@@ -84,15 +84,16 @@ yb uses a **hybrid encryption scheme**:
 
 ## Example Usage
 
-```bash
+```shell
 # Format the store (initialize objects and key)
 yb format --generate
 
 # Store a file as a secure blob
-yb store --in my-secret.txt my-blob
+yb store --input my-secret.txt my-blob
 
 # Fetch it back
-yb fetch --out recovered.txt my-blob  # Here you'll be asked for the PIN
+yb fetch --output recovered.txt my-blob
+# Please enter User PIN:
 
 # List blobs
 yb ls
