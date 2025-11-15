@@ -31,8 +31,9 @@ let
       pkgs.yubico-piv-tool
       pkgs.yubikey-manager
       pythonPkgs.click
-      pythonPkgs.pyyaml
       pythonPkgs.cryptography
+      pythonPkgs.prompt_toolkit
+      pythonPkgs.pyyaml
     ];
 
     makeWrapperArgs = [
@@ -67,20 +68,16 @@ let
   # ---------------------------------------------------------------------------
   devShell = pkgs.mkShell {
     buildInputs = [
+
       pkgs.opensc
+      pkgs.reuse
       pkgs.yubico-piv-tool
       pkgs.yubikey-manager
-      pkgs.reuse
-      (pkgs.python3.withPackages (ps: with ps; [
-        click
-        cryptography
-        isort
-        pip
-        pytest
-        pyyaml
-        setuptools
-        wheel
-      ]))
+      pythonPkgs.click
+      pythonPkgs.cryptography
+      pythonPkgs.prompt_toolkit
+      pythonPkgs.pytest
+      pythonPkgs.pyyaml
     ];
 
     shellHook = ''

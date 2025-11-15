@@ -643,6 +643,351 @@ yb fsck [--long]
 
 ---
 
+## Future Enhancement Investigations
+
+This section documents technical feasibility investigations for potential future enhancements.
+
+### Touch-Based Device Selection (FIDO2)
+
+**Motivation**: When multiple YubiKeys are connected, allow users to select a device by touching it physically, rather than navigating with arrow keys.
+
+**Investigation Date**: 2025-11-15
+
+**Desired Behavior**:
+- Display list of connected YubiKeys (with serials)
+- Each YubiKey continuously flashes its LED
+- User touches the desired YubiKey
+- System detects which key was touched and selects it
+
+**Technical Approach**: Hybrid PIV + FIDO2
+- PIV interface: Flash LED continuously via rapid APDU commands
+- FIDO2 interface: Poll for user presence verification in parallel
+
+**Feasibility Analysis**:
+
+**FIDO2 Touch Detection Options**:
+
+1. **Option A: get_assertion with non-existent credential**
+   - Strategy: Call CTAP2 `get_assertion` with dummy RP ID and non-existent credential
+   - Expected: Operation blocks waiting for user presence, then fails with "no credentials"
+   - State left on device: None (no credentials created or modified)
+   - Testing: See `mock_up/test_fido2_touch.py`
+   - **Status**: Needs verification - does operation wait for touch before failing?
+
+2. **Option B: authenticatorSelection (CTAP 2.1)**
+   - Strategy: Use CTAP 2.1 command 0x0B (authenticatorSelection)
+   - Purpose: Designed to help identify which authenticator to use
+   - Problem: Does NOT require user presence - defeats the purpose
+   - **Status**: Not suitable for touch detection
+
+3. **Option C: makeCredential with dummy data**
+   - Strategy: Call `makeCredential` to trigger user presence check
+   - Problem: Creates a credential on the device (leaves state)
+   - Mitigation: Could delete immediately after, but still modifies device transiently
+   - **Status**: Not suitable (violates no-state-modification requirement)
+
+**Connection Management Challenge**:
+- PIV flashing requires SmartCardConnection
+- FIDO2 touch detection requires FidoConnection
+- YubiKey may not support simultaneous connections of both types
+- Need to test: Can we hold both connections at once? Or alternate rapidly?
+
+**Prototype Approach** (if feasible):
+```python
+# Pseudo-code
+for each yubikey:
+    thread_flash[yubikey] = start_continuous_flash(yubikey, piv_connection)
+    thread_touch[yubikey] = start_touch_polling(yubikey, fido_connection)
+
+# Wait for first touch detected
+touched_yubikey = wait_for_any_touch(thread_touch)
+
+# Stop all threads
+for thread in thread_flash:
+    thread.stop()
+for thread in thread_touch:
+    thread.stop()
+
+return touched_yubikey
+```
+
+**Constraints Evaluation**:
+- ✓ **No pre-provisioning required**: Option A requires no credentials
+- ⚠ **No state modification**: Option A creates no state, but need to verify
+- ⚠ **Connection management**: Uncertain if dual connection types work simultaneously
+- ⚠ **Library support**: Need to verify fido2 library behavior with non-existent credentials
+
+**Implementation Complexity**: **High**
+- Requires managing two connection types per YubiKey
+- Threading complexity (N flash threads + N touch poll threads)
+- Error handling for connection conflicts
+- Platform-specific USB behavior differences
+
+**CRITICAL CHALLENGE: PIV-to-FIDO Device Mapping**
+
+The most significant technical challenge is mapping PIV devices (with serials) to FIDO HID devices:
+
+**The Problem**:
+1. PIV enumeration (via ykman) gives us: Serial numbers, versions, PC/SC reader names
+2. FIDO enumeration (via fido2.hid) gives us: HID paths, vendor/product IDs, CTAP info
+3. **No obvious correlation**: FIDO CTAP2 info does NOT include YubiKey serial number
+4. **Different interfaces**: PIV uses SmartCard interface, FIDO uses HID interface
+5. **Different permissions**: FIDO HID often requires special udev rules/sudo
+
+**Correlation Strategies Under Investigation**:
+
+1. **USB Device Path Correlation** (most promising)
+   - Hypothesis: Both PIV and FIDO interfaces share same USB device path
+   - Example: PIV and FIDO on bus-001/port-003 → same physical YubiKey
+   - Need to extract: USB path from ykman device object AND from fido2 HID device
+   - Status: **Investigation in progress** (see `mock_up/investigate_usb_mapping.py`)
+
+2. **Enumeration Order Correlation** (unreliable)
+   - Assumption: PIV and FIDO enumerate in same order
+   - Problem: Platform-dependent, not guaranteed stable
+   - Problem: Different counts if one interface is restricted
+   - Status: **Not recommended** (too fragile)
+
+3. **AAGUID Matching** (insufficient)
+   - CTAP2 provides AAGUID (Authenticator Attestation GUID)
+   - Problem: AAGUID is YubiKey model-wide, not unique per device
+   - All YubiKey 5 Series share same AAGUID
+   - Status: **Not viable** (not unique)
+
+4. **Trial Correlation** (hacky but might work)
+   - Flash PIV device with serial X
+   - Poll all FIDO devices for touch
+   - When touch detected on FIDO device Y → map X to Y
+   - Problem: Requires pre-registration phase
+   - Problem: User must touch each key in sequence
+   - Status: **Possible fallback** but defeats UX goal
+
+**Testing Scripts**:
+- `mock_up/diagnose_fido_access.py` - Debug FIDO HID permission issues
+- `mock_up/investigate_usb_mapping.py` - Explore USB path correlation
+
+**Permission Considerations**:
+- FIDO HID access typically requires:
+  - udev rules for /dev/hidraw* devices
+  - User in 'plugdev' or similar group
+  - Or sudo access (not acceptable for production)
+- PIV access via PC/SC works without special permissions
+- **This permission gap complicates deployment**
+
+**Preliminary Assessment**: **Likely Infeasible**
+
+Until USB path correlation is proven to work reliably, touch-based selection should be considered **blocked** by the mapping problem.
+
+**Investigation Status**: Data collection needed from real hardware (2025-11-15)
+
+**Recommendation After Mapping Investigation**: **TBD - Depends on USB Path Feasibility**
+
+Next steps:
+1. Run `mock_up/test_fido2_touch.py` to verify Option A behavior
+2. Test simultaneous PIV + FIDO2 connections on same YubiKey
+3. If feasible: Build proof-of-concept multi-device selector
+4. If not feasible: Arrow-key navigation is acceptable UX
+
+**Alternative UX** (current implementation):
+- Arrow keys to navigate between devices
+- Selected device flashes continuously
+- ENTER to confirm
+- **Status**: Implemented in `mock_up/yubikey_selector.py` (2025-11-15)
+
+---
+
+### Secure Management Key Input (Subprocess Delegation)
+
+**Motivation**: The current implementation uses `click.prompt(hide_input=True)` to read the management key in Python. This creates a security risk: the key exists in Python's process memory and could potentially leak via memory dumps, swap files, or debug traces.
+
+**Investigation Date**: 2025-11-15
+
+**Desired Behavior**:
+- User enters management key via secure prompt
+- Key never enters Python's process memory
+- Key passed directly to `yubico-piv-tool` subprocess
+- Existing CLI interface unchanged (`--key=-` still prompts)
+
+**Current Implementation Risk**:
+```python
+# Current approach (src/yb/main.py)
+if management_key == "-":
+    management_key = click.prompt(
+        "Management key (48 hex chars)",
+        hide_input=True
+    )
+    # ⚠ Key now in Python's memory
+    management_key = validate_management_key(management_key)
+    # ⚠ Key still in Python's memory
+
+# Later...
+piv.write_object(..., management_key=management_key)
+# ⚠ Key passed as argument to subprocess (visible in ps aux briefly)
+```
+
+**Security Concerns**:
+1. Key stored in Python string (immutable, cannot securely erase)
+2. Python process memory could be dumped/debugged
+3. Key might be swapped to disk
+4. Exception traces might leak key value
+5. Command-line argument briefly visible in process list (`ps aux`)
+
+**Technical Approach**: Delegate key reading to subprocess
+
+**Option A: Shell Wrapper with `read -s`**:
+
+Strategy: Use shell script to read key and pass to yubico-piv-tool
+
+```python
+# Approach: Shell reads key, Python never sees it
+shell_script = """
+echo "Management key (48 hex chars): " >&2
+read -s KEY
+echo "" >&2
+yubico-piv-tool -k "$KEY" -a write-object ...
+"""
+
+subprocess.run(
+    ["bash", "-c", shell_script],
+    stdin=None,  # Inherit terminal access
+    stdout=subprocess.PIPE,
+    stderr=None,  # Let error messages show
+)
+```
+
+**Advantages**:
+- ✓ Key never enters Python's memory
+- ✓ Key only in shell subprocess memory (smaller attack surface)
+- ✓ Shell `read -s` is battle-tested for password input
+- ✓ Key not visible in process list (embedded in script)
+
+**Disadvantages**:
+- ✗ Requires `shell=True` or bash subprocess (security consideration)
+- ✗ More complex error handling (parse yubico-piv-tool output)
+- ✗ Platform-specific (requires bash or compatible shell)
+- ✗ Harder to test and maintain
+
+**Option B: Explicit `/dev/tty` Access**:
+
+Strategy: Python opens `/dev/tty`, passes to subprocess stdin
+
+```python
+import getpass  # No, still in Python memory...
+
+# Better: Let subprocess read directly
+with open("/dev/tty", "r") as tty_in:
+    # Subprocess reads from tty_in
+    # Problem: Still need to prompt for input
+    # yubico-piv-tool doesn't have built-in prompting
+```
+
+**Problem**: `yubico-piv-tool` requires `-k <key>` argument, doesn't have built-in password prompting
+
+**Option C: Wrapper Script (External)**:
+
+Strategy: Create shell wrapper script `yb-write-secure`
+
+```bash
+#!/bin/bash
+# yb-write-secure.sh
+echo "Management key (48 hex chars): " >&2
+read -s MGMT_KEY
+echo "" >&2
+
+# Validate key format
+if ! echo "$MGMT_KEY" | grep -qE '^[0-9a-fA-F]{48}$'; then
+    echo "Error: Invalid management key format" >&2
+    exit 1
+fi
+
+# Call yubico-piv-tool with key
+yubico-piv-tool -k "$MGMT_KEY" "$@"
+```
+
+Usage from Python:
+```python
+subprocess.run(
+    ["yb-write-secure", "-a", "write-object", ...],
+    stdin=None,
+    check=True,
+)
+```
+
+**Advantages**:
+- ✓ Key never in Python memory
+- ✓ Reusable wrapper script
+- ✓ Validation in shell
+- ✓ Standard Unix pattern
+
+**Disadvantages**:
+- ✗ Requires installing additional script
+- ✗ More complex deployment
+- ✗ Platform-specific
+
+**TTY Access Verification**:
+
+Testing (see `mock_up/test_subprocess_tty.py`):
+
+1. **Inherited stdio**: `subprocess.run(..., stdin=None)` ✓ Works
+   - Subprocess can access parent's terminal
+   - Shell `read` commands work correctly
+
+2. **Explicit `/dev/tty`**: `subprocess.run(..., stdin=open("/dev/tty"))` ✓ Works
+   - Explicit terminal access
+   - Works even if parent stdio redirected
+
+3. **Shell `read -s`**: ✓ Works
+   - Secure password input without echo
+   - Key stays in shell, never enters Python
+
+**yubico-piv-tool Capabilities**:
+- Has `-k <key>` option for management key
+- Does NOT have built-in password prompting
+- Does NOT support `--key=-` or environment variables
+- Requires key as command-line argument (visible in `ps aux`)
+
+**Implementation Complexity**: **Medium to High**
+- Option A (inline shell): Medium complexity, platform-specific
+- Option C (wrapper script): Medium complexity, deployment complexity
+
+**Security Benefit Assessment**:
+
+**Realistic Threat Scenarios**:
+1. Python process memory dump during crash → Key leaked
+2. Core dump analysis by attacker → Key leaked
+3. Swap file inspection → Key leaked
+4. Debugger attached to Python process → Key leaked
+5. Exception stack trace logged → Key leaked
+
+**Mitigation Value**:
+- High value for high-security environments
+- Moderate value for typical usage
+- Low value if user already trusts local system
+
+**Recommendation**: **Feasible but defer implementation**
+
+**Rationale**:
+1. ✓ Technically feasible using shell wrapper approach
+2. ✓ Subprocess TTY access verified working
+3. ⚠ Added complexity for moderate security benefit
+4. ⚠ Platform-specific implementation (bash required)
+5. ⚠ Current approach acceptable for most threat models
+
+**Current Mitigation**:
+- Use `--key=<hex>` only in trusted environments
+- Use `--key=-` for interactive prompt (better than cmdline)
+- Keep system secure (encrypted swap, trusted users)
+- Consider `mlock()` for future enhancement (lock memory pages)
+
+**Future Implementation Priority**: **Low to Medium**
+- Implement if targeting high-security environments
+- Defer until user request or security audit
+- Document the limitation in security section
+
+**Testing Script**: `mock_up/test_subprocess_tty.py`
+
+---
+
 ## References
 
 ### Code Organization
