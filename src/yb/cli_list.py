@@ -31,8 +31,9 @@ def cli_list(ctx,
     ''''''
 
     reader: str = ctx.obj['reader']
+    piv = ctx.obj['piv']
 
-    store = Store.from_piv_device(reader)
+    store = Store.from_piv_device(reader, piv)
     store.sanitize()
 
     blobs = [

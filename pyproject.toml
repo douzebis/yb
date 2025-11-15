@@ -26,6 +26,17 @@ package-dir = {"" = "src"}
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.pytest.ini_options]
+testpaths = [
+    "tests"
+]
+# Filter warning caused by ykman SWIG-generated python bindings
+filterwarnings = [
+    "ignore:.*SwigPyPacked.*:DeprecationWarning",
+    "ignore:.*SwigPyObject.*:DeprecationWarning",
+    "ignore:.*swigvarlink.*:DeprecationWarning",
+]
+
 [tool.ruff]
 fix = true
 # unsafe-fixes = true

@@ -4,7 +4,7 @@
 
 import click
 import yaml
-from yb.piv import Piv
+from yb.piv import HardwarePiv
 
 # === LIST-READERS =============================================================
 
@@ -15,6 +15,8 @@ from yb.piv import Piv
     List all available YubiKey PIV readers connected to the system.
     """,
 )
-def cli_list_readers() -> None:
-    readers = Piv.list_readers()
+@click.pass_context
+def cli_list_readers(ctx) -> None:
+    piv = ctx.obj.get('piv') if ctx.obj else HardwarePiv()
+    readers = piv.list_readers()
     print(yaml.dump(readers))

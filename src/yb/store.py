@@ -34,7 +34,7 @@ from yb.constants import (
     YBLOB_MAGIC_S,
     ZERO,
 )
-from yb.piv import Piv
+from yb.piv import PivInterface
 
 # === STORE ====================================================================
 
@@ -70,12 +70,14 @@ class Store:
             object_size_in_store: int,
             object_count_in_store: int,
             store_encryption_key_slot: int,
+            piv: PivInterface,
         ):
         self.reader = reader
         self.yblob_magic = yblob_magic
         self.object_size_in_store = object_size_in_store
         self.object_count_in_store = object_count_in_store
         self.store_encryption_key_slot = store_encryption_key_slot
+        self.piv = piv
         self.store_age = 0
         self.objects: list[Object] = []
 
@@ -86,8 +88,9 @@ class Store:
     def from_piv_device(
             cls,
             reader: str,
+            piv: PivInterface,
         ) -> Store:
-        raw_data = Piv.read_object(reader, OBJECT_ID_ZERO)
+        raw_data = piv.read_object(reader, OBJECT_ID_ZERO)
 
         # --- YBLOB_MAGIC
 
@@ -126,12 +129,13 @@ class Store:
             object_size_in_store=object_size_in_store,
             object_count_in_store=object_count_in_store,
             store_encryption_key_slot=store_encryption_key_slot,
+            piv=piv,
         )
 
         for index in range(object_count_in_store):
             id = OBJECT_ID_ZERO + index
             if index != 0:
-                raw_data = Piv.read_object(store.reader, id)
+                raw_data = piv.read_object(store.reader, id)
             if len(raw_data) != store.object_size_in_store:
                 raise click.ClickException(
                     f'Object 0x{id:#02x} has bad object_size_in_store:'
@@ -272,7 +276,7 @@ class Store:
             id = OBJECT_ID_ZERO + obj.object_index_in_store
             if obj.is_dirty:
                 print('.', end='', file=sys.stderr, flush=True)
-                Piv.write_object(self.reader, id, obj.serialize(), management_key)
+                self.piv.write_object(self.reader, id, obj.serialize(), management_key)
         print('', file=sys.stderr)
 
 

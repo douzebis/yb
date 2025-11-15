@@ -51,8 +51,9 @@ def cli_store(
 
     reader: str = ctx.obj['reader']
     management_key: str | None = ctx.obj.get('management_key')
+    piv = ctx.obj['piv']
 
-    store = Store.from_piv_device(reader)
+    store = Store.from_piv_device(reader, piv)
     store.sanitize()
 
     blob_modification_time = int(time.time())
