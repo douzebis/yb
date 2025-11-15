@@ -22,6 +22,41 @@ PIV_OBJECT_ID = "0x5f0001"
 # PKCS11_LIB = "/nix/store/0makfrhmjm2b7w3abp0j77b62nkxv9d9-yubico-piv-tool-2.6.1/lib/libykcs11.so"
 PKCS11_LIB = "libykcs11.so"
 
+# === Helper Functions =========================================================
+
+
+def validate_management_key(key: str) -> str:
+    """Validate and normalize management key.
+
+    Args:
+        key: Hex string of management key
+
+    Returns:
+        Normalized hex string (lowercase, no spaces)
+
+    Raises:
+        click.ClickException: If key is invalid
+    """
+    # Remove spaces and dashes for user convenience
+    key = key.replace(' ', '').replace('-', '').lower()
+
+    # Check if it's valid hex
+    try:
+        bytes.fromhex(key)
+    except ValueError:
+        raise click.ClickException(
+            'Management key must be a hex string (0-9, a-f)'
+        )
+
+    # Check length (24 bytes = 48 hex chars for 3DES)
+    if len(key) != 48:
+        raise click.ClickException(
+            f'Management key must be 48 hex characters (24 bytes), got {len(key)}'
+        )
+
+    return key
+
+
 # === Main CLI =================================================================
 
 
@@ -77,12 +112,19 @@ PKCS11_LIB = "libykcs11.so"
     is_flag=True,
     help='Skip reader verification (no PIN prompt)'
 )
+@click.option(
+    '-k', '--key',
+    type=str,
+    default=None,
+    help='Management key as 48-char hex string, or "-" to prompt (default: YubiKey default key)'
+)
 @click.pass_context
 def cli(
     ctx,
     serial: int | None,
     reader: str | None,
     no_verify: bool,
+    key: str | None,
 ) -> None:
     """CLI tool for managing cryptographic operations."""
 
@@ -155,8 +197,24 @@ def cli(
         if not Piv.verify_reader(chosen_reader, 0x9a):
             raise click.ClickException('Could not verify the PIN.')
 
+    # Process management key
+    management_key: str | None = None
+    if key is not None:
+        if key == '-':
+            # Prompt for key (hidden input)
+            key_input = click.prompt(
+                'Management key (48 hex chars)',
+                hide_input=True,
+                type=str
+            )
+            management_key = validate_management_key(key_input)
+        else:
+            # Validate provided key
+            management_key = validate_management_key(key)
+
     ctx.ensure_object(dict)  # Ensure ctx.obj is a dict
     ctx.obj['reader'] = chosen_reader  # Store chosen reader in context
+    ctx.obj['management_key'] = management_key  # Store management key in context
 
 cli.add_command(cli_fsck)
 cli.add_command(cli_fetch)

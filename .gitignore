@@ -6,9 +6,8 @@
 /.cache/
 /.venv/
 /dist/
-/result/
 /src/yb.egg-info/
 /yb.code-workspace
-__pycache__/
+/__pycache__
 /result*
 

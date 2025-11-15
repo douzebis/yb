@@ -261,13 +261,18 @@ class Store:
 
     # --- STORE SYNC -----------------------------------------------------------
 
-    def sync(self) -> None:
+    def sync(self, management_key: str | None = None) -> None:
+        """Synchronize dirty objects to the YubiKey.
+
+        Args:
+            management_key: Optional 48-char hex management key. If None, uses YubiKey default.
+        """
         assert self.yblob_magic == YBLOB_MAGIC
         for obj in self.objects:
             id = OBJECT_ID_ZERO + obj.object_index_in_store
             if obj.is_dirty:
                 print('.', end='', file=sys.stderr, flush=True)
-                Piv.write_object(self.reader, id, obj.serialize())
+                Piv.write_object(self.reader, id, obj.serialize(), management_key)
         print('', file=sys.stderr)
 
 

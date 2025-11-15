@@ -112,6 +112,7 @@ class Piv:
             reader: str,
             id: int,
             input: bytes,
+            management_key: str | None = None,
         ) -> None:
         """
         Write binary data to a PIV object slot on the device using the specified reader.
@@ -120,27 +121,44 @@ class Piv:
         - reader: The name of the reader to use (as returned by list_readers()).
         - id: The numeric ID of the PIV object (e.g. 0x5fc105 for the certificate slot).
         - input: The binary content to write.
+        - management_key: Optional 48-char hex management key. If None, uses YubiKey default.
 
         Raises:
         - RuntimeError: If the command fails or the write operation is unsuccessful.
         """
-        
+
+        cmd = [
+            'yubico-piv-tool',
+            '--reader', reader,
+        ]
+
+        # Add management key if provided
+        if management_key is not None:
+            cmd.extend(['--key', management_key])
+
+        cmd.extend([
+            '--action', 'write-object',
+            '--format', 'binary',
+            '--id', f'{id:#06x}',
+        ])
+
         try:
             subprocess.run(
-                [
-                    'yubico-piv-tool',
-                    '--reader', reader,
-                    '--action', 'write-object',
-                    '--format', 'binary',
-                    '--id', f'{id:#06x}',
-                ],
+                cmd,
                 input=input,
                 check=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
         except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"Failed to write object: {e.stderr.decode().strip()}") from e
+            error_msg = e.stderr.decode().strip()
+            # Provide helpful error message if authentication failed
+            if 'authentication' in error_msg.lower() or 'verify' in error_msg.lower():
+                raise RuntimeError(
+                    f"Failed to write object: {error_msg}\n"
+                    "Hint: If using a non-default management key, specify it with --key"
+                ) from e
+            raise RuntimeError(f"Failed to write object: {error_msg}") from e
 
 
     @classmethod
