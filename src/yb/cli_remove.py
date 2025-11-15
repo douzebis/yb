@@ -31,6 +31,7 @@ def cli_remove(ctx,
         raise click.ClickException('Bad name')
 
     reader: str = ctx.obj['reader']
+    management_key: str | None = ctx.obj.get('management_key')
 
     # Load the store from the PIV device
     store = Store.from_piv_device(reader)
@@ -57,4 +58,4 @@ def cli_remove(ctx,
         obj = store.objects[obj.next_chunk_index_in_store]
 
     # Flush
-    store.sync()
+    store.sync(management_key)

@@ -96,6 +96,10 @@ let
       echo "PYTHON_INTERPRETER=$(which python)" > .env
       echo "PYTHONPATH=$PYTHONPATH" >> .env
 
+      # Add CLI to PATH and enable auto-completion
+      export PATH=$PWD/bin:$PATH
+      eval "$(_YB_COMPLETE=bash_source  yb)"
+
       # Display environment info
       echo "Development environment ready."
       echo "  PYTHONPATH: $PYTHONPATH"

@@ -28,4 +28,4 @@ where = ["src"]
 
 [tool.ruff]
 fix = true
-unsafe-fixes = true
+# unsafe-fixes = true

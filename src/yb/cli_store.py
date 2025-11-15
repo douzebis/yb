@@ -50,6 +50,7 @@ def cli_store(
         raise click.ClickException('Bad name')
 
     reader: str = ctx.obj['reader']
+    management_key: str | None = ctx.obj.get('management_key')
 
     store = Store.from_piv_device(reader)
     store.sanitize()
@@ -122,4 +123,4 @@ def cli_store(
             )
         store.commit_object(obj)
 
-    store.sync()
+    store.sync(management_key)

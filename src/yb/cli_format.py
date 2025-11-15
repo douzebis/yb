@@ -104,6 +104,7 @@ def cli_format(ctx,
         raise click.ClickException(f'Invalid subject: {e}')
 
     reader: str = ctx.obj['reader']
+    management_key: str | None = ctx.obj.get('management_key')
 
     # Provision or check the ECCP256 key
     if generate:
@@ -135,5 +136,6 @@ def cli_format(ctx,
             object_age=0,
         )
         store.commit_object(obj)
+
+    store.sync(management_key)
     
-    store.sync()
