@@ -2,52 +2,115 @@
 #
 # SPDX-License-Identifier: MIT
 
-{ pkgs ? import <nixpkgs> {} }:
+{ pkgs ? import <nixpkgs> {},
+  pythonPkgs ? pkgs.python3Packages,
+}:
 
-pkgs.python3Packages.buildPythonApplication rec {
-  pname = "yb";
-  version = "0.1.0";
+let
+  # ---------------------------------------------------------------------------
+  # MAIN PACKAGE
+  # ---------------------------------------------------------------------------
+  yb = pythonPkgs.buildPythonApplication rec {
+    pname = "yb";
+    version = "0.1.0";
 
-  # This tells nix where to find the package source root
-  # It assumes a src/yb layout for the yb package
-  src = ./.;
+    # This tells nix where to find the package source root
+    # It assumes a src/yb layout for the yb package
+    src = ./.;
 
-  pyproject = true;
+    pyproject = true;
 
-  nativeBuildInputs = with pkgs.python3Packages; [
-    setuptools
-    wheel
-    pytest
-  ];
+    nativeBuildInputs = with pythonPkgs; [
+      setuptools
+      wheel
+      pytest
+    ];
 
-  propagatedBuildInputs = with pkgs.python3Packages; [
-    pkgs.opensc
-    pkgs.yubico-piv-tool
-    pkgs.yubikey-manager
-    pkgs.python3Packages.click
-    pkgs.python3Packages.pyyaml
-    pkgs.python3Packages.cryptography
-  ];
+    propagatedBuildInputs = [
+      pkgs.opensc
+      pkgs.yubico-piv-tool
+      pkgs.yubikey-manager
+      pythonPkgs.click
+      pythonPkgs.pyyaml
+      pythonPkgs.cryptography
+    ];
 
-  makeWrapperArgs = [
-    "--set" "LD_LIBRARY_PATH" "${pkgs.yubico-piv-tool}/lib"
-  ];
+    makeWrapperArgs = [
+      "--set" "LD_LIBRARY_PATH" "${pkgs.yubico-piv-tool}/lib"
+    ];
 
-  checkPhase = ''
-    PYTHONPATH=${src}/src:$PYTHONPATH pytest || true
-  '';
+    checkPhase = ''
+      PYTHONPATH=${src}/src:$PYTHONPATH pytest || true
+    '';
 
-  pythonImportsCheckPhase = ''
-    PYTHONPATH=${src}/src:$PYTHONPATH python -c 'import yb'
-  '';
+    pythonImportsCheckPhase = ''
+      PYTHONPATH=${src}/src:$PYTHONPATH python -c 'import yb'
+    '';
 
-  meta = with pkgs.lib; {
-    description = "CLI tool for securely storing and retrieving binary blobs using YubiKey";
-    homepage = "https://your.project.homepage/";
-    license = licenses.mit;
-    maintainers = with maintainers; [ yourGitHubHandle ];
+    meta = with pkgs.lib; {
+      description = "CLI tool for securely storing and retrieving binary blobs using YubiKey";
+      homepage = "https://github.com/douzebis/yb";
+      license = licenses.mit;
+      maintainers = with maintainers; [ douzebis ];
+    };
   };
-}
 
-# Note: traditional python build still available, e.g. via:
-# pip install --editable .
+  # ---------------------------------------------------------------------------
+  # MINIMAL SHELL (default nix-shell)
+  # ---------------------------------------------------------------------------
+  shell = pkgs.mkShell {
+    buildInputs = [ yb ];
+  };
+
+  # ---------------------------------------------------------------------------
+  # DEVELOPMENT SHELL (nix-shell -A devShell)
+  # ---------------------------------------------------------------------------
+  devShell = pkgs.mkShell {
+    buildInputs = [
+      pkgs.opensc
+      pkgs.yubico-piv-tool
+      pkgs.yubikey-manager
+      pkgs.reuse
+      (pkgs.python3.withPackages (ps: with ps; [
+        click
+        cryptography
+        isort
+        pip
+        pytest
+        pyyaml
+        setuptools
+        wheel
+      ]))
+    ];
+
+    shellHook = ''
+      old_opts=$(set +o)
+      set -euo pipefail
+
+      # Set up environment variables
+      export LD_LIBRARY_PATH=${pkgs.yubico-piv-tool}/lib:''${LD_LIBRARY_PATH:-}
+      export PKCS11_MODULE_PATH=${pkgs.yubico-piv-tool}/lib/libykcs11.so
+      export PYTHONPATH=$PWD/src:''${PYTHONPATH:-}
+
+      # Generate .env file for VS Code integration
+      echo "PYTHON_INTERPRETER=$(which python)" > .env
+      echo "PYTHONPATH=$PYTHONPATH" >> .env
+
+      # Display environment info
+      echo "Development environment ready."
+      echo "  PYTHONPATH: $PYTHONPATH"
+      echo "  LD_LIBRARY_PATH: ${pkgs.yubico-piv-tool}/lib"
+      echo "  PKCS11_MODULE_PATH: $PKCS11_MODULE_PATH"
+
+      eval "$old_opts"
+    '';
+  };
+
+in
+{
+  default = yb;
+  yb = yb;
+  shell = shell;
+  devShell = devShell;
+  dev-shell = devShell;  # alias for compatibility
+}

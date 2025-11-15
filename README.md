@@ -104,6 +104,37 @@ yb rm my-blob
 
 ---
 
+## Working with Multiple YubiKeys
+
+If you have multiple YubiKeys, use the `--serial` option to select which one to use:
+
+```shell
+# Select YubiKey by serial number (printed on device case)
+yb --serial 12345678 ls
+
+# Store a blob on a specific YubiKey
+yb --serial 12345678 store --input data.txt my-blob
+```
+
+**Finding Your Serial Number:**
+- Look at your YubiKey case - the serial number is printed on it
+- Or let yb tell you when multiple devices are connected
+
+When multiple YubiKeys are connected and you don't specify `--serial`, yb will show you the available serial numbers:
+
+```
+Error: Multiple YubiKeys are connected:
+  - Serial 12345678 (YubiKey 5.7.1)
+  - Serial 87654321 (YubiKey 5.4.3)
+
+Use --serial to select one, for example:
+  yb --serial 12345678 <command>
+```
+
+**Legacy Option:** The `--reader` option is still supported for PC/SC reader names, but `--serial` is recommended.
+
+---
+
 ## License
 
 MIT License. See `LICENSE` for full text.

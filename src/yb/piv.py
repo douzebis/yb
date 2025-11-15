@@ -2,6 +2,8 @@
 #
 # SPDX-License-Identifier: MIT
 
+from __future__ import annotations
+
 import subprocess
 
 class Piv:
@@ -35,6 +37,74 @@ class Piv:
         for line in out.stdout.splitlines():
             readers.append(line.strip())
         return readers
+
+    @classmethod
+    def list_devices(cls) -> list[tuple[int, str, str]]:
+        """
+        Return a list of connected YubiKeys with their serial numbers.
+
+        Returns:
+            List of tuples (serial, version, reader) for each connected YubiKey.
+            - serial: YubiKey serial number (int)
+            - version: YubiKey version string (e.g., "5.7.1")
+            - reader: PC/SC reader name
+
+        Raises:
+            RuntimeError: If ykman is not available or device enumeration fails.
+        """
+        try:
+            from ykman.device import list_all_devices
+        except ImportError as e:
+            raise RuntimeError(
+                "ykman library not available. "
+                "Install yubikey-manager: pip install yubikey-manager"
+            ) from e
+
+        try:
+            devices = list(list_all_devices())
+        except Exception as e:
+            raise RuntimeError(f"Failed to enumerate YubiKeys: {e}") from e
+
+        result = []
+        for device, info in devices:
+            serial = info.serial
+            version = str(info.version)
+            reader = device.fingerprint  # PC/SC reader name
+
+            result.append((serial, version, reader))
+
+        return result
+
+    @classmethod
+    def get_reader_for_serial(cls, serial: int) -> str:
+        """
+        Get the PC/SC reader name for a YubiKey with the given serial number.
+
+        Parameters:
+            serial: YubiKey serial number to find
+
+        Returns:
+            PC/SC reader name for the YubiKey with the given serial
+
+        Raises:
+            ValueError: If no YubiKey with the given serial is found
+            RuntimeError: If ykman is not available or enumeration fails
+        """
+        devices = cls.list_devices()
+
+        for dev_serial, _, reader in devices:
+            if dev_serial == serial:
+                return reader
+
+        # Build helpful error message
+        if not devices:
+            raise ValueError("No YubiKeys found")
+
+        available_serials = [str(s) for s, _, _ in devices]
+        raise ValueError(
+            f"No YubiKey found with serial {serial}. "
+            f"Available: {', '.join(available_serials)}"
+        )
 
     @classmethod
     def write_object(
