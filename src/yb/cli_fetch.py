@@ -44,9 +44,10 @@ def cli_fetch(ctx,
         raise click.ClickException('Bad name')
 
     reader: str = ctx.obj['reader']
+    piv = ctx.obj['piv']
 
     # Load the store from the PIV device
-    store = Store.from_piv_device(reader)
+    store = Store.from_piv_device(reader, piv)
     store.sanitize()
 
     # Find the target blob

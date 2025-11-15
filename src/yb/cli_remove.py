@@ -32,9 +32,10 @@ def cli_remove(ctx,
 
     reader: str = ctx.obj['reader']
     management_key: str | None = ctx.obj.get('management_key')
+    piv = ctx.obj['piv']
 
     # Load the store from the PIV device
-    store = Store.from_piv_device(reader)
+    store = Store.from_piv_device(reader, piv)
     store.sanitize()
 
     # Find the target blob

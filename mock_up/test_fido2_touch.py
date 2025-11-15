@@ -11,9 +11,9 @@ from __future__ import annotations
 
 import hashlib
 import sys
-from typing import cast
+from typing import Any
+from collections.abc import Mapping
 
-from fido2.client import Fido2Client, UserInteraction
 from fido2.ctap2 import Ctap2
 from fido2.hid import CtapHidDevice
 
@@ -36,7 +36,7 @@ def get_yubikey_fido_device(serial: int | None = None) -> CtapHidDevice | None:
     # TODO: Match by serial - requires getting serial from FIDO device
     # CTAP2 info doesn't include serial number directly
     # For now, just return first device
-    print(f"Warning: Serial matching not implemented, using first FIDO device")
+    print( "Warning: Serial matching not implemented, using first FIDO device")
     return devices[0]
 
 
@@ -48,7 +48,7 @@ def test_touch_detection_no_credential(serial: int | None = None) -> None:
     Expected: Operation should fail (no credential), but might still wait for touch.
     """
     print(f"\n{'='*70}")
-    print(f"Test 1: get_assertion with empty allow_list")
+    print( "Test 1: get_assertion with empty allow_list")
     print(f"{'='*70}\n")
 
     device = get_yubikey_fido_device(serial)
@@ -99,7 +99,7 @@ def test_touch_detection_dummy_credential(serial: int | None = None) -> None:
     Expected: Might wait for touch, then fail with "no credential found".
     """
     print(f"\n{'='*70}")
-    print(f"Test 2: get_assertion with non-existent credential")
+    print( "Test 2: get_assertion with non-existent credential")
     print(f"{'='*70}\n")
 
     device = get_yubikey_fido_device(serial)
@@ -116,7 +116,7 @@ def test_touch_detection_dummy_credential(serial: int | None = None) -> None:
         # Create a dummy credential descriptor
         dummy_cred_id = b"x" * 32  # Dummy 32-byte credential ID
 
-        allow_list = [
+        allow_list: list[Mapping[str, Any]] = [
             {
                 "type": "public-key",
                 "id": dummy_cred_id,
@@ -161,7 +161,7 @@ def test_selection_check_no_up(serial: int | None = None) -> None:
     This is defined in CTAP 2.1 spec section 6.6.
     """
     print(f"\n{'='*70}")
-    print(f"Test 3: authenticatorSelection (CTAP 2.1)")
+    print( "Test 3: authenticatorSelection (CTAP 2.1)")
     print(f"{'='*70}\n")
 
     device = get_yubikey_fido_device(serial)
@@ -170,8 +170,6 @@ def test_selection_check_no_up(serial: int | None = None) -> None:
         return
 
     try:
-        ctap2 = Ctap2(device)
-
         print("Attempting authenticatorSelection (no UP required)...")
 
         try:

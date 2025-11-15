@@ -27,8 +27,9 @@ def cli_fsck(ctx) -> None:
     """Dumps the contents of a PIV object store."""
 
     reader: str = ctx.obj['reader']
+    piv = ctx.obj['piv']
 
-    store = Store.from_piv_device(reader)
+    store = Store.from_piv_device(reader, piv)
     store.sanitize()
 
     out = {

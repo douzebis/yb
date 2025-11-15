@@ -16,7 +16,7 @@ from yb.cli_list_readers import cli_list_readers
 from yb.cli_list import cli_list
 from yb.cli_remove import cli_remove
 from yb.cli_store import cli_store
-from yb.piv import Piv
+from yb.piv import HardwarePiv
 
 PIV_OBJECT_ID = "0x5f0001"
 # PKCS11_LIB = "/nix/store/0makfrhmjm2b7w3abp0j77b62nkxv9d9-yubico-piv-tool-2.6.1/lib/libykcs11.so"
@@ -128,6 +128,9 @@ def cli(
 ) -> None:
     """CLI tool for managing cryptographic operations."""
 
+    # Create PIV interface for hardware operations
+    piv = HardwarePiv()
+
     # Validate options
     if serial is not None and reader is not None:
         raise click.ClickException(
@@ -139,7 +142,7 @@ def cli(
     # Select reader by serial number
     if serial is not None:
         try:
-            chosen_reader = Piv.get_reader_for_serial(serial)
+            chosen_reader = piv.get_reader_for_serial(serial)
         except ValueError as e:
             raise click.ClickException(str(e)) from e
         except RuntimeError as e:
@@ -152,7 +155,7 @@ def cli(
     # Auto-select if only one device
     else:
         try:
-            devices = Piv.list_devices()
+            devices = piv.list_devices()
 
             if len(devices) == 0:
                 raise click.ClickException('No YubiKeys found.')
@@ -178,7 +181,7 @@ def cli(
 
         except RuntimeError:
             # Fallback to legacy list_readers() if ykman not available
-            readers = Piv.list_readers()
+            readers = piv.list_readers()
             if len(readers) == 0:
                 raise click.ClickException('No PIV reader is connected.')
             elif len(readers) == 1:
@@ -194,7 +197,7 @@ def cli(
     # Verify reader identity (unless --no-verify)
     if (serial is not None or reader is not None) and not no_verify:
         print('Confirm by entering your PIN...', file=sys.stderr)
-        if not Piv.verify_reader(chosen_reader, 0x9a):
+        if not piv.verify_reader(chosen_reader, 0x9a):
             raise click.ClickException('Could not verify the PIN.')
 
     # Process management key
@@ -215,6 +218,7 @@ def cli(
     ctx.ensure_object(dict)  # Ensure ctx.obj is a dict
     ctx.obj['reader'] = chosen_reader  # Store chosen reader in context
     ctx.obj['management_key'] = management_key  # Store management key in context
+    ctx.obj['piv'] = piv  # Store PIV interface in context
 
 cli.add_command(cli_fsck)
 cli.add_command(cli_fetch)

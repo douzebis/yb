@@ -77,7 +77,7 @@ def check_piv_smartcard_devices() -> None:
 
             # Try to access USB information
             if hasattr(device, '_device'):
-                print(f"  Internal device: {device._device}")
+                print(f"  Internal device: {getattr(device, '_device')}")
             if hasattr(device, '__dict__'):
                 print(f"  Device attributes: {[k for k in device.__dict__.keys() if not k.startswith('_')]}")
 

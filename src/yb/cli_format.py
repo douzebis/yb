@@ -105,6 +105,7 @@ def cli_format(ctx,
 
     reader: str = ctx.obj['reader']
     management_key: str | None = ctx.obj.get('management_key')
+    piv = ctx.obj['piv']
 
     # Provision or check the ECCP256 key
     if generate:
@@ -128,6 +129,7 @@ def cli_format(ctx,
         object_size_in_store=object_size,
         object_count_in_store=object_count,
         store_encryption_key_slot=int(f'0x{key_slot}', 0),
+        piv=piv,
     )
     for index in range(object_count):
         obj = Object(
