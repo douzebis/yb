@@ -1,0 +1,832 @@
+# yb User Guide
+
+**yb** is a command-line tool for securely storing encrypted or unencrypted binary data on your YubiKey using its PIV (Personal Identity Verification) application.
+
+---
+
+## Table of Contents
+
+1. [Quick Start](#quick-start)
+2. [Installation](#installation)
+3. [Basic Concepts](#basic-concepts)
+4. [Initial Setup](#initial-setup)
+5. [Storing Data](#storing-data)
+6. [Retrieving Data](#retrieving-data)
+7. [Managing Blobs](#managing-blobs)
+8. [Working with Multiple YubiKeys](#working-with-multiple-yubikeys)
+9. [Advanced Features](#advanced-features)
+10. [Troubleshooting](#troubleshooting)
+11. [Security Best Practices](#security-best-practices)
+
+---
+
+## Quick Start
+
+```bash
+# 1. Initialize your YubiKey for blob storage
+yb format --generate
+
+# 2. Store encrypted data
+echo "My secret data" | yb store --encrypted mysecret
+
+# 3. Retrieve the data
+yb fetch mysecret
+# (You'll be prompted for your YubiKey PIN)
+
+# 4. List all stored blobs
+yb ls
+
+# 5. Remove a blob
+yb rm mysecret
+```
+
+---
+
+## Installation
+
+### Prerequisites
+
+**Required Tools**:
+- `yubico-piv-tool`: PIV operations
+- `pkcs11-tool` (from OpenSC): PKCS#11 operations
+- Python 3.12 or later
+
+**Required Python Libraries**:
+- `click`: CLI framework
+- `cryptography`: Encryption operations
+- `PyYAML`: Output formatting
+- `yubikey-manager`: Multi-device support (recommended)
+
+### Using Nix (Recommended)
+
+```bash
+# Clone the repository
+git clone https://github.com/douzebis/yb.git
+cd yb
+
+# Enter development shell
+nix-shell -A devShell
+
+# yb is now available
+yb --help
+```
+
+### Manual Installation
+
+```bash
+# Install system dependencies
+sudo apt-get install yubico-piv-tool opensc  # Debian/Ubuntu
+# OR
+brew install yubico-piv-tool opensc  # macOS
+
+# Install Python package
+pip install -e .
+
+# Verify installation
+yb --help
+```
+
+---
+
+## Basic Concepts
+
+### What is a Blob?
+
+A **blob** (binary large object) is any data you want to store on your YubiKey:
+- Text files
+- Configuration files
+- SSH keys
+- Certificates
+- Any binary data
+
+Each blob has:
+- **Name**: Unique identifier (1-255 characters)
+- **Payload**: The actual data (up to ~36 KB with default settings)
+- **Encryption**: Can be encrypted or unencrypted
+- **Metadata**: Size, modification time, chunk count
+
+### Storage Capacity
+
+With default settings (12 objects, 3052 bytes each):
+- **Total capacity**: ~36 KB
+- **Per blob overhead**: ~23 bytes (metadata)
+- **Largest single blob**: ~36 KB (uses all objects)
+
+You can store:
+- Many small files (dozens of 1 KB files)
+- A few medium files (several 10 KB files)
+- One large file (~36 KB)
+
+### Encryption
+
+**Encrypted blobs** (default):
+- Protected with hybrid ECDH + AES-256-CBC encryption
+- Private key never leaves your YubiKey
+- Requires PIN to decrypt (fetch)
+- Does NOT require PIN to encrypt (store)
+
+**Unencrypted blobs**:
+- Stored in plaintext
+- Faster to store and retrieve
+- No PIN required
+- Suitable for non-sensitive data
+
+---
+
+## Initial Setup
+
+### Step 1: Format Your YubiKey
+
+Initialize the blob storage on your YubiKey:
+
+```bash
+yb format --generate
+```
+
+This will:
+1. **Prompt for confirmation** (PIN verification)
+2. **Generate an EC P-256 key pair** in slot 0x9e (Card Authentication)
+3. **Create a self-signed certificate** for the key
+4. **Initialize the blob store** with 12 empty objects
+
+**Options**:
+```bash
+# Custom object count (more capacity, max 16)
+yb format --generate --object-count 16
+
+# Use different PIV slot for encryption key
+yb format --generate --key-slot 82  # Retired Key 1
+
+# Don't generate new key (use existing key)
+yb format --no-generate --key-slot 82
+```
+
+### Step 2: Verify Setup
+
+Check that the store was initialized:
+
+```bash
+yb fsck
+```
+
+You should see:
+```yaml
+reader: Yubico YubiKey OTP+FIDO+CCID 00 00
+yblob_magic: f2ed5f0b
+object_size_in_store: 3052
+object_count_in_store: 12
+store_encryption_key_slot: 0x9e
+store_age: 0
+```
+
+---
+
+## Storing Data
+
+### Basic Store Operation
+
+Store a file as an encrypted blob:
+
+```bash
+# From a file
+yb store myfile < data.txt
+
+# From stdin
+echo "Hello, world!" | yb store greeting
+
+# Specify file explicitly
+yb store --input data.txt myfile
+```
+
+### Store Options
+
+**Encryption**:
+```bash
+# Encrypted (default - recommended for sensitive data)
+yb store --encrypted secret
+
+# Unencrypted (faster, no PIN required for fetch)
+yb store --unencrypted public-data
+```
+
+**Input Sources**:
+```bash
+# From file
+yb store --input file.txt blobname
+
+# From stdin
+cat file.txt | yb store blobname
+
+# Auto-name from filename
+yb store --input document.pdf
+# Creates blob named "document.pdf"
+```
+
+### Examples
+
+**Store SSH private key**:
+```bash
+yb store --encrypted --input ~/.ssh/id_ed25519 ssh-key
+```
+
+**Store configuration file**:
+```bash
+yb store --unencrypted --input ~/.config/app/settings.json app-config
+```
+
+**Store password from password manager**:
+```bash
+pass show github.com/token | yb store --encrypted github-token
+```
+
+**Store GPG key backup**:
+```bash
+gpg --export-secret-keys --armor user@example.com | yb store gpg-backup
+```
+
+---
+
+## Retrieving Data
+
+### Basic Fetch Operation
+
+Retrieve a blob by name:
+
+```bash
+# To stdout
+yb fetch myfile
+
+# To file
+yb fetch myfile > recovered.txt
+
+# Specify output file
+yb fetch --output recovered.txt myfile
+```
+
+**If blob is encrypted**, you'll be prompted for your YubiKey PIN:
+```
+Please enter User PIN for encrypted blob(s): ******
+```
+
+### Extract Multiple Blobs
+
+Fetch multiple blobs at once:
+
+```bash
+# Extract to files with blob names
+yb fetch --extract ssh-key app-config github-token
+
+# Output:
+# Extracted ssh-key (3243 bytes)
+# Extracted app-config (512 bytes)
+# Extracted github-token (40 bytes
+```
+
+### Shell Completion
+
+Enable tab completion for blob names:
+
+```bash
+# For bash
+eval "$(_YB_COMPLETE=bash_source yb)"
+
+# For zsh
+eval "$(_YB_COMPLETE=zsh_source yb)"
+
+# Now you can:
+yb fetch <TAB>
+# Shows: ssh-key  app-config  github-token  ...
+```
+
+### Examples
+
+**Restore SSH key**:
+```bash
+yb fetch ssh-key > ~/.ssh/id_ed25519_recovered
+chmod 600 ~/.ssh/id_ed25519_recovered
+```
+
+**View secret inline**:
+```bash
+# Decrypt and pipe to less
+yb fetch credentials | less
+
+# Decrypt and search
+yb fetch logfile | grep ERROR
+```
+
+**Restore configuration**:
+```bash
+yb fetch app-config > ~/.config/app/settings.json
+```
+
+---
+
+## Managing Blobs
+
+### List All Blobs
+
+See what's stored on your YubiKey:
+
+```bash
+yb ls
+```
+
+**Output format**:
+```
+-  1        7  2025-06-01 13:22  sensitive-data
+U  1       10  2025-06-01 13:36  public-data
+-  3     5432  2025-06-02 09:15  large-file
+```
+
+**Columns**:
+1. **Encryption**: `-` = encrypted, `U` = unencrypted
+2. **Chunks**: Number of PIV objects used
+3. **Size**: Unencrypted size in bytes
+4. **Modified**: Last modification timestamp
+5. **Name**: Blob name
+
+### Remove a Blob
+
+Delete a blob by name:
+
+```bash
+yb rm blobname
+```
+
+This will:
+1. **Prompt for confirmation** (PIN verification)
+2. **Remove all chunks** of the named blob
+3. **Free the space** for new blobs
+
+**Example**:
+```bash
+yb rm old-backup
+```
+
+### Check Store Health
+
+Inspect low-level store details:
+
+```bash
+yb fsck
+```
+
+This shows:
+- Store metadata (magic number, encryption slot, age counter)
+- Each object's status (empty, head chunk, body chunk)
+- Chunk linkage information
+- Blob metadata for head chunks
+
+Useful for:
+- Debugging storage issues
+- Verifying store integrity
+- Understanding space usage
+
+**Example output**:
+```yaml
+reader: Yubico YubiKey OTP+FIDO+CCID 00 00
+yblob_magic: f2ed5f0b
+...
+---
+
+<object_index_in_store>: 0
+<is_dirty>: false
+yblob_magic: 0xf2ed5f0b
+...
+chunk_pos_in_blob: 0
+next_chunk_index_in_store: 1
+blob_modification_date: Sun Jan  1 12:00:00 2025
+payload_size: 5432
+blob_name: large-file
+```
+
+---
+
+## Working with Multiple YubiKeys
+
+### Device Selection Methods
+
+**Method 1: Serial Number (Recommended)**:
+```bash
+# Auto-completion for serial numbers
+yb --serial <TAB>
+# Shows: 12345678 -- YubiKey 5.7.1
+
+yb --serial 12345678 ls
+```
+
+**Method 2: PC/SC Reader Name (Legacy)**:
+```bash
+yb --reader "Yubico YubiKey OTP+FIDO+CCID 00 00" ls
+```
+
+**Method 3: Auto-Selection**:
+If only one YubiKey is connected, it's selected automatically:
+```bash
+yb ls
+# Output: Auto-selected YubiKey 12345678 (version 5.7.1)
+```
+
+### Interactive Selection
+
+When multiple YubiKeys are connected without explicit selection:
+
+```bash
+$ yb ls
+
+Select a YubiKey:
+
+  → YubiKey 12345678 (v5.7.1)  # ← Currently selected (LED flashing)
+    YubiKey 87654321 (v5.4.3)
+
+Use ↑/↓ arrows to navigate, ENTER to select, Ctrl-C to cancel
+```
+
+The selected YubiKey's LED will flash continuously while highlighted.
+
+### Shell Completion for Serial Numbers
+
+```bash
+# Enable completion
+eval "$(_YB_COMPLETE=bash_source yb)"
+
+# Now:
+yb --serial <TAB>
+# Shows all connected YubiKeys with versions
+```
+
+---
+
+## Advanced Features
+
+### Custom Store Configuration
+
+**Change Object Count**:
+```bash
+# More objects = more capacity (max 16)
+yb format --generate --object-count 16
+
+# Fewer objects = less capacity but faster (min 1)
+yb format --generate --object-count 8
+```
+
+**Change Object Size**:
+```bash
+# Smaller objects (min 512 bytes)
+yb format --generate --object-size 512
+
+# Default/maximum (3052 bytes)
+yb format --generate --object-size 3052
+```
+
+**Trade-offs**:
+- More/larger objects = more capacity
+- Fewer/smaller objects = faster operations
+- Max capacity: 16 objects × 3052 bytes ≈ 47 KB
+
+### Custom Encryption Slot
+
+Use a different PIV slot for the encryption key:
+
+```bash
+# Common choices:
+# 9e (default): Card Authentication
+# 82-95: Retired Keys (20 available)
+# 9a: PIV Authentication (not recommended - used for login)
+# 9c: Digital Signature (not recommended - used for signing)
+
+yb format --generate --key-slot 82
+```
+
+**Note**: Once formatted with a specific slot, all encrypted blobs on that YubiKey use that slot's private key.
+
+### Skip PIN Verification
+
+For non-interactive scripts or when you trust the environment:
+
+```bash
+# Skip PIN prompt (no YubiKey LED flash)
+yb -x format --generate
+yb -x store blob < data
+yb -x rm blob
+```
+
+**WARNING**: Only use `-x` in trusted environments. Without PIN verification:
+- No confirmation that you have the correct YubiKey
+- Accidental writes to wrong device possible
+- Less secure
+
+### Management Key
+
+For write operations, you can specify a custom management key:
+
+```bash
+# Prompt for key interactively
+yb --key=- format --generate
+# (You'll be prompted to enter 48 hex characters)
+
+# Provide key directly (INSECURE - visible in shell history)
+yb --key=0102030405... format --generate
+```
+
+**Default**: YubiKey factory default management key is used if not specified.
+
+### Debug Mode
+
+Enable verbose debugging output:
+
+```bash
+yb --debug fetch encrypted-blob
+```
+
+Shows:
+- ECDH parameters
+- Encryption/decryption steps
+- PKCS#11 token selection
+- Payload sizes at each stage
+
+---
+
+## Troubleshooting
+
+### "No YubiKeys found"
+
+**Symptoms**: `yb` can't detect your YubiKey
+
+**Solutions**:
+1. **Verify YubiKey is inserted**: Check USB connection
+2. **Check permissions**: May need to be in `pcscd` group (Linux)
+3. **Restart pcscd service**: `sudo systemctl restart pcscd`
+4. **Verify with yubico-piv-tool**: `yubico-piv-tool -a list-readers`
+
+### "Store has bad yblob magic"
+
+**Symptoms**: Error when running `yb ls` or other commands
+
+**Cause**: YubiKey not formatted with `yb format`, or data corruption
+
+**Solution**:
+```bash
+# Re-format the YubiKey (WARNING: destroys existing data)
+yb format --generate
+```
+
+### "Cannot find object <name>"
+
+**Symptoms**: `yb fetch` or `yb rm` says blob doesn't exist
+
+**Solutions**:
+1. **List blobs**: `yb ls` to see what's actually stored
+2. **Check spelling**: Blob names are case-sensitive
+3. **Verify YubiKey**: Make sure you're using correct device with `--serial`
+
+### "Blob is encrypted but no PIN provided"
+
+**Symptoms**: Trying to fetch encrypted blob in non-interactive context
+
+**Solution**:
+- Run `yb fetch` interactively so you can enter PIN
+- Or decrypt blob with PIN and re-store as unencrypted
+
+### "Store is full - cannot store blob"
+
+**Symptoms**: No free objects available
+
+**Solutions**:
+1. **Remove old blobs**: `yb rm old-blob`
+2. **Reformat with more objects**: `yb format --object-count 16`
+3. **Compress data**: Compress before storing to reduce size
+
+### PIN Locked
+
+**Symptoms**: Too many incorrect PIN attempts, YubiKey locked
+
+**Solution**:
+- Reset PIN using YubiKey Manager: `ykman piv reset`
+- **WARNING**: This erases all PIV data including stored blobs
+- Have backups before resetting!
+
+### Wrong YubiKey Selected (Multiple Devices)
+
+**Symptoms**: Unexpected blobs shown or "object not found"
+
+**Solution**:
+```bash
+# List all connected devices
+yb --serial <TAB>
+
+# Specify correct one explicitly
+yb --serial 12345678 ls
+```
+
+---
+
+## Security Best Practices
+
+### 1. Protect Your PIN
+
+- **Change default PIN**: YubiKey ships with default PIN `123456`
+  ```bash
+  ykman piv access change-pin
+  ```
+- **Use strong PIN**: 6-8 digits, not birthday/simple pattern
+- **Don't share PIN**: PIN unlocks everything on your YubiKey
+
+### 2. Backup Your Data
+
+**YubiKey is not a backup solution**:
+- Hardware can fail
+- Can be lost or stolen
+- PIN can be locked after 3 wrong attempts
+
+**Recommended backup strategy**:
+```bash
+# Export all blobs to secure location
+for blob in $(yb ls | awk '{print $5}'); do
+    yb fetch --output backup/$blob $blob
+done
+
+# Encrypt backup archive
+tar czf - backup/ | gpg --symmetric > yubikey-backup.tar.gz.gpg
+```
+
+### 3. Verify Blob Integrity
+
+After storing critical data:
+
+```bash
+# Store with checksum
+sha256sum sensitive.txt > sensitive.txt.sha256
+yb store sensitive < sensitive.txt
+
+# Later, verify
+yb fetch sensitive > recovered.txt
+sha256sum -c sensitive.txt.sha256
+# Output: recovered.txt: OK
+```
+
+### 4. Use Encryption for Sensitive Data
+
+**Always encrypt**:
+- SSH private keys
+- GPG keys
+- Passwords/tokens
+- Personal information
+
+**Can be unencrypted**:
+- Public keys
+- Public certificates
+- Non-sensitive configuration
+
+### 5. Physical Security
+
+- **Keep YubiKey on keyring**: Reduces loss risk
+- **Know when it's inserted**: Be aware of when YubiKey is connected
+- **Remove after use**: Don't leave inserted in unattended computer
+- **Multiple YubiKeys**: Consider backup YubiKey with duplicate critical data
+
+### 6. Regular Audits
+
+```bash
+# Periodically check what's stored
+yb ls
+
+# Remove obsolete data
+yb rm old-credential
+
+# Verify you can decrypt
+yb fetch critical-data > /dev/null && echo "OK"
+```
+
+### 7. Secure Your Management Key
+
+If using custom management key:
+- **Don't store in plaintext**: Use password manager
+- **Don't reuse**: Unique per YubiKey
+- **Document it**: You need it for any write operation
+
+---
+
+## Common Workflows
+
+### Workflow 1: Secure Password Rotation
+
+```bash
+# Store new password
+echo "new-super-secret-password" | yb store service-password
+
+# Later, retrieve for use
+yb fetch service-password | xclip -selection clipboard
+# Or: yb fetch service-password | pbcopy  # macOS
+```
+
+### Workflow 2: SSH Key Management
+
+```bash
+# Backup existing SSH key to YubiKey
+yb store --encrypted --input ~/.ssh/id_ed25519 ssh-backup
+
+# Restore on new machine
+yb fetch ssh-backup > ~/.ssh/id_ed25519
+chmod 600 ~/.ssh/id_ed25519
+```
+
+### Workflow 3: Configuration Sync
+
+```bash
+# On machine A: Store config
+yb store --unencrypted --input ~/.vimrc vim-config
+
+# On machine B: Fetch config
+yb fetch vim-config > ~/.vimrc
+```
+
+### Workflow 4: Emergency Contact Info
+
+```bash
+# Store unencrypted (accessible without PIN)
+cat > emergency.txt <<EOF
+Name: John Doe
+Emergency Contact: +1-555-0100
+Blood Type: O+
+Allergies: Penicillin
+EOF
+
+yb store --unencrypted --input emergency.txt emergency-info
+
+# Anyone with physical access can read it
+yb -x fetch emergency-info
+```
+
+---
+
+## Tips and Tricks
+
+1. **Alias for convenience**:
+   ```bash
+   alias ybs='yb store --encrypted'
+   alias ybf='yb fetch'
+   ```
+
+2. **List with grep**:
+   ```bash
+   yb ls | grep -i secret
+   ```
+
+3. **Measure capacity used**:
+   ```bash
+   yb ls | awk '{sum+=$3} END {print sum " bytes used"}'
+   ```
+
+4. **Pipe to clipboard** (Linux):
+   ```bash
+   yb fetch password | xclip -selection clipboard
+   ```
+
+5. **Compress before storing large data**:
+   ```bash
+   gzip < large-file | yb store large-file-gz
+   yb fetch large-file-gz | gunzip > large-file
+   ```
+
+---
+
+## Getting Help
+
+- **Command help**: `yb --help` or `yb <command> --help`
+- **Report issues**: https://github.com/douzebis/yb/issues
+- **Design document**: See `DESIGN.md` for technical details
+- **Review document**: See `REVIEW.md` for code quality notes
+
+---
+
+## Appendix: File Format
+
+yb stores data in a custom format registered with the `file` command:
+
+```bash
+# Dump a PIV object
+yubico-piv-tool -a read-object -i 0x5f0000 > object.bin
+
+# Identify it
+file object.bin
+# Output: object.bin: yblob object store image data
+```
+
+**Magic number**: `0xF2ED5F0B` ("Fred's Fob" in leetspeak)
+
+**Structure** (each object):
+- Magic number (4 bytes)
+- Store metadata (object count, encryption slot)
+- Object age (3 bytes, monotonic counter)
+- Chunk metadata (position, next pointer)
+- Blob metadata (name, size, timestamps) - head chunks only
+- Payload (encrypted or unencrypted data)
+
+For complete specification, see `src/yb/constants.py`.
+
+---
+
+**Last Updated**: 2025-11-16
+**Version**: 1.0

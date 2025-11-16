@@ -165,16 +165,26 @@ Provides a clean Python interface to YubiKey PIV operations via subprocess
 calls.
 
 **Core Operations**:
-- `list_readers()`: Enumerate connected PIV devices
+- `list_readers()`: Enumerate connected PIV devices (legacy)
+- `list_devices()`: Enumerate devices with serial numbers (via ykman)
+- `get_reader_for_serial(serial)`: Map serial number to PC/SC reader name
+- `get_serial_for_reader(reader)`: Map PC/SC reader name to serial number
 - `read_object(reader, id)`: Read binary data from PIV object
 - `write_object(reader, id, data)`: Write binary data to PIV object
 - `verify_reader(reader, id)`: Verify PIN and flash device
 
 **Implementation Details**:
 - All operations use `yubico-piv-tool` as subprocess
+- Device enumeration uses `ykman` Python API when available
 - Binary format for all object I/O
 - Error handling via `subprocess.CalledProcessError`
 - No caching - always reads fresh from device
+
+**Multi-Device Support**:
+- Serial number-based device selection (`--serial` flag)
+- Auto-selection when only one device connected
+- Interactive selector with LED flashing for multiple devices
+- Backward compatible with PC/SC reader names (`--reader` flag)
 
 ---
 
@@ -1224,6 +1234,86 @@ tests/test_store_comprehensive.py::test_with_ejection_simulation   PASSED
 2. YubiKey store is complex (chunking, ages, sanitize) but testable
 3. If both produce same results over 10,000 operations → high confidence
 4. Ejection simulation validates safety assumptions
+
+---
+
+## Recent Enhancements
+
+### PKCS#11 Token Selection Fix (2025-11-16)
+
+**Problem Identified**: Critical bug in `crypto.py:perform_ecdh_with_yubikey()` where the `reader` parameter was marked as "unused" and never passed to pkcs11-tool. This caused ECDH operations to always use the first YubiKey (slot 0 default) regardless of which device was selected via `--serial` or `--reader`.
+
+**Impact**: Multi-device usage completely broken for encrypted blob operations. User could select YubiKey B, but decryption would attempt to use YubiKey A's private key, causing cryptographic failures.
+
+**Root Cause**: PKCS#11 architecture - each YubiKey appears as a separate "token" in a separate "slot". Without explicit token selection, pkcs11-tool defaults to slot 0. Object IDs (like `05` for PIV slot 82) exist in every token but reference different private keys.
+
+**Solution Implemented**:
+1. **Architecture Clarity**: Separated concerns between layers
+   - **Orchestrator/Store layers**: Use `reader` (PC/SC names) for PIV operations
+   - **Crypto layer**: Use `serial` (PKCS#11 token labels) for ECDH operations
+
+2. **Crypto Layer Refactoring**:
+   - Changed `perform_ecdh_with_yubikey()` signature from `reader: str` to `serial: int`
+   - Constructs PKCS#11 token label: `f"YubiKey PIV #{serial}"`
+   - Adds `--token-label` to pkcs11-tool command
+   - Updated `hybrid_decrypt()` similarly
+
+3. **PIV Layer Enhancement**:
+   - Added `get_serial_for_reader(reader) -> int` method
+   - Bidirectional mapping: serial ↔ reader
+
+4. **Orchestrator Integration**:
+   - Maps reader → serial before calling crypto operations
+   - Clean separation of identifier types per layer
+
+**Testing**: Verified with 2 YubiKeys, confirmed correct token selection, all existing tests pass.
+
+**Token Label Format**: `"YubiKey PIV #<serial>"` (e.g., `"YubiKey PIV #32283437"`)
+
+**Documentation**: Complete technical analysis in `.cache/PKCS11_BUG_REPORT.md`
+
+### Shell Completion Support (2025-11-16)
+
+**Autocompletion for --serial Option**:
+- Uses Click's `shell_complete` feature
+- Queries connected YubiKeys dynamically via `HardwarePiv().list_devices()`
+- Returns `CompletionItem` objects with serial numbers + version info
+- Supports partial matching (e.g., typing "322" suggests "32283437")
+- Graceful error handling: returns empty list on failure
+
+**Usage** (after activation):
+```bash
+# For bash
+eval "$(_YB_COMPLETE=bash_source yb)"
+
+# For zsh
+eval "$(_YB_COMPLETE=zsh_source yb)"
+
+# Then:
+yb --serial <TAB>
+# Shows:
+#   32283437  -- YubiKey 5.7.1
+#   87654321  -- YubiKey 5.4.3
+```
+
+**Autocompletion for Blob Names** (cli_fetch.py):
+- `complete_blob_names()` function provides blob name completion for `fetch` command
+- Queries YubiKey store to list available blobs
+- Handles single-device auto-selection
+- Returns empty list if multiple devices without explicit `--serial/--reader`
+- Safe for shell completion (never fails loudly)
+
+**Usage**:
+```bash
+yb fetch <TAB>
+# Shows list of stored blob names
+```
+
+**Implementation Details**:
+- Uses Click's `CompletionItem` class for structured completions
+- Zero overhead when not using completion (functions only called during TAB)
+- No dependencies on external completion libraries
+- Works with bash/zsh/fish via Click's built-in support
 
 ---
 
