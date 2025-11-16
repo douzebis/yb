@@ -17,6 +17,7 @@
 9. [Advanced Features](#advanced-features)
 10. [Troubleshooting](#troubleshooting)
 11. [Security Best Practices](#security-best-practices)
+12. [Getting Help](#getting-help)
 
 ---
 
@@ -292,32 +293,6 @@ eval "$(_YB_COMPLETE=bash_source yb)"
 
 # For zsh
 eval "$(_YB_COMPLETE=zsh_source yb)"
-
-# Now you can:
-yb fetch <TAB>
-# Shows: ssh-key  app-config  github-token  ...
-```
-
-### Examples
-
-**Restore SSH key**:
-```bash
-yb fetch ssh-key > ~/.ssh/id_ed25519_recovered
-chmod 600 ~/.ssh/id_ed25519_recovered
-```
-
-**View secret inline**:
-```bash
-# Decrypt and pipe to less
-yb fetch credentials | less
-
-# Decrypt and search
-yb fetch logfile | grep ERROR
-```
-
-**Restore configuration**:
-```bash
-yb fetch app-config > ~/.config/app/settings.json
 ```
 
 ---
@@ -546,6 +521,65 @@ Shows:
 - PKCS#11 token selection
 - Payload sizes at each stage
 
+### Self-Test
+
+Run comprehensive end-to-end tests on your YubiKey:
+
+```bash
+# Run with default settings (200 operations)
+yb --serial 12345678 self-test
+
+# Run with custom operation count
+yb --serial 12345678 self-test -n 100
+
+# Non-interactive with credentials
+yb --serial 12345678 --pin 123456 --key 010203...0708 self-test
+```
+
+**What it does**:
+1. **Formats the YubiKey** (destroys all existing blob data)
+2. **Performs random operations** (store/fetch/remove/list)
+3. **Tests both encrypted and unencrypted blobs**
+4. **Stops on first error** (if any) since state becomes unknown
+5. **Reports success/failure statistics**
+
+**WARNING**: This is a **destructive operation** that will erase all blob data on your YubiKey!
+
+**Options**:
+- `-n, --count`: Number of operations to perform (default: 200)
+- All operations use 16 objects with blobs up to 16 KB
+
+**Example output**:
+```
+Running 200 test operations...
+
+[1/200, 199 remaining] STORE(session)... OK
+[2/200, 198 remaining] FETCH(session)... OK
+[3/200, 197 remaining] LIST... OK
+...
+
+======================================================================
+YB SELF-TEST REPORT
+======================================================================
+
+Test Configuration:
+  Operations: 200
+  Duration: 214.9 seconds
+
+Operation Results:
+  STORE:  68 operations, 68 passed, 0 failed
+  FETCH:  66 operations, 66 passed, 0 failed
+  REMOVE: 38 operations, 38 passed, 0 failed
+  LIST:   28 operations, 28 passed, 0 failed
+
+  TOTAL: 200 operations, 200 passed, 0 failed
+
+Result: ✓ ALL TESTS PASSED
+======================================================================
+```
+
+**Note**: "Store is full" is treated as expected behavior (not an error) when the YubiKey reaches capacity.
+
 ---
 
 ## Troubleshooting
@@ -624,25 +658,21 @@ yb --serial 12345678 ls
 
 ## Security Best Practices
 
-### 1. Protect Your PIN
+### Change Default PIN
 
-- **Change default PIN**: YubiKey ships with default PIN `123456`
-  ```bash
-  ykman piv access change-pin
-  ```
-- **Use strong PIN**: 6-8 digits, not birthday/simple pattern
-- **Don't share PIN**: PIN unlocks everything on your YubiKey
+YubiKey ships with default PIN `123456`. Change it immediately:
 
-### 2. Backup Your Data
-
-**YubiKey is not a backup solution**:
-- Hardware can fail
-- Can be lost or stolen
-- PIN can be locked after 3 wrong attempts
-
-**Recommended backup strategy**:
 ```bash
-# Export all blobs to secure location
+ykman piv access change-pin
+```
+
+### Backup Your Data
+
+**YubiKey is not a backup solution**. Hardware can fail, be lost, or have PIN locked.
+
+**Backup strategy**:
+```bash
+# Export all blobs
 for blob in $(yb ls | awk '{print $5}'); do
     yb fetch --output backup/$blob $blob
 done
@@ -651,144 +681,11 @@ done
 tar czf - backup/ | gpg --symmetric > yubikey-backup.tar.gz.gpg
 ```
 
-### 3. Verify Blob Integrity
+### Use Encryption for Sensitive Data
 
-After storing critical data:
+**Always encrypt**: SSH keys, GPG keys, passwords, tokens, personal information
 
-```bash
-# Store with checksum
-sha256sum sensitive.txt > sensitive.txt.sha256
-yb store sensitive < sensitive.txt
-
-# Later, verify
-yb fetch sensitive > recovered.txt
-sha256sum -c sensitive.txt.sha256
-# Output: recovered.txt: OK
-```
-
-### 4. Use Encryption for Sensitive Data
-
-**Always encrypt**:
-- SSH private keys
-- GPG keys
-- Passwords/tokens
-- Personal information
-
-**Can be unencrypted**:
-- Public keys
-- Public certificates
-- Non-sensitive configuration
-
-### 5. Physical Security
-
-- **Keep YubiKey on keyring**: Reduces loss risk
-- **Know when it's inserted**: Be aware of when YubiKey is connected
-- **Remove after use**: Don't leave inserted in unattended computer
-- **Multiple YubiKeys**: Consider backup YubiKey with duplicate critical data
-
-### 6. Regular Audits
-
-```bash
-# Periodically check what's stored
-yb ls
-
-# Remove obsolete data
-yb rm old-credential
-
-# Verify you can decrypt
-yb fetch critical-data > /dev/null && echo "OK"
-```
-
-### 7. Secure Your Management Key
-
-If using custom management key:
-- **Don't store in plaintext**: Use password manager
-- **Don't reuse**: Unique per YubiKey
-- **Document it**: You need it for any write operation
-
----
-
-## Common Workflows
-
-### Workflow 1: Secure Password Rotation
-
-```bash
-# Store new password
-echo "new-super-secret-password" | yb store service-password
-
-# Later, retrieve for use
-yb fetch service-password | xclip -selection clipboard
-# Or: yb fetch service-password | pbcopy  # macOS
-```
-
-### Workflow 2: SSH Key Management
-
-```bash
-# Backup existing SSH key to YubiKey
-yb store --encrypted --input ~/.ssh/id_ed25519 ssh-backup
-
-# Restore on new machine
-yb fetch ssh-backup > ~/.ssh/id_ed25519
-chmod 600 ~/.ssh/id_ed25519
-```
-
-### Workflow 3: Configuration Sync
-
-```bash
-# On machine A: Store config
-yb store --unencrypted --input ~/.vimrc vim-config
-
-# On machine B: Fetch config
-yb fetch vim-config > ~/.vimrc
-```
-
-### Workflow 4: Emergency Contact Info
-
-```bash
-# Store unencrypted (accessible without PIN)
-cat > emergency.txt <<EOF
-Name: John Doe
-Emergency Contact: +1-555-0100
-Blood Type: O+
-Allergies: Penicillin
-EOF
-
-yb store --unencrypted --input emergency.txt emergency-info
-
-# Anyone with physical access can read it
-yb -x fetch emergency-info
-```
-
----
-
-## Tips and Tricks
-
-1. **Alias for convenience**:
-   ```bash
-   alias ybs='yb store --encrypted'
-   alias ybf='yb fetch'
-   ```
-
-2. **List with grep**:
-   ```bash
-   yb ls | grep -i secret
-   ```
-
-3. **Measure capacity used**:
-   ```bash
-   yb ls | awk '{sum+=$3} END {print sum " bytes used"}'
-   ```
-
-4. **Pipe to clipboard** (Linux):
-   ```bash
-   yb fetch password | xclip -selection clipboard
-   ```
-
-5. **Compress before storing large data**:
-   ```bash
-   gzip < large-file | yb store large-file-gz
-   yb fetch large-file-gz | gunzip > large-file
-   ```
+**Unencrypted is OK for**: Public keys, public certificates, non-sensitive configuration
 
 ---
 
@@ -797,36 +694,3 @@ yb -x fetch emergency-info
 - **Command help**: `yb --help` or `yb <command> --help`
 - **Report issues**: https://github.com/douzebis/yb/issues
 - **Design document**: See `DESIGN.md` for technical details
-- **Review document**: See `REVIEW.md` for code quality notes
-
----
-
-## Appendix: File Format
-
-yb stores data in a custom format registered with the `file` command:
-
-```bash
-# Dump a PIV object
-yubico-piv-tool -a read-object -i 0x5f0000 > object.bin
-
-# Identify it
-file object.bin
-# Output: object.bin: yblob object store image data
-```
-
-**Magic number**: `0xF2ED5F0B` ("Fred's Fob" in leetspeak)
-
-**Structure** (each object):
-- Magic number (4 bytes)
-- Store metadata (object count, encryption slot)
-- Object age (3 bytes, monotonic counter)
-- Chunk metadata (position, next pointer)
-- Blob metadata (name, size, timestamps) - head chunks only
-- Payload (encrypted or unencrypted data)
-
-For complete specification, see `src/yb/constants.py`.
-
----
-
-**Last Updated**: 2025-11-16
-**Version**: 1.0

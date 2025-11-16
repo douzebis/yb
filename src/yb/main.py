@@ -16,6 +16,7 @@ from yb.cli_format import cli_format
 from yb.cli_fetch import cli_fetch
 from yb.cli_list import cli_list
 from yb.cli_remove import cli_remove
+from yb.cli_self_test import cli_self_test
 from yb.cli_store import cli_store
 from yb.piv import HardwarePiv
 
@@ -142,6 +143,12 @@ def validate_management_key(key: str) -> str:
     help='Management key as 48-char hex string, or "-" to prompt (default: YubiKey default key)'
 )
 @click.option(
+    '--pin',
+    type=str,
+    default=None,
+    help='YubiKey PIN (for non-interactive encrypted operations)'
+)
+@click.option(
     '--debug',
     is_flag=True,
     default=False,
@@ -155,6 +162,7 @@ def cli(
     reader: Hashable | None,
     no_verify: bool,
     key: str | None,
+    pin: str | None,
     debug: bool,
 ) -> None:
     """CLI tool for managing cryptographic operations."""
@@ -293,6 +301,7 @@ def cli(
     ctx.ensure_object(dict)  # Ensure ctx.obj is a dict
     ctx.obj['reader'] = chosen_reader  # Store chosen reader in context
     ctx.obj['management_key'] = management_key  # Store management key in context
+    ctx.obj['pin'] = pin  # Store PIN in context
     ctx.obj['piv'] = piv  # Store PIV interface in context
     ctx.obj['no_verify'] = no_verify  # Store -x flag in context
     ctx.obj['debug'] = debug  # Store --debug flag in context
@@ -300,9 +309,9 @@ def cli(
 cli.add_command(cli_fsck)
 cli.add_command(cli_fetch)
 cli.add_command(cli_format)
-#cli.add_command(cli_list_readers)
 cli.add_command(cli_list)
 cli.add_command(cli_remove)
+cli.add_command(cli_self_test)
 cli.add_command(cli_store)
 
 

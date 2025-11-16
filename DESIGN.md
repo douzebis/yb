@@ -1317,6 +1317,168 @@ yb fetch <TAB>
 
 ---
 
+## Self-Test System
+
+The `yb self-test` command provides comprehensive end-to-end testing of the blob storage system on a real YubiKey.
+
+### Purpose
+
+- **Validate correctness**: Ensures all operations (store/fetch/remove/list) work correctly
+- **Test encryption**: Validates both encrypted and unencrypted blob handling
+- **Verify capacity handling**: Tests behavior when storage is full
+- **Regression testing**: Catches bugs before release
+
+### Architecture
+
+The self-test uses a **ground truth** model to verify YubiKey behavior:
+
+```
+┌─────────────┐         ┌─────────────┐
+│  Operation  │         │  Operation  │
+│  Generator  │────────▶│  Executor   │
+└─────────────┘         └──────┬──────┘
+                               │
+                    ┌──────────┴──────────┐
+                    │                     │
+                    ▼                     ▼
+            ┌──────────────┐      ┌─────────────┐
+            │   YubiKey    │      │  ToyFS      │
+            │  (Hardware)  │      │ (Reference) │
+            └──────┬───────┘      └──────┬──────┘
+                   │                     │
+                   └──────────┬──────────┘
+                              ▼
+                      ┌──────────────┐
+                      │   Compare    │
+                      │   Results    │
+                      └──────────────┘
+```
+
+**Components**:
+
+1. **OperationGenerator** (`test_helpers.py`)
+   - Generates pseudo-random test operations
+   - Configurable encryption ratio (50% by default)
+   - Respects capacity constraints
+
+2. **ToyFilesystem** (`test_helpers.py`)
+   - In-memory reference implementation
+   - Tracks expected state of YubiKey
+   - No capacity limits (optimistic)
+
+3. **SubprocessExecutor** (`self_test.py`)
+   - Executes `yb` commands via subprocess
+   - Captures stdout, stderr, exit codes
+   - Provides debug instrumentation
+
+4. **TestStats** (`self_test.py`)
+   - Tracks pass/fail counts per operation type
+   - Records failed operation details
+   - Generates summary report
+
+### Test Flow
+
+```python
+# 1. Format YubiKey (clean slate)
+format_yubikey(serial, pin, mgmt_key, object_count=16)
+
+# 2. Generate operations
+generator = OperationGenerator(seed=42, max_capacity=15)
+operations = generator.generate(count=200, encryption_ratio=0.5)
+
+# 3. Execute operations
+for op in operations:
+    # Update ToyFS optimistically
+    toy_fs.store(op.name, op.payload, mtime)
+
+    # Execute on YubiKey
+    success, exit_code, stderr = executor.store_blob(...)
+
+    # Handle result
+    if success:
+        # YubiKey succeeded - ToyFS already updated
+        pass
+    elif "Store is full" in stderr:
+        # Expected capacity limit - rollback ToyFS
+        undo_toy_store_update()
+        success = True  # Not an error
+    else:
+        # Real error - rollback ToyFS and stop
+        undo_toy_store_update()
+        break  # Stop on first error
+```
+
+### Error Handling
+
+**Expected behaviors** (not errors):
+- "Store is full" when capacity exhausted
+- "Cannot find object" when fetching non-existent blob
+- Remove returns failure for non-existent blob
+
+**True errors** (stop test):
+- Corruption detected
+- Data mismatch on fetch
+- Unexpected exceptions
+- Any error other than capacity/not-found
+
+**Stop-on-first-error principle**:
+After a true error, the YubiKey state is unknown and further tests are unreliable. The test stops immediately and reports the failure with full context.
+
+### Capacity Handling
+
+The self-test treats "Store is full" as **valid behavior**:
+
+```python
+if "Store is full" in stderr:
+    # Rollback optimistic ToyFS update
+    if was_updating:
+        toy_fs.files[name] = old_value  # Restore
+    else:
+        del toy_fs.files[name]  # Remove
+    success = True  # This is expected, not an error
+```
+
+This approach:
+- Avoids predicting exact YubiKey capacity (which varies with encryption/chunking)
+- Keeps ToyFS in sync with actual YubiKey state
+- Tests that the store correctly reports capacity limits
+
+### Usage
+
+```bash
+# Basic usage
+yb --serial 12345678 self-test
+
+# Custom operation count
+yb --serial 12345678 self-test -n 100
+
+# Non-interactive with credentials
+yb --serial 12345678 --pin 123456 --key 010203...0708 self-test
+
+# Debug mode
+yb --debug --serial 12345678 self-test
+```
+
+### File Organization
+
+```
+src/yb/
+├── cli_self_test.py         # CLI command definition
+├── self_test.py              # Test execution logic
+│   ├── SubprocessExecutor    # Run yb commands
+│   ├── TestStats             # Track results
+│   ├── run_test_operations() # Main test loop
+│   └── run_self_test()       # Entry point
+└── test_helpers.py           # Shared test utilities
+    ├── ToyFilesystem         # Reference implementation
+    ├── OperationGenerator    # Test case generation
+    └── OpType/Operation      # Data structures
+```
+
+**Sharing with unit tests**: The `test_helpers.py` module is used by both the self-test and the comprehensive unit test (`tests/test_store_comprehensive.py`), ensuring consistent test methodology.
+
+---
+
 ## References
 
 ### Code Organization
@@ -1335,13 +1497,21 @@ yb/
 │   ├── cli_list.py          # list command
 │   ├── cli_remove.py        # remove command
 │   ├── cli_fsck.py          # fsck command
+│   ├── cli_self_test.py     # self-test command
+│   ├── self_test.py         # Self-test implementation
+│   ├── test_helpers.py      # Shared test utilities
+│   ├── yubikey_selector.py  # Interactive YubiKey selection
 │   ├── auxiliaries.py       # Helper functions
 │   ├── parse_int.py         # Integer parsing utilities
 │   └── x509_subject.py      # X.509 subject handling
+├── tests/
+│   └── test_store_comprehensive.py  # Comprehensive unit tests
 ├── pyproject.toml           # Python package metadata
 ├── default.nix              # Nix build configuration
 ├── shell.nix                # Development shell
 ├── README.md                # User documentation
+├── DESIGN.md                # Design documentation
+├── USER_GUIDE.md            # User guide
 ├── TODO.md                  # Future work
 └── .cache/                  # Claude workspace
     ├── README.md            # Development rules

@@ -160,9 +160,9 @@ def cli_fetch(ctx,
             needs_pin = True
             break
 
-    # Prompt for PIN only if needed
-    pin: str | None = None
-    if needs_pin:
+    # Get PIN from context if provided, otherwise prompt only if needed
+    pin: str | None = ctx.obj.get('pin')
+    if needs_pin and pin is None:
         try:
             pin = getpass.getpass("Please enter User PIN for encrypted blob(s): ")
             if pin == "":

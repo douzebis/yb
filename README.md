@@ -58,12 +58,13 @@ pip install --editable .
 ## Command Overview
 
 ```shell
-yb format   # Initialize PIV objects and optionally generate key pair
-yb store    # Store a named blob in the YubiKey
-yb fetch    # Retrieve a blob by name
-yb ls       # List stored blobs and metadata
-yb rm       # Delete a blob by name
-yb fsck     # Inspect and verify object integrity
+yb format     # Initialize PIV objects and optionally generate key pair
+yb store      # Store a named blob in the YubiKey
+yb fetch      # Retrieve a blob by name
+yb ls         # List stored blobs and metadata
+yb rm         # Delete a blob by name
+yb fsck       # Inspect and verify object integrity
+yb self-test  # Run comprehensive end-to-end tests (destructive)
 ```
 
 Use `--help` with any command for detailed options.

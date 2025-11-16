@@ -66,8 +66,10 @@ def flash_yubikey_continuously(serial: int, stop_event: threading.Event) -> None
             try:
                 with device_obj.open_connection(SmartCardConnection) as _conn:
                     conn = cast(ScardSmartCardConnection, _conn)
-                    # GET VERSION command - quick and causes LED flash
-                    apdu = [0x00, 0xF7, 0x00, 0x00]
+                    # SELECT PIV application - causes LED flash
+                    # PIV AID: A0 00 00 03 08
+                    piv_aid = [0xA0, 0x00, 0x00, 0x03, 0x08]
+                    apdu = [0x00, 0xA4, 0x04, 0x00, len(piv_aid)] + piv_aid
                     conn.connection.transmit(apdu)
 
                 # Wait a bit before next flash (avoid excessive polling)

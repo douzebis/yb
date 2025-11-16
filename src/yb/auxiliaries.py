@@ -22,7 +22,7 @@ def verify_device_if_needed(ctx):
     Read-only commands (ls, fetch, fsck) should NOT call this.
 
     Args:
-        ctx: Click context containing 'piv', 'reader', and 'no_verify' in ctx.obj
+        ctx: Click context containing 'piv', 'reader', 'pin', and 'no_verify' in ctx.obj
 
     Raises:
         click.ClickException: If PIN verification fails
@@ -32,9 +32,12 @@ def verify_device_if_needed(ctx):
 
     reader = ctx.obj['reader']
     piv = ctx.obj['piv']
+    pin = ctx.obj.get('pin')
 
-    print('Confirm by entering your PIN...', file=sys.stderr)
-    if not piv.verify_reader(reader, 0x9a):
+    if pin is None:
+        print('Confirm by entering your PIN...', file=sys.stderr)
+
+    if not piv.verify_reader(reader, 0x9a, pin=pin):
         raise click.ClickException('Could not verify the PIN.')
 
 
