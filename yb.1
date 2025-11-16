@@ -1,0 +1,417 @@
+.TH YB 1 "2025-11-16" "yb 1.0" "User Commands"
+.SH NAME
+yb \- YubiKey-based secure blob storage
+.SH SYNOPSIS
+.B yb
+[\fIGLOBAL-OPTIONS\fR]
+.I COMMAND
+[\fICOMMAND-OPTIONS\fR]
+[\fIARGUMENTS\fR]
+.SH DESCRIPTION
+.B yb
+is a command-line tool that provides secure blob storage using a YubiKey device. It leverages the YubiKey's PIV (Personal Identity Verification) application to store encrypted or unencrypted binary data in custom PIV data objects. The tool uses hybrid encryption (ECDH + AES-256-CBC) to protect sensitive data with hardware-backed cryptographic keys.
+.PP
+Each blob stored on the YubiKey has a unique name and can be encrypted using hardware-backed elliptic curve cryptography. The YubiKey provides approximately 36 KB of storage capacity (with default settings) distributed across multiple PIV custom data objects (0x5f0000 - 0x5f000f).
+.SH GLOBAL OPTIONS
+.TP
+.BR \-s ", " \-\-serial " " \fISERIAL\fR
+Select YubiKey by serial number. The serial number is printed on the YubiKey case. Use tab completion to see available serial numbers.
+.TP
+.BR \-r ", " \-\-reader " " \fIREADER\fR
+Select YubiKey by PC/SC reader name. Legacy option, prefer --serial for multi-device scenarios.
+.TP
+.BR \-k ", " \-\-key " " \fIKEY\fR
+Management key for write operations. Specify 48 hexadecimal characters or use '-' to prompt interactively. If not specified, the YubiKey factory default management key is used.
+.TP
+.BR \-x ", " \-\-no\-verify
+Skip PIN verification and LED flash for write operations. Use only in trusted environments.
+.TP
+.B \-\-debug
+Enable verbose debugging output showing encryption/decryption steps, PKCS#11 operations, and internal state.
+.TP
+.BR \-h ", " \-\-help
+Display help message and exit.
+.TP
+.B \-\-version
+Display version information and exit.
+.SH COMMANDS
+.SS format
+Initialize or reinitialize the blob store on a YubiKey.
+.PP
+.B yb format
+[\fB\-\-generate\fR | \fB\-\-no\-generate\fR]
+[\fB\-\-key\-slot\fR \fISLOT\fR]
+[\fB\-\-object\-count\fR \fIN\fR]
+[\fB\-\-object\-size\fR \fIBYTES\fR]
+[\fB\-\-subject\fR \fISUBJECT\fR]
+.PP
+Initializes the YubiKey PIV custom objects for blob storage. Optionally generates a new EC P-256 encryption key pair.
+.PP
+Options:
+.RS
+.TP
+.BR \-g ", " \-\-generate
+Generate and store a new EC P-256 key pair for encryption. Requires PIN.
+.TP
+.B \-\-no\-generate
+Do not generate a new key pair. Use existing key in the specified slot.
+.TP
+.BR \-k ", " \-\-key\-slot " " \fISLOT\fR
+PIV slot ID for the encryption key (default: 9e). Valid values: 9a, 9c, 9d, 9e, 82-95.
+.TP
+.BR \-c ", " \-\-object\-count " " \fIN\fR
+Number of PIV objects to allocate (default: 12, range: 1-16). More objects provide more storage capacity.
+.TP
+.BR \-s ", " \-\-object\-size " " \fIBYTES\fR
+Size of each object in bytes (default: 3052, range: 512-3052). Larger objects provide more capacity per object.
+.TP
+.BR \-n ", " \-\-subject " " \fISUBJECT\fR
+X.509 subject for the encryption key certificate (default: /CN=YBLOB ECCP256). Must follow OpenSSL format.
+.RE
+.SS store
+Store a binary blob under a given name.
+.PP
+.B yb store
+[\fB\-\-encrypted\fR | \fB\-\-unencrypted\fR]
+[\fB\-\-input\fR \fIFILE\fR]
+[\fINAME\fR]
+.PP
+Stores data as a named blob on the YubiKey. If NAME is omitted and --input is specified, the basename of the input file is used.
+.PP
+Options:
+.RS
+.TP
+.BR \-e ", " \-\-encrypted
+Encrypt the blob before storing (default). Requires the YubiKey's encryption key. Decryption will require PIN.
+.TP
+.BR \-u ", " \-\-unencrypted
+Store the blob without encryption. Faster and no PIN required for retrieval, but data is not protected.
+.TP
+.BR \-i ", " \-\-input " " \fIFILE\fR
+Read data from FILE instead of stdin. If NAME is not specified, the filename is used as the blob name.
+.RE
+.PP
+Arguments:
+.RS
+.TP
+.I NAME
+Unique name for the blob (1-255 characters). Case-sensitive. If a blob with this name already exists, it will be replaced.
+.RE
+.SS fetch
+Retrieve one or more named blobs from the YubiKey.
+.PP
+.B yb fetch
+[\fB\-\-output\fR \fIFILE\fR]
+[\fB\-\-extract\fR]
+\fINAME\fR...
+.PP
+Retrieves blob data by name. For encrypted blobs, prompts for YubiKey PIN.
+.PP
+Options:
+.RS
+.TP
+.BR \-o ", " \-\-output " " \fIFILE\fR
+Write retrieved blob to FILE instead of stdout. Cannot be used with --extract or when fetching multiple blobs.
+.TP
+.BR \-x ", " \-\-extract
+Extract multiple blobs to files named after the blob names. Creates one file per blob in the current directory.
+.RE
+.PP
+Arguments:
+.RS
+.TP
+.I NAME
+Name(s) of blob(s) to retrieve. Tab completion available if shell completion is enabled.
+.RE
+.SS ls
+Display all blobs stored on the YubiKey.
+.PP
+.B yb ls
+.PP
+Lists all stored blobs with metadata. No options.
+.PP
+Output format (one blob per line):
+.RS
+.TP
+Column 1: Encryption status
+\fB\-\fR for encrypted, \fBU\fR for unencrypted
+.TP
+Column 2: Chunk count
+Number of PIV objects used to store the blob
+.TP
+Column 3: Size
+Unencrypted blob size in bytes
+.TP
+Column 4: Modified
+Last modification timestamp (YYYY-MM-DD HH:MM)
+.TP
+Column 5: Name
+Blob name
+.RE
+.SS rm
+Remove a named blob from the YubiKey.
+.PP
+.B yb rm
+\fINAME\fR
+.PP
+Deletes the blob with the specified name, freeing its storage space. Requires PIN verification.
+.PP
+Arguments:
+.RS
+.TP
+.I NAME
+Name of the blob to remove.
+.RE
+.SS fsck
+Perform integrity check and display low-level store information.
+.PP
+.B yb fsck
+.PP
+Displays store metadata and detailed information about all PIV objects. Useful for debugging storage issues, verifying consistency, and inspecting object allocation. Output is in YAML format.
+.SS list-readers
+List all available YubiKey PIV readers.
+.PP
+.B yb list-readers
+.PP
+Enumerates all connected PIV-capable devices. Output is in YAML format.
+.SH EXAMPLES
+.SS Initialize a YubiKey for blob storage
+.nf
+.B yb format --generate
+.fi
+.PP
+Generates a new encryption key and initializes the blob store with default settings.
+.SS Store an encrypted SSH private key
+.nf
+.B yb store --encrypted --input ~/.ssh/id_ed25519 ssh-key
+.fi
+.PP
+Stores the SSH private key as an encrypted blob named "ssh-key".
+.SS Retrieve and use the SSH key
+.nf
+.B yb fetch ssh-key > /tmp/id_ed25519
+.B chmod 600 /tmp/id_ed25519
+.B ssh -i /tmp/id_ed25519 user@example.com
+.fi
+.PP
+Retrieves the encrypted SSH key (prompting for PIN) and uses it for SSH authentication.
+.SS Store unencrypted configuration file
+.nf
+.B yb store --unencrypted --input ~/.vimrc vim-config
+.fi
+.PP
+Stores a configuration file without encryption for easy portability.
+.SS List all stored blobs
+.nf
+.B yb ls
+.fi
+.PP
+Example output:
+.nf
+-  1      3243  2025-06-01 13:22  ssh-key
+U  1       512  2025-06-01 13:36  vim-config
+-  3     10240  2025-06-02 09:15  backup
+.fi
+.SS Extract multiple blobs at once
+.nf
+.B yb fetch --extract ssh-key vim-config backup
+.fi
+.PP
+Creates files: ./ssh-key, ./vim-config, ./backup
+.SS Remove old blob
+.nf
+.B yb rm old-backup
+.fi
+.PP
+Deletes the blob named "old-backup" after PIN verification.
+.SS Select specific YubiKey by serial
+.nf
+.B yb --serial 12345678 ls
+.fi
+.PP
+Lists blobs from the YubiKey with serial number 12345678.
+.SS Format with custom capacity
+.nf
+.B yb format --generate --object-count 16 --object-size 3052
+.fi
+.PP
+Initializes the store with maximum capacity (~48 KB).
+.SS Pipe secret to clipboard (Linux)
+.nf
+.B yb fetch github-token | xclip -selection clipboard
+.fi
+.PP
+Retrieves an encrypted token and copies it to the clipboard.
+.SH STORAGE CAPACITY
+With default settings (12 objects, 3052 bytes each):
+.IP \(bu 2
+Total capacity: ~36 KB
+.IP \(bu 2
+Per-blob overhead: ~23 bytes for metadata
+.IP \(bu 2
+Maximum single blob: ~36 KB (uses all objects)
+.PP
+Capacity can be increased to ~48 KB by using 16 objects.
+.SH ENCRYPTION
+Encrypted blobs use hybrid encryption:
+.IP 1. 3
+Ephemeral EC P-256 key pair generated for each store operation
+.IP 2. 3
+ECDH performed with YubiKey's permanent private key
+.IP 3. 3
+Shared secret derived using HKDF-SHA256
+.IP 4. 3
+AES-256-CBC encryption with random IV and PKCS#7 padding
+.PP
+The YubiKey's private key never leaves the device. Decryption requires:
+.IP \(bu 2
+Physical possession of the YubiKey
+.IP \(bu 2
+Knowledge of the PIN
+.IP \(bu 2
+The encrypted blob data
+.SH MULTI-DEVICE SUPPORT
+When multiple YubiKeys are connected:
+.TP
+.B Serial number selection (recommended)
+Use
+.B \-\-serial
+to specify which YubiKey to use. Tab completion shows available serial numbers.
+.TP
+.B Interactive selection
+If no serial/reader is specified,
+.B yb
+presents an interactive menu with arrow-key navigation. The selected YubiKey's LED flashes.
+.TP
+.B Auto-selection
+If only one YubiKey is connected, it is selected automatically.
+.SH SHELL COMPLETION
+Enable tab completion for enhanced usability:
+.PP
+For bash:
+.nf
+.B eval "$(_YB_COMPLETE=bash_source yb)"
+.fi
+.PP
+For zsh:
+.nf
+.B eval "$(_YB_COMPLETE=zsh_source yb)"
+.fi
+.PP
+For fish:
+.nf
+.B _YB_COMPLETE=fish_source yb | source
+.fi
+.PP
+Completion supports:
+.IP \(bu 2
+Serial numbers (--serial option)
+.IP \(bu 2
+Blob names (fetch command)
+.SH FILES
+.TP
+.I ~/.config/yb/config.yaml
+User configuration file (future feature)
+.TP
+.I /dev/hidraw*
+USB HID device nodes for YubiKey access
+.SH ENVIRONMENT
+.TP
+.B PYTHONPATH
+Must include yb source directory if running from source
+.TP
+.B PKCS11_MODULE_PATH
+Path to libykcs11.so (typically set by nix-shell or system)
+.SH DEPENDENCIES
+.SS External Tools
+.TP
+.B yubico-piv-tool
+PIV object I/O, key generation, certificate management
+.TP
+.B pkcs11-tool
+ECDH operations via PKCS#11 interface (from OpenSC package)
+.TP
+.B openssl
+Certificate parsing and subject extraction
+.SS Python Libraries
+.TP
+.B click
+CLI framework
+.TP
+.B cryptography
+ECDH, AES, HKDF cryptographic primitives
+.TP
+.B PyYAML
+YAML output formatting
+.TP
+.B yubikey-manager (optional)
+Multi-device enumeration and serial number support
+.TP
+.B prompt-toolkit (optional)
+Interactive device selection with LED feedback
+.SH EXIT STATUS
+.B yb
+returns the following exit codes:
+.TP
+.B 0
+Success
+.TP
+.B 1
+General error (invalid arguments, YubiKey not found, etc.)
+.TP
+.B 2
+PIN verification failed or user cancelled
+.SH SECURITY CONSIDERATIONS
+.SS Strengths
+.IP \(bu 2
+Hardware-backed encryption keys never leave the YubiKey
+.IP \(bu 2
+Forward secrecy through ephemeral key pairs
+.IP \(bu 2
+PIN-protected decryption operations
+.IP \(bu 2
+Age-based integrity checking prevents stale data
+.SS Limitations
+.IP \(bu 2
+No authenticated encryption (AES-CBC without MAC)
+.IP \(bu 2
+Management key stored in plaintext if provided on command line
+.IP \(bu 2
+PIN can be locked after 3 failed attempts (requires reset)
+.IP \(bu 2
+Physical possession of YubiKey allows reading unencrypted blobs
+.SS Recommendations
+.IP \(bu 2
+Always use encryption for sensitive data
+.IP \(bu 2
+Change default YubiKey PIN from factory default (123456)
+.IP \(bu 2
+Keep backups - YubiKey is not a backup solution
+.IP \(bu 2
+Use --key=- for management key prompts (avoid command-line arguments)
+.IP \(bu 2
+Remove YubiKey when not in use
+.IP \(bu 2
+Verify data integrity with checksums for critical blobs
+.SH BUGS
+Report bugs to: https://github.com/douzebis/yb/issues
+.SH AUTHOR
+Frederic Ruget <fred@atlant.is>
+.SH SEE ALSO
+.BR yubico-piv-tool (1),
+.BR pkcs11-tool (1),
+.BR ykman (1)
+.PP
+Full documentation:
+.I /usr/share/doc/yb/DESIGN.md
+.br
+.I /usr/share/doc/yb/USER_GUIDE.md
+.PP
+Project repository: https://github.com/douzebis/yb
+.SH COPYRIGHT
+Copyright \(co 2025 Frederic Ruget
+.br
+License: MIT
+.br
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.
