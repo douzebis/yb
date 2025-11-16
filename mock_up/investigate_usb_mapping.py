@@ -43,13 +43,14 @@ def extract_usb_info_from_piv() -> list[dict]:
 
             # Approach 1: Check _device attribute (internal)
             if hasattr(device, '_device'):
-                print(f"  _device: {device._device}")
-                print(f"  _device type: {type(device._device)}")
-                device_info["_device"] = str(device._device)
+                device_device = getattr(device, '_device')
+                print(f"  _device: {device_device}")
+                print(f"  _device type: {type(device_device)}")
+                device_info["_device"] = str(device_device)
 
                 # Check if _device has path/location info
-                if hasattr(device._device, '__dict__'):
-                    print(f"  _device attributes: {list(device._device.__dict__.keys())}")
+                if hasattr(device_device, '__dict__'):
+                    print(f"  _device attributes: {list(device_device.__dict__.keys())}")
 
             # Approach 2: Check for transport-related attributes
             for attr in ['transport', 'path', 'location', 'port', 'bus', 'address']:
@@ -60,8 +61,9 @@ def extract_usb_info_from_piv() -> list[dict]:
 
             # Approach 3: Check device descriptor
             if hasattr(device, 'descriptor'):
-                print(f"  descriptor: {device.descriptor}")
-                device_info["descriptor"] = str(device.descriptor)
+                device_descriptor = getattr(device, 'descriptor')
+                print(f"  descriptor: {device_descriptor}")
+                device_info["descriptor"] = str(device_descriptor)
 
             # Approach 4: Try to get pid
             if hasattr(device, 'pid'):

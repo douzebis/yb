@@ -226,25 +226,47 @@ class Crypto:
     @classmethod
     def hybrid_decrypt(
             cls,
-            reader: str,
+            serial: int,
             slot: str,
             encrypted_blob: bytes,
             pin: str | None = None,
+            debug: bool = False,
         ) -> bytes:
         '''
         Decrypts the encrypted blob which consists of:
         ephemeral_pubkey (65 bytes for uncompressed point on P-256) + IV (16 bytes) + ciphertext.
         Uses YubiKey ECDH private key operation to derive shared secret.
+
+        Args:
+            serial: YubiKey serial number (used to select correct token for ECDH)
+            slot: PIV slot containing the private key (e.g., '9e')
+            encrypted_blob: Concatenated ephemeral_pubkey + IV + ciphertext
+            pin: Optional PIN for PKCS#11 login
+            debug: Enable verbose debugging output
+
+        Returns:
+            Decrypted plaintext bytes
         '''
         # Constants
         CURVE = ec.SECP256R1()
         PUB_KEY_LEN = 65  # Uncompressed SECP256R1 point (0x04 + 32-byte X + 32-byte Y)
         IV_LEN = 16
 
+        if debug:
+            print(f'[DEBUG] hybrid_decrypt: encrypted_blob length = {len(encrypted_blob)}',
+                  file=sys.stderr)
+
         # Slice encrypted blob
         ephemeral_pub = encrypted_blob[:PUB_KEY_LEN]
         iv = encrypted_blob[PUB_KEY_LEN : PUB_KEY_LEN + IV_LEN]
         ciphertext = encrypted_blob[PUB_KEY_LEN + IV_LEN :]
+
+        if debug:
+            print(f'[DEBUG] ephemeral_pub length = {len(ephemeral_pub)}', file=sys.stderr)
+            print(f'[DEBUG] iv length = {len(iv)}', file=sys.stderr)
+            print(f'[DEBUG] ciphertext length = {len(ciphertext)}', file=sys.stderr)
+            print(f'[DEBUG] ephemeral_pub (hex) = {ephemeral_pub.hex()}', file=sys.stderr)
+            print(f'[DEBUG] iv (hex) = {iv.hex()}', file=sys.stderr)
 
         # Extract x and y from public key
         x = int.from_bytes(ephemeral_pub[1:33], 'big')
@@ -259,9 +281,17 @@ class Crypto:
             format=serialization.PublicFormat.SubjectPublicKeyInfo,
         )
 
+        if debug:
+            print(f'[DEBUG] der_spki length = {len(der_spki)}', file=sys.stderr)
+            print(f'[DEBUG] der_spki (hex) = {der_spki.hex()}', file=sys.stderr)
+
         # Derive shared secret via YubiKey
         shared_secret = Crypto.perform_ecdh_with_yubikey(
-            reader, slot, der_spki, pin)
+            serial, slot, der_spki, pin, debug)
+
+        if debug:
+            print(f'[DEBUG] shared_secret length = {len(shared_secret)}', file=sys.stderr)
+            print(f'[DEBUG] shared_secret (hex) = {shared_secret.hex()}', file=sys.stderr)
 
         # Derive AES key using HKDF
         derived_key = HKDF(
@@ -272,6 +302,9 @@ class Crypto:
             backend=default_backend(),
         ).derive(shared_secret)
 
+        if debug:
+            print(f'[DEBUG] derived_key (hex) = {derived_key.hex()}', file=sys.stderr)
+
         # Decrypt AES-CBC with PKCS7 unpadding
         cipher = Cipher(
             algorithms.AES(derived_key), modes.CBC(iv), backend=default_backend()
@@ -279,8 +312,18 @@ class Crypto:
         decryptor = cipher.decryptor()
         padded_plaintext = decryptor.update(ciphertext) + decryptor.finalize()
 
+        if debug:
+            print(f'[DEBUG] padded_plaintext length = {len(padded_plaintext)}', file=sys.stderr)
+            print(f'[DEBUG] padded_plaintext first 32 bytes (hex) = {padded_plaintext[:32].hex()}',
+                  file=sys.stderr)
+            print(f'[DEBUG] padded_plaintext last 32 bytes (hex) = {padded_plaintext[-32:].hex()}',
+                  file=sys.stderr)
+
         unpadder = PKCS7(128).unpadder()
         plaintext = unpadder.update(padded_plaintext) + unpadder.finalize()
+
+        if debug:
+            print(f'[DEBUG] plaintext length after unpadding = {len(plaintext)}', file=sys.stderr)
 
         return plaintext
 
@@ -290,11 +333,25 @@ class Crypto:
     @classmethod
     def perform_ecdh_with_yubikey(
             cls,
-            reader: str,
+            serial: int,
             slot_label: str,
             encrypted_blob: bytes,
             pin: str | None = None,
+            debug: bool = False,
         ) -> bytes:
+        '''
+        Perform ECDH key derivation using YubiKey private key via PKCS#11.
+
+        Args:
+            serial: YubiKey serial number (used to select correct PKCS#11 token)
+            slot_label: PIV slot label (e.g., '82' for Key Management)
+            encrypted_blob: DER-encoded SPKI public key for ECDH
+            pin: Optional PIN for PKCS#11 login
+            debug: Enable verbose debugging output
+
+        Returns:
+            ECDH-derived shared secret (32 bytes for P-256)
+        '''
         ids = {
             '9a': '01',
             '9c': '02',
@@ -323,6 +380,9 @@ class Crypto:
         }
         id = ids[slot_label]
 
+        # Construct PKCS#11 token label from serial number
+        token_label = f"YubiKey PIV #{serial}"
+
         # Write ephemeral public key bytes to a temp file (simulate input file for pkcs11-tool)
         with (
             tempfile.NamedTemporaryFile() as ephemeral_pub_file,
@@ -334,6 +394,7 @@ class Crypto:
             cmd = [
                 'pkcs11-tool',
                 '--module', PKCS11_LIB,
+                '--token-label', token_label,
                 '-l',
                 '--derive',
                 '-m', 'ECDH1-DERIVE',
@@ -343,6 +404,54 @@ class Crypto:
             ]
             if pin is not None:
                 cmd += [ '--pin', pin, ]
+
+            if debug:
+                # Import shutil only when debugging
+                import shutil
+                # Full instrumentation for troubleshooting
+                print(f'[DEBUG] perform_ecdh: serial = {serial}', file=sys.stderr)
+                print(f'[DEBUG] perform_ecdh: token_label = {token_label}', file=sys.stderr)
+                print(f'[DEBUG] perform_ecdh: slot_label = {slot_label}', file=sys.stderr)
+                print(f'[DEBUG] perform_ecdh: id = {id}', file=sys.stderr)
+                print(f'[DEBUG] perform_ecdh: PKCS11_LIB = {PKCS11_LIB}', file=sys.stderr)
+                pkcs11_tool_path = shutil.which('pkcs11-tool')
+                print(f'[DEBUG] perform_ecdh: pkcs11-tool path = {pkcs11_tool_path}', file=sys.stderr)
+
+                # Try to find the actual library file
+                possible_lib_paths = [
+                    PKCS11_LIB,
+                    f'/usr/lib/{PKCS11_LIB}',
+                    f'/usr/local/lib/{PKCS11_LIB}',
+                ]
+                if 'LD_LIBRARY_PATH' in os.environ:
+                    for ld_path in os.environ['LD_LIBRARY_PATH'].split(':'):
+                        possible_lib_paths.append(os.path.join(ld_path, PKCS11_LIB))
+
+                resolved_lib = None
+                for lib_path in possible_lib_paths:
+                    if os.path.exists(lib_path):
+                        resolved_lib = os.path.realpath(lib_path)
+                        break
+
+                print(f'[DEBUG] perform_ecdh: resolved libykcs11.so = {resolved_lib}', file=sys.stderr)
+
+                # Get library version if possible
+                if resolved_lib:
+                    try:
+                        import subprocess as sp
+                        strings_out = sp.run(['strings', resolved_lib],
+                                            capture_output=True, text=True, timeout=1)
+                        for line in strings_out.stdout.split('\n'):
+                            if 'yubico-piv-tool' in line.lower() or \
+                               any(c.isdigit() and '.' in line for c in line[:20]):
+                                if len(line) < 80 and len(line) > 3:
+                                    print(f'[DEBUG] perform_ecdh: lib version hint: {line.strip()}',
+                                          file=sys.stderr)
+                                    break
+                    except:
+                        pass
+
+                print(f'[DEBUG] perform_ecdh: cmd = {" ".join(cmd[:9])}...', file=sys.stderr)
 
             # Run the pkcs11-tool subprocess
             subprocess.run(cmd, capture_output=True)
