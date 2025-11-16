@@ -4,10 +4,10 @@
 
 import sys
 import click
-from yb.store import Store, Object
-from typing import BinaryIO
-from yb.crypto import Crypto
 import getpass
+from typing import BinaryIO
+
+from yb import orchestrator
 
 
 # === FETCH ====================================================================
@@ -40,48 +40,39 @@ def cli_fetch(ctx,
     ) -> None:
     ''''''
 
-    if len(name) == 0 or len(name) > 255:
-        raise click.ClickException('Bad name')
-
     reader: str = ctx.obj['reader']
     piv = ctx.obj['piv']
 
-    # Load the store from the PIV device
-    store = Store.from_piv_device(reader, piv)
-    store.sanitize()
-
-    # Find the target blob
+    # Prompt for PIN if needed (check if blob is encrypted first)
+    pin: str | None = None
+    # For now, always prompt - orchestrator will use it only if needed
+    # TODO: Could optimize by checking blob encryption status first
     try:
-        blob: Object = next(
-            obj
-            for obj in store.objects
-            if (obj.object_age != 0
-                and obj.chunk_pos_in_blob == 0
-                and obj.blob_name == name)
-        )
-    except StopIteration as e:
-        raise click.ClickException(f'Cannot find object {name}') from e
+        pin = getpass.getpass("Please enter User PIN (press Enter if not encrypted): ")
+        if pin == "":
+            pin = None
 
-    # Re-assemble the target blob
-    chunks: list[bytes] = []
-    obj = blob
-    while True:
-        chunks.append(obj.chunk_payload)
-        if obj.next_chunk_index_in_store == obj.object_index_in_store:
-            break
-        obj = store.objects[obj.next_chunk_index_in_store]
-    payload = b''.join(chunks)[:blob.blob_size]
+    except (EOFError, getpass.GetPassWarning):
+        pin = None
 
-    if blob.blob_encryption_key_slot:
-        pin = getpass.getpass("Please enter User PIN: ")
-        payload = Crypto.hybrid_decrypt(
+    # Call orchestrator
+    try:
+        payload = orchestrator.fetch_blob(
             reader=reader,
-            slot=f'{store.store_encryption_key_slot:02x}',
-            encrypted_blob=payload,
-            pin=pin
+            piv=piv,
+            name=name,
+            pin=pin,
         )
 
-    # Flush the result
+        if payload is None:
+            raise click.ClickException(f'Cannot find object {name}')
+
+    except ValueError as e:
+        raise click.ClickException(str(e)) from e
+    except RuntimeError as e:
+        raise click.ClickException(str(e)) from e
+
+    # Write output
     if output is None:
         sys.stdout.buffer.write(payload)
     else:

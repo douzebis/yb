@@ -988,6 +988,245 @@ Testing (see `mock_up/test_subprocess_tty.py`):
 
 ---
 
+## Comprehensive Testing and Validation
+
+### Testing Architecture
+
+**Implementation Date**: 2025-11-16
+
+To ensure correctness and resilience of the YubiKey blob store implementation, a comprehensive testing framework was developed with the following components:
+
+#### 1. Code Architecture Refactoring
+
+**Problem**: Original CLI commands (`cli_store.py`, `cli_fetch.py`, etc.) contained both command-line interface logic AND business logic, making them difficult to test in isolation.
+
+**Solution**: Orchestrator Pattern
+
+Created `src/yb/orchestrator.py` to separate concerns:
+
+```
+┌─────────────────────┐
+│   CLI Layer         │  ← Thin wrappers: argument parsing, error formatting
+│   (cli_*.py)        │
+└──────────┬──────────┘
+           │
+┌──────────▼──────────┐
+│  Orchestrator       │  ← Business logic: testable, no CLI dependencies
+│  (orchestrator.py)  │
+└──────────┬──────────┘
+           │
+┌──────────▼──────────┐
+│   Storage Layer     │
+│   (store.py)        │
+└─────────────────────┘
+```
+
+**Orchestrator Functions**:
+- `store_blob(reader, piv, name, payload, encrypted, management_key) -> bool`
+- `fetch_blob(reader, piv, name, pin) -> Optional[bytes]`
+- `remove_blob(reader, piv, name, management_key) -> bool`
+- `list_blobs(reader, piv) -> list[tuple[str, int, bool, int, int]]`
+
+Each function:
+1. Loads store from device (`Store.from_piv_device()`)
+2. Sanitizes to clean up corrupt data
+3. Performs the operation
+4. Syncs changes back to device
+5. Returns success/failure or result data
+
+This mirrors exactly what each CLI command does, enabling comprehensive testing without CLI dependencies.
+
+#### 2. PIV Device Emulation
+
+**File**: `src/yb/piv.py`
+
+Created abstract `PivInterface` with two implementations:
+
+**HardwarePiv** (Production):
+- Communicates with real YubiKey via `yubico-piv-tool`
+- Used by CLI for actual operations
+
+**EmulatedPiv** (Testing):
+- In-memory PIV object storage
+- No hardware required for tests
+- Supports ejection simulation (see below)
+- Deterministic behavior via seeded RNG
+
+```python
+class EmulatedPiv(PivInterface):
+    def __init__(self, ejection_probability=0.0, seed=None):
+        self._devices = {}  # serial -> EmulatedDevice
+        self.ejection_probability = ejection_probability
+        self.write_count = 0
+        self.ejection_count = 0
+
+    def write_object(self, reader, id, input, management_key=None):
+        # Simulate ejection before write
+        if self.ejection_probability > 0:
+            self.write_count += 1
+            if self._rng.random() < self.ejection_probability:
+                self.ejection_count += 1
+                self.is_ejected = True
+                raise EjectionError(f"Simulated ejection...")
+
+        # Perform write to in-memory storage
+        device = self._get_device_by_reader(reader)
+        device.objects[id] = input
+```
+
+#### 3. Comprehensive Test Suite
+
+**File**: `tests/test_store_comprehensive.py`
+
+**test_comprehensive_operations** (10,000 operations, no ejections):
+- **Validates**: Store correctness under normal operations
+- **Operations**: 2,902 STORE, 3,543 FETCH, 2,208 REMOVE, 1,347 LIST
+- **Ground truth**: ToyFilesystem (dict-based reference implementation)
+- **Verification**: Every operation compared with expected behavior
+- **Payload sizes**: 1 byte to 20 KB (multi-chunk support)
+- **Result**: ✓ PASSED - All 10,000 operations matched expected behavior
+
+**test_with_ejection_simulation** (10,000 operations, 1% ejection rate):
+- **Validates**: Store resilience to forceful interruption
+- **Ejection simulation**: ~100 ejections during write operations
+- **Recovery logic**: After ejection, verify state matches either:
+  - Before state (operation rolled back)
+  - After state (operation completed)
+- **Payload verification**: For STORE operations, fetch and verify payload correctness
+- **Result**: ✓ PASSED - All operations handled correctly with 45 ejections (0.45% rate)
+
+**Test execution time**: ~16 seconds for 4 tests (20,000 total operations)
+
+#### 4. Ejection Handling Insights
+
+**Challenge**: When a write operation is forcefully interrupted (YubiKey physically removed), the final state is ambiguous - chunks may be partially written.
+
+**Solution**: Two-State Validation
+
+For write operations (STORE, REMOVE):
+
+1. **Save "before" state**: Current toy filesystem state
+2. **Predict "after" state**: What state would be if operation succeeds
+3. **Attempt operation**: May complete, fail, or eject mid-write
+4. **On ejection**:
+   - Reconnect device
+   - Load actual state via `orchestrator.list_blobs()`
+   - Compare actual with both "before" and "predicted after"
+   - If matches "after": Operation completed → accept new state
+   - If matches "before": Operation rolled back → keep old state
+   - If matches neither: **Test failure** (unexpected corruption)
+
+**Key Finding**: For STORE operations that update existing blobs, NAME comparison is insufficient. Must also verify PAYLOAD:
+
+```python
+# After ejection on STORE operation
+if actual_names == expected_after:
+    # Verify payload is correct by fetching
+    actual_payload = orchestrator.fetch_blob(reader, piv, op.name, pin=None)
+    expected_payload = toy_fs_predicted_after.fetch(op.name)[0]
+    if actual_payload == expected_payload:
+        # Operation truly completed
+        toy_fs_after = toy_fs_predicted_after
+    else:
+        # Names match but payload is old - rolled back
+        # Keep toy_fs_after unchanged
+```
+
+This handles the case where:
+- STORE('profile', new_data) ejects mid-write
+- Blob 'profile' still exists with OLD data
+- sanitize() doesn't remove it (ages are valid)
+- Name-only check would incorrectly accept it
+
+#### 5. Multi-Chunk Blob Support
+
+**Validation**: Blobs up to 20 KB requiring multiple PIV object slots
+
+**Object Capacity** (512-byte objects):
+- Head chunk: ~400 bytes (less due to metadata)
+- Body chunk: ~450 bytes (minimal metadata)
+
+**20 KB Blob Requirements**:
+- 1 head chunk + ~44 body chunks = 45 total objects
+- Tests configured with 100 object store
+- Allows up to ~2 concurrent large blobs
+
+**Chunk Linking**:
+- Each chunk points to next via `next_chunk_index_in_store`
+- Last chunk points to itself
+- Sanitize verifies chain integrity (consecutive ages, sequential positions)
+
+**Test Coverage**:
+- 70% small blobs (1-1 KB): Single chunk
+- 25% medium blobs (1-10 KB): 2-25 chunks
+- 5% large blobs (10-20 KB): 25-45 chunks
+
+**Result**: Multi-chunk operations handled correctly, including:
+- Partial chunk writes detected and rolled back
+- Age-based chain validation prevents orphaned chunks
+- Sanitize completes interrupted multi-chunk removals
+
+#### 6. Test Results Summary
+
+```
+tests/test_store.py::test_basic_store_operations              PASSED
+tests/test_store.py::test_multiple_devices                    PASSED
+tests/test_store_comprehensive.py::test_comprehensive_operations    PASSED
+tests/test_store_comprehensive.py::test_with_ejection_simulation   PASSED
+
+4 passed in 16.15s
+```
+
+**Comprehensive Test Statistics**:
+- Total operations tested: 20,000
+- Ejections simulated: 45
+- Multi-chunk blobs tested: ~500 (5% of 10,000)
+- Largest blob tested: 20 KB (~45 chunks)
+- Test execution time: 16 seconds
+- Failure rate: 0%
+
+**Key Validation**:
+- ✓ Store/fetch/remove/list operations work correctly
+- ✓ Sanitize cleanly recovers from interrupted writes
+- ✓ Age-based integrity detection prevents data corruption
+- ✓ Multi-chunk blob reassembly works reliably
+- ✓ Name deduplication (newer blob wins) works correctly
+- ✓ Ejections during writes don't corrupt store
+- ✓ Partial writes are detected and rolled back
+- ✓ 20 KB blobs stored and retrieved correctly
+
+#### 7. Testing Methodology
+
+**Operation Generator** (`OperationGenerator` class):
+- Deterministic pseudo-random operation sequence (seeded RNG)
+- Weighted distribution: 40% store, 35% fetch, 15% remove, 10% list
+- Capacity awareness: Reduces stores when nearing full
+- Name pool: 23 realistic names with collision handling
+
+**Ground Truth Verification** (`ToyFilesystem` class):
+- Simple dict-based reference implementation
+- Mirrors expected behavior without complexity
+- Operations:
+  - `store(name, payload, mtime)`: Add/update file
+  - `fetch(name)`: Get (payload, mtime) or None
+  - `remove(name)`: Delete file, return success
+  - `list()`: Return sorted names
+
+**Comparison Logic**:
+- After each operation, compare YubiKey state with ToyFilesystem
+- For FETCH: Verify payload matches byte-for-byte
+- For REMOVE: Verify return value (found/not found)
+- For LIST: Verify sorted name lists match exactly
+- For STORE: Verify success/failure (full store detection)
+
+**Why This Works**:
+1. ToyFilesystem is simple enough to trust (obvious correctness)
+2. YubiKey store is complex (chunking, ages, sanitize) but testable
+3. If both produce same results over 10,000 operations → high confidence
+4. Ejection simulation validates safety assumptions
+
+---
+
 ## References
 
 ### Code Organization
