@@ -5,6 +5,7 @@
 import click
 
 from yb import orchestrator
+from yb.auxiliaries import verify_device_if_needed
 
 
 # === REMOVE ===================================================================
@@ -27,6 +28,9 @@ def cli_remove(ctx,
         name: str,
     ) -> None:
     ''''''
+
+    # Verify device PIN before write operation
+    verify_device_if_needed(ctx)
 
     reader: str = ctx.obj['reader']
     management_key: str | None = ctx.obj.get('management_key')

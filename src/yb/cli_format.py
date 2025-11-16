@@ -6,6 +6,7 @@ import click
 from yb.store import Store, Object
 from yb.x509_subject import verify_x509_subject
 from yb.crypto import Crypto
+from yb.auxiliaries import verify_device_if_needed
 
 from yb.constants import (
     DEFAULT_OBJECT_COUNT,
@@ -81,6 +82,9 @@ def cli_format(ctx,
     subject: str,
 ) -> None:
     'Format a PIV device for storing binary blobs.'''
+
+    # Verify device PIN before write operation
+    verify_device_if_needed(ctx)
 
     # --- Check options sanity -------------------------------------------------
 

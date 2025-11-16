@@ -5,6 +5,7 @@
 # SPDX-License-Identifier: MIT
 
 import sys
+import os
 
 import click
 import yaml
@@ -152,7 +153,7 @@ def cli(
     elif reader is not None:
         chosen_reader = reader
 
-    # Auto-select if only one device
+    # Auto-select if only one device, refuse if multiple
     else:
         try:
             devices = piv.list_devices()
@@ -160,24 +161,72 @@ def cli(
             if len(devices) == 0:
                 raise click.ClickException('No YubiKeys found.')
             elif len(devices) == 1:
+                # Auto-select single device
                 serial_num, version, chosen_reader = devices[0]
-                # Inform user which device was auto-selected
                 print(
-                    f'Auto-selected YubiKey {serial_num} (version {version})',
+                    f'Using YubiKey {serial_num} (version {version})',
                     file=sys.stderr
                 )
             else:
-                # Multiple devices - show helpful error
-                device_list = [
-                    f'  - Serial {s} (YubiKey {v})'
-                    for s, v, _ in devices
-                ]
-                raise click.ClickException(
-                    'Multiple YubiKeys are connected:\n'
-                    + '\n'.join(device_list) + '\n\n'
-                    'Use --serial to select one, for example:\n'
-                    f'  yb --serial {devices[0][0]} <command>'
-                )
+                # Multiple devices detected
+                # Try interactive selection if stdin is a TTY
+                if sys.stdin.isatty() and sys.stdout.isatty():
+                    try:
+                        from yb.yubikey_selector import select_yubikey_interactively
+
+                        print('Multiple YubiKeys detected. Starting interactive selector...',
+                              file=sys.stderr)
+                        selected_serial = select_yubikey_interactively(devices)
+
+                        if selected_serial is None:
+                            raise click.ClickException('Selection cancelled.')
+
+                        # Get reader for selected serial
+                        chosen_reader = piv.get_reader_for_serial(selected_serial)
+                        print(
+                            f'\nSelected YubiKey {selected_serial}',
+                            file=sys.stderr
+                        )
+
+                    except ImportError:
+                        # prompt_toolkit not available - fall back to error
+                        device_list = [
+                            f'  - Serial {s} (YubiKey {v})'
+                            for s, v, _ in devices
+                        ]
+                        raise click.ClickException(
+                            'Multiple YubiKeys are connected:\n'
+                            + '\n'.join(device_list) + '\n\n'
+                            'Use --serial to select one, for example:\n'
+                            f'  yb --serial {devices[0][0]} <command>\n\n'
+                            'Or install prompt_toolkit for interactive selection:\n'
+                            '  pip install prompt_toolkit'
+                        )
+                    except Exception as e:
+                        # Interactive selector failed - fall back to error
+                        device_list = [
+                            f'  - Serial {s} (YubiKey {v})'
+                            for s, v, _ in devices
+                        ]
+                        raise click.ClickException(
+                            f'Interactive selector failed: {e}\n\n'
+                            'Multiple YubiKeys are connected:\n'
+                            + '\n'.join(device_list) + '\n\n'
+                            'Use --serial to select one, for example:\n'
+                            f'  yb --serial {devices[0][0]} <command>'
+                        )
+                else:
+                    # Not interactive (piped input/output) - require explicit selection
+                    device_list = [
+                        f'  - Serial {s} (YubiKey {v})'
+                        for s, v, _ in devices
+                    ]
+                    raise click.ClickException(
+                        'Multiple YubiKeys are connected:\n'
+                        + '\n'.join(device_list) + '\n\n'
+                        'Use --serial to select one, for example:\n'
+                        f'  yb --serial {devices[0][0]} <command>'
+                    )
 
         except RuntimeError:
             # Fallback to legacy list_readers() if ykman not available
@@ -185,20 +234,16 @@ def cli(
             if len(readers) == 0:
                 raise click.ClickException('No PIV reader is connected.')
             elif len(readers) == 1:
+                # Auto-select single reader
                 chosen_reader = readers[0]
             else:
+                # Multiple readers - require explicit selection
                 raise click.ClickException(
                     'Multiple PIV readers are connected:\n'
                     f'{yaml.dump(readers)}'
                     '\n'
-                    'Use the --reader option to pick one.'
+                    'Use the --reader option to select one.'
                 )
-
-    # Verify reader identity (unless --no-verify)
-    if (serial is not None or reader is not None) and not no_verify:
-        print('Confirm by entering your PIN...', file=sys.stderr)
-        if not piv.verify_reader(chosen_reader, 0x9a):
-            raise click.ClickException('Could not verify the PIN.')
 
     # Process management key
     management_key: str | None = None
@@ -219,6 +264,7 @@ def cli(
     ctx.obj['reader'] = chosen_reader  # Store chosen reader in context
     ctx.obj['management_key'] = management_key  # Store management key in context
     ctx.obj['piv'] = piv  # Store PIV interface in context
+    ctx.obj['no_verify'] = no_verify  # Store -x flag in context
 
 cli.add_command(cli_fsck)
 cli.add_command(cli_fetch)
