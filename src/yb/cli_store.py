@@ -3,10 +3,12 @@
 # SPDX-License-Identifier: MIT
 
 import sys
+import os
 import click
 from typing import BinaryIO
 
 from yb import orchestrator
+from yb.auxiliaries import verify_device_if_needed
 
 
 # === STORE ====================================================================
@@ -17,6 +19,9 @@ from yb import orchestrator
     help='''
         Store data as a named blob in the YubiKey. By default, the data can be
         stored either encrypted or unencrypted depending on the flags below.
+
+        If NAME is not provided, the basename of the input file (-i) is used as
+        the blob name.
     ''',
 )
 @click.option(
@@ -30,24 +35,43 @@ from yb import orchestrator
     type=click.File('rb'),
     required=False,
     help='Read the data to store from the specified file.'
-         ' If omitted, data is read from standard input.',
+         ' If omitted, data is read from standard input.'
+         ' If NAME is not provided, the basename of this file is used.',
 )
 @click.argument(
     'name',
     type=str,
+    required=False,
 )
 @click.pass_context
 def cli_store(
         ctx,
         encrypted: bool,
         input: BinaryIO | None,
-        name: str,
+        name: str | None,
     ) -> None:
     ''''''
+
+    # Verify device PIN before write operation
+    verify_device_if_needed(ctx)
 
     reader: str = ctx.obj['reader']
     management_key: str | None = ctx.obj.get('management_key')
     piv = ctx.obj['piv']
+
+    # Determine blob name
+    if name is None:
+        if input is None:
+            raise click.ClickException(
+                "NAME argument required when reading from stdin. "
+                "Or use -i FILE to use the file's basename as the blob name."
+            )
+        # Extract basename from input file
+        name = os.path.basename(input.name)
+        if not name:
+            raise click.ClickException(
+                "Cannot determine blob name from input file. Please provide NAME argument."
+            )
 
     # Read payload
     payload: bytes
