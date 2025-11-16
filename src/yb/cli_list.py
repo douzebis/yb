@@ -3,8 +3,9 @@
 # SPDX-License-Identifier: MIT
 
 import click
-from yb.store import Store
-import textwrap
+from datetime import datetime
+
+from yb import orchestrator
 
 # === LS =======================================================================
 
@@ -14,13 +15,13 @@ import textwrap
 
         \b
         Each entry shows the following fields:
-          
+
           - Encryption status: '-' for encrypted, 'U' for unencrypted
           - Number of PIV objects used to store the blob
           - Blob size in bytes
           - Creation timestamp (YYYY-MM-DD HH:MM)
           - Blob name
-          
+
         Example output:
           -  1        7  2025-06-01 13:22  sensitive-data
           U  1       10  2025-06-01 13:36  public-data''',
@@ -33,14 +34,14 @@ def cli_list(ctx,
     reader: str = ctx.obj['reader']
     piv = ctx.obj['piv']
 
-    store = Store.from_piv_device(reader, piv)
-    store.sanitize()
+    # Call orchestrator
+    blobs = orchestrator.list_blobs(reader=reader, piv=piv)
 
-    blobs = [
-        obj
-        for obj in store.objects
-        if obj.object_age != 0 and obj.chunk_pos_in_blob == 0
-    ]
-    blobs = sorted(blobs, key=lambda e: e.blob_name or "")
-    for blob in blobs:
-        print(blob.to_repr())
+    # Format and print each blob
+    for name, size, is_encrypted, mtime, chunk_count in blobs:
+        bits = '-' if is_encrypted else 'U'
+        count = str(chunk_count).rjust(2)
+        size_str = str(size).rjust(8)
+        dt = datetime.fromtimestamp(mtime)
+        date = dt.strftime("%Y-%m-%d %H:%M").ljust(16)
+        print(f"{bits} {count} {size_str} {date} {name}")

@@ -8,6 +8,11 @@ import subprocess
 from abc import ABC, abstractmethod
 
 
+class EjectionError(Exception):
+    """Raised when a simulated YubiKey ejection occurs during a write operation."""
+    pass
+
+
 class PivInterface(ABC):
     """
     Abstract interface for PIV device operations.
@@ -332,10 +337,38 @@ class EmulatedPiv(PivInterface):
             # PIV object storage: object_id -> bytes
             self.objects: dict[int, bytes] = {}
 
-    def __init__(self):
-        """Initialize empty emulated PIV environment."""
+    def __init__(self, ejection_probability: float = 0.0, seed: int | None = None):
+        """
+        Initialize empty emulated PIV environment.
+
+        Args:
+            ejection_probability: Probability (0.0-1.0) of ejection during write (default: 0.0)
+            seed: Random seed for deterministic ejection simulation (default: None for random)
+        """
         # Map serial -> EmulatedDevice
         self._devices: dict[int, EmulatedPiv.EmulatedDevice] = {}
+
+        # Ejection simulation
+        self.ejection_probability = ejection_probability
+        self.ejection_count = 0
+        self.write_count = 0
+        self.is_ejected = False
+
+        # Random number generator for ejection simulation
+        if seed is not None:
+            import random
+            self._rng = random.Random(seed)
+        else:
+            import random
+            self._rng = random.Random()
+
+    def reconnect(self) -> None:
+        """
+        Reconnect the emulated device after ejection.
+
+        This simulates plugging the YubiKey back in after physical removal.
+        """
+        self.is_ejected = False
 
     def add_device(self, serial: int, version: str = "5.7.1") -> str:
         """
@@ -389,7 +422,27 @@ class EmulatedPiv(PivInterface):
         input: bytes,
         management_key: str | None = None,
     ) -> None:
-        """Write object to emulated device storage."""
+        """
+        Write object to emulated device storage.
+
+        May raise EjectionError if ejection simulation is enabled and triggered.
+        """
+        # Check if device is already ejected
+        if self.is_ejected:
+            raise RuntimeError(f"Device ejected: {reader}")
+
+        # Simulate ejection before write
+        if self.ejection_probability > 0:
+            self.write_count += 1
+            if self._rng.random() < self.ejection_probability:
+                self.ejection_count += 1
+                self.is_ejected = True
+                raise EjectionError(
+                    f"Simulated ejection during write to object {id:#06x} "
+                    f"(ejection #{self.ejection_count}, write #{self.write_count})"
+                )
+
+        # Perform the write
         device = self._get_device_by_reader(reader)
         device.objects[id] = input
 
