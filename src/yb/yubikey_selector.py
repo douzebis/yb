@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Protocol, cast
+from typing import Hashable, Protocol, cast
 
 from prompt_toolkit import Application
 from prompt_toolkit.formatted_text import FormattedText
@@ -202,7 +202,7 @@ class YubiKeySelector:
         return self.selected_serial
 
 
-def select_yubikey_interactively(devices: list[tuple[int, str, str]]) -> int | None:
+def select_yubikey_interactively(devices: list[tuple[int | None, str, Hashable]]) -> int | None:
     """
     Interactively select a YubiKey from multiple devices.
 

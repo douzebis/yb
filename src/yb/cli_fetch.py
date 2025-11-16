@@ -134,6 +134,7 @@ def cli_fetch(ctx,
 
     reader: str = ctx.obj['reader']
     piv = ctx.obj['piv']
+    debug: bool = ctx.obj.get('debug', False)
 
     # Validate options
     if extract and output:
@@ -179,6 +180,7 @@ def cli_fetch(ctx,
                     piv=piv,
                     name=name,
                     pin=pin,
+                    debug=debug,
                 )
 
                 if payload is None:
@@ -196,6 +198,7 @@ def cli_fetch(ctx,
                 raise click.ClickException(str(e)) from e
     else:
         # Single blob mode (backward compatible)
+        assert len(names) > 0  # click says option is required
         name = names[0]
         try:
             payload = orchestrator.fetch_blob(
@@ -203,6 +206,7 @@ def cli_fetch(ctx,
                 piv=piv,
                 name=name,
                 pin=pin,
+                debug=debug,
             )
 
             if payload is None:

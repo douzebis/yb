@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import subprocess
 from abc import ABC, abstractmethod
+from typing import Hashable
 
 
 class EjectionError(Exception):
@@ -30,7 +31,7 @@ class PivInterface(ABC):
         pass
 
     @abstractmethod
-    def list_devices(self) -> list[tuple[int, str, str]]:
+    def list_devices(self) -> list[tuple[int | None, str, Hashable]]:
         """
         Return a list of connected YubiKeys with their serial numbers.
 
@@ -46,7 +47,7 @@ class PivInterface(ABC):
         pass
 
     @abstractmethod
-    def get_reader_for_serial(self, serial: int) -> str:
+    def get_reader_for_serial(self, serial: int) -> Hashable:
         """
         Get the PC/SC reader name for a YubiKey with the given serial number.
 
@@ -63,9 +64,26 @@ class PivInterface(ABC):
         pass
 
     @abstractmethod
+    def get_serial_for_reader(self, reader: Hashable) -> int:
+        """
+        Get the serial number for a YubiKey with the given PC/SC reader name.
+
+        Parameters:
+            reader: PC/SC reader name to find
+
+        Returns:
+            Serial number of the YubiKey
+
+        Raises:
+            ValueError: If no YubiKey with the given reader name is found
+            RuntimeError: If enumeration fails
+        """
+        pass
+
+    @abstractmethod
     def write_object(
         self,
-        reader: str,
+        reader: Hashable,
         id: int,
         input: bytes,
         management_key: str | None = None,
@@ -85,7 +103,7 @@ class PivInterface(ABC):
         pass
 
     @abstractmethod
-    def read_object(self, reader: str, id: int) -> bytes:
+    def read_object(self, reader: Hashable, id: int) -> bytes:
         """
         Read binary data from a PIV object slot on the device.
 
@@ -102,7 +120,7 @@ class PivInterface(ABC):
         pass
 
     @abstractmethod
-    def verify_reader(self, reader: str, id: int) -> bool:
+    def verify_reader(self, reader: Hashable, id: int) -> bool:
         """
         Verify reader by attempting PIN verification.
 
@@ -147,7 +165,7 @@ class HardwarePiv(PivInterface):
             readers.append(line.strip())
         return readers
 
-    def list_devices(self) -> list[tuple[int, str, str]]:
+    def list_devices(self) -> list[tuple[int | None, str, Hashable]]:
         """
         Return a list of connected YubiKeys with their serial numbers.
 
@@ -169,11 +187,11 @@ class HardwarePiv(PivInterface):
             ) from e
 
         try:
-            devices = list(list_all_devices())
+            devices = list_all_devices()
         except Exception as e:
             raise RuntimeError(f"Failed to enumerate YubiKeys: {e}") from e
 
-        result = []
+        result: list[tuple[int | None, str, Hashable]] = []
         for device, info in devices:
             serial = info.serial
             version = str(info.version)
@@ -183,7 +201,7 @@ class HardwarePiv(PivInterface):
 
         return result
 
-    def get_reader_for_serial(self, serial: int) -> str:
+    def get_reader_for_serial(self, serial: int) -> Hashable:
         """
         Get the PC/SC reader name for a YubiKey with the given serial number.
 
@@ -213,9 +231,43 @@ class HardwarePiv(PivInterface):
             f"Available: {', '.join(available_serials)}"
         )
 
+    def get_serial_for_reader(self, reader: Hashable) -> int:
+        """
+        Get the serial number for a YubiKey with the given PC/SC reader name.
+
+        Parameters:
+            reader: PC/SC reader name to find
+
+        Returns:
+            Serial number of the YubiKey
+
+        Raises:
+            ValueError: If no YubiKey with the given reader name is found
+            RuntimeError: If ykman is not available or enumeration fails
+        """
+        devices = self.list_devices()
+
+        for serial, _, dev_reader in devices:
+            if dev_reader == reader:
+                if serial is None:
+                    raise ValueError(
+                        f"YubiKey at reader '{reader}' has no serial number"
+                    )
+                return serial
+
+        # Build helpful error message
+        if not devices:
+            raise ValueError("No YubiKeys found")
+
+        available_readers = [str(r) for _, _, r in devices]
+        raise ValueError(
+            f"No YubiKey found with reader '{reader}'. "
+            f"Available: {', '.join(available_readers)}"
+        )
+
     def write_object(
         self,
-        reader: str,
+        reader: Hashable,
         id: int,
         input: bytes,
         management_key: str | None = None,
@@ -267,7 +319,7 @@ class HardwarePiv(PivInterface):
             raise RuntimeError(f"Failed to write object: {error_msg}") from e
 
 
-    def read_object(self, reader: str, id: int) -> bytes:
+    def read_object(self, reader: Hashable, id: int) -> bytes:
         """
         Read binary data from a PIV object slot on the device using the specified reader.
 
@@ -285,7 +337,7 @@ class HardwarePiv(PivInterface):
             out = subprocess.run(
                 [
                     'yubico-piv-tool',
-                    '--reader', reader,
+                    '--reader', str(reader),
                     '--action', 'read-object',
                     '--format', 'binary',
                     '--id', f'{id:#06x}',
@@ -298,14 +350,14 @@ class HardwarePiv(PivInterface):
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"Failed to read object: {e.stderr.decode().strip()}") from e
         
-    def verify_reader(self, reader: str, id: int) -> bool:
+    def verify_reader(self, reader: Hashable, id: int) -> bool:
         ''''''
         try:
             with open("/dev/null", "rb") as devnull:
                 subprocess.run(
                     [
                         'yubico-piv-tool',
-                        '--reader', reader,
+                        '--reader', str(reader),
                         '--action', 'verify-pin',
                         '--id', f'{id:#06x}',
                     ],
@@ -389,7 +441,7 @@ class EmulatedPiv(PivInterface):
         """Return list of emulated reader names."""
         return [device.reader for device in self._devices.values()]
 
-    def list_devices(self) -> list[tuple[int, str, str]]:
+    def list_devices(self) -> list[tuple[int | None, str, Hashable]]:
         """Return list of (serial, version, reader) for all emulated devices."""
         return [
             (device.serial, device.version, device.reader)
@@ -408,7 +460,23 @@ class EmulatedPiv(PivInterface):
             )
         return self._devices[serial].reader
 
-    def _get_device_by_reader(self, reader: str) -> EmulatedDevice:
+    def get_serial_for_reader(self, reader: Hashable) -> int:
+        """Get serial number for a specific reader name."""
+        for serial, device in self._devices.items():
+            if device.reader == reader:
+                return serial
+
+        # Build helpful error message
+        if not self._devices:
+            raise ValueError("No YubiKeys found")
+
+        available_readers = [device.reader for device in self._devices.values()]
+        raise ValueError(
+            f"No YubiKey found with reader '{reader}'. "
+            f"Available: {', '.join(available_readers)}"
+        )
+
+    def _get_device_by_reader(self, reader: Hashable) -> EmulatedDevice:
         """Internal helper to get device by reader name."""
         for device in self._devices.values():
             if device.reader == reader:
@@ -417,7 +485,7 @@ class EmulatedPiv(PivInterface):
 
     def write_object(
         self,
-        reader: str,
+        reader: Hashable,
         id: int,
         input: bytes,
         management_key: str | None = None,
@@ -446,14 +514,14 @@ class EmulatedPiv(PivInterface):
         device = self._get_device_by_reader(reader)
         device.objects[id] = input
 
-    def read_object(self, reader: str, id: int) -> bytes:
+    def read_object(self, reader: Hashable, id: int) -> bytes:
         """Read object from emulated device storage."""
         device = self._get_device_by_reader(reader)
         if id not in device.objects:
             raise RuntimeError(f"Object {id:#06x} not found on device")
         return device.objects[id]
 
-    def verify_reader(self, reader: str, id: int) -> bool:
+    def verify_reader(self, reader: Hashable, id: int) -> bool:
         """Always returns True for emulated devices (no PIN required)."""
         # Just verify the reader exists
         try:

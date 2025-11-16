@@ -12,7 +12,7 @@ CLI commands. It provides a clean interface for both CLI and testing.
 from __future__ import annotations
 
 import time
-from typing import Optional
+from typing import Hashable, Optional
 
 from yb.piv import PivInterface
 from yb.store import Store, Object
@@ -141,6 +141,7 @@ def fetch_blob(
     piv: PivInterface,
     name: str,
     pin: str | None = None,
+    debug: bool = False,
 ) -> Optional[bytes]:
     """
     Fetch a blob from the YubiKey store.
@@ -180,24 +181,53 @@ def fetch_blob(
     # Re-assemble the blob from chunks
     chunks: list[bytes] = []
     obj = blob
+    chunk_count = 0
     while True:
         chunks.append(obj.chunk_payload)
+        chunk_count += 1
         if obj.next_chunk_index_in_store == obj.object_index_in_store:
             break
         obj = store.objects[obj.next_chunk_index_in_store]
 
+    if debug:
+        import sys
+        print(f'[DEBUG] fetch_blob: blob_name = {blob.blob_name}', file=sys.stderr)
+        print(f'[DEBUG] fetch_blob: blob_size (metadata) = {blob.blob_size}', file=sys.stderr)
+        print(f'[DEBUG] fetch_blob: blob_unencrypted_size = {blob.blob_unencrypted_size}', file=sys.stderr)
+        print(f'[DEBUG] fetch_blob: blob_encryption_key_slot = 0x{blob.blob_encryption_key_slot:02x}', file=sys.stderr)
+        print(f'[DEBUG] fetch_blob: chunk_count = {chunk_count}', file=sys.stderr)
+        print(f'[DEBUG] fetch_blob: total chunks data length = {sum(len(c) for c in chunks)}', file=sys.stderr)
+
     payload = b''.join(chunks)[:blob.blob_size]
+
+    if debug:
+        import sys
+        print(f'[DEBUG] fetch_blob: payload length after slice = {len(payload)}', file=sys.stderr)
+        print(f'[DEBUG] fetch_blob: is_encrypted = {blob.blob_encryption_key_slot != 0}', file=sys.stderr)
 
     # Decrypt if encrypted
     if blob.blob_encryption_key_slot:
         if pin is None:
             raise RuntimeError("Blob is encrypted but no PIN provided")
+
+        # Map reader to serial for PKCS#11 token selection
+        serial = piv.get_serial_for_reader(reader)
+
+        if debug:
+            import sys
+            print(f'[DEBUG] fetch_blob: reader = {reader}', file=sys.stderr)
+            print(f'[DEBUG] fetch_blob: serial = {serial}', file=sys.stderr)
+            print(f'[DEBUG] fetch_blob: calling hybrid_decrypt with slot = {store.store_encryption_key_slot:02x}', file=sys.stderr)
         payload = Crypto.hybrid_decrypt(
-            reader=reader,
+            serial=serial,
             slot=f'{store.store_encryption_key_slot:02x}',
             encrypted_blob=payload,
-            pin=pin
+            pin=pin,
+            debug=debug
         )
+        if debug:
+            import sys
+            print(f'[DEBUG] fetch_blob: decrypted payload length = {len(payload)}', file=sys.stderr)
 
     return payload
 
@@ -257,7 +287,7 @@ def remove_blob(
 
 
 def list_blobs(
-    reader: str,
+    reader: Hashable,
     piv: PivInterface,
 ) -> list[tuple[str, int, bool, int, int]]:
     """

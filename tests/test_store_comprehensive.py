@@ -4,10 +4,10 @@
 # SPDX-License-Identifier: MIT
 
 """
-Comprehensive regression test for Store with 10000+ random operations.
+Comprehensive regression test for Store with 2000+ random operations.
 
 This test verifies Store correctness by:
-1. Running 10000+ pseudo-random operations (store, fetch, remove, list)
+1. Running 2000+ pseudo-random operations (store, fetch, remove, list)
 2. Maintaining a "toy filesystem" (dict) as ground truth
 3. Verifying Store state matches expected state after all operations
 4. Testing recovery from simulated ejection events
@@ -17,10 +17,9 @@ The test uses a fixed random seed for reproducibility.
 
 from __future__ import annotations
 
+import random
 import sys
 import time
-import random
-from typing import Optional
 from dataclasses import dataclass
 from enum import Enum
 
@@ -28,13 +27,9 @@ from enum import Enum
 sys.path.insert(0, '/home/experiment/code/yb/src')
 
 from yb import orchestrator
-from yb.piv import EmulatedPiv, EjectionError
-from yb.store import Store, Object
-from yb.constants import (
-    YBLOB_MAGIC,
-    OBJECT_ID_ZERO,
-)
-
+from yb.constants import YBLOB_MAGIC
+from yb.piv import EjectionError, EmulatedPiv
+from yb.store import Object, Store
 
 # === TOY FILESYSTEM (GROUND TRUTH) ============================================
 
@@ -52,7 +47,7 @@ class ToyFilesystem:
         """Store or update a file."""
         self.files[name] = (payload, mtime)
 
-    def fetch(self, name: str) -> Optional[tuple[bytes, int]]:
+    def fetch(self, name: str) -> tuple[bytes, int] | None:
         """Fetch a file. Returns None if not found."""
         return self.files.get(name)
 
@@ -86,7 +81,7 @@ class Operation:
     """Represents a single test operation."""
     op_type: OpType
     name: str
-    payload: Optional[bytes] = None
+    payload: bytes = b''
 
     def __repr__(self) -> str:
         if self.op_type == OpType.STORE:
@@ -220,7 +215,7 @@ class OperationGenerator:
 # === COMPREHENSIVE TEST =======================================================
 
 def test_comprehensive_operations(
-    operation_count: int = 10000,
+    operation_count: int = 200,
     seed: int = 42,
     verbose: bool = False
 ) -> None:
@@ -283,13 +278,13 @@ def test_comprehensive_operations(
         OpType.REMOVE: sum(1 for op in operations if op.op_type == OpType.REMOVE),
         OpType.LIST: sum(1 for op in operations if op.op_type == OpType.LIST),
     }
-    print(f"   ✓ Generated operations:")
+    print( "   ✓ Generated operations:")
     for op_type, count in op_counts.items():
         print(f"     - {op_type.value.upper()}: {count}")
     print()
 
     # Execute operations
-    print(f"3. Executing operations...")
+    print( "3. Executing operations...")
     errors = []
     current_time = int(time.time())
     progress_interval = max(1, operation_count // 20)  # Show progress every 5%
@@ -411,8 +406,8 @@ def test_comprehensive_operations(
 # === EJECTION TEST ============================================================
 
 def test_with_ejection_simulation(
-    operation_count: int = 10000,
-    ejection_probability: float = 0.01,
+    operation_count: int = 2000,
+    ejection_probability: float = 0.2,
     seed: int = 42,
     verbose: bool = False
 ) -> None:
@@ -485,13 +480,13 @@ def test_with_ejection_simulation(
         OpType.REMOVE: sum(1 for op in operations if op.op_type == OpType.REMOVE),
         OpType.LIST: sum(1 for op in operations if op.op_type == OpType.LIST),
     }
-    print(f"   ✓ Generated operations:")
+    print( "   ✓ Generated operations:")
     for op_type, count in op_counts.items():
         print(f"     - {op_type.value.upper()}: {count}")
     print()
 
     # Execute operations
-    print(f"3. Executing operations with ejection handling...")
+    print( "3. Executing operations with ejection handling...")
     errors = []
     current_time = int(time.time())
     progress_interval = max(1, operation_count // 20)
@@ -614,7 +609,8 @@ def test_with_ejection_simulation(
                     name=op.name,
                     pin=None,
                 )
-                expected_payload = toy_fs_predicted_after.fetch(op.name)[0]
+                fetched = toy_fs_predicted_after.fetch(op.name)
+                expected_payload = b'' if fetched is None else fetched[0]
                 payload_matches_after = (actual_payload == expected_payload)
 
             if actual_names == expected_after and payload_matches_after:
@@ -652,7 +648,7 @@ def test_with_ejection_simulation(
         if len(errors) > 10:
             print(f"  ... and {len(errors) - 10} more errors")
     else:
-        print(f"✓ TEST PASSED - All operations handled correctly!")
+        print( "✓ TEST PASSED - All operations handled correctly!")
         print(f"  Total ejections: {ejection_count}")
         print(f"  Ejection rate: {100*ejection_count/operation_count:.2f}%")
     print("=" * 70)

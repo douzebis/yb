@@ -5,15 +5,15 @@
 # SPDX-License-Identifier: MIT
 
 import sys
-import os
+from typing import Hashable
 
 import click
 import yaml
+from click.shell_completion import CompletionItem
 
 from yb.cli_fsck import cli_fsck
 from yb.cli_format import cli_format
 from yb.cli_fetch import cli_fetch
-from yb.cli_list_readers import cli_list_readers
 from yb.cli_list import cli_list
 from yb.cli_remove import cli_remove
 from yb.cli_store import cli_store
@@ -24,6 +24,27 @@ PIV_OBJECT_ID = "0x5f0001"
 PKCS11_LIB = "libykcs11.so"
 
 # === Helper Functions =========================================================
+
+
+def complete_serial(ctx, param, incomplete):
+    """Shell completion for --serial option.
+
+    Returns a list of serial numbers from connected YubiKeys.
+    """
+    try:
+        piv = HardwarePiv()
+        devices = piv.list_devices()
+        return [
+            CompletionItem(
+                str(serial),
+                help=f"YubiKey {version}"
+            )
+            for serial, version, _ in devices
+            if str(serial).startswith(incomplete)
+        ]
+    except Exception:
+        # If anything goes wrong (no ykman, no devices, etc.), return empty list
+        return []
 
 
 def validate_management_key(key: str) -> str:
@@ -100,6 +121,7 @@ def validate_management_key(key: str) -> str:
     '-s', '--serial',
     type=int,
     required=False,
+    shell_complete=complete_serial,
     help='YubiKey serial number (printed on device case)'
 )
 @click.option(
@@ -119,13 +141,21 @@ def validate_management_key(key: str) -> str:
     default=None,
     help='Management key as 48-char hex string, or "-" to prompt (default: YubiKey default key)'
 )
+@click.option(
+    '--debug',
+    is_flag=True,
+    default=False,
+    hidden=True,
+    help='Enable debug instrumentation (hidden flag for troubleshooting)'
+)
 @click.pass_context
 def cli(
     ctx,
     serial: int | None,
-    reader: str | None,
+    reader: Hashable | None,
     no_verify: bool,
     key: str | None,
+    debug: bool,
 ) -> None:
     """CLI tool for managing cryptographic operations."""
 
@@ -138,7 +168,7 @@ def cli(
             'Cannot specify both --serial and --reader. Use one or the other.'
         )
 
-    chosen_reader: str
+    chosen_reader: Hashable
 
     # Select reader by serial number
     if serial is not None:
@@ -265,6 +295,7 @@ def cli(
     ctx.obj['management_key'] = management_key  # Store management key in context
     ctx.obj['piv'] = piv  # Store PIV interface in context
     ctx.obj['no_verify'] = no_verify  # Store -x flag in context
+    ctx.obj['debug'] = debug  # Store --debug flag in context
 
 cli.add_command(cli_fsck)
 cli.add_command(cli_fetch)

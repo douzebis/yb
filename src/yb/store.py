@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import sys
 from datetime import datetime
+from typing import Hashable
 
 import click
 
@@ -87,7 +88,7 @@ class Store:
     @classmethod
     def from_piv_device(
             cls,
-            reader: str,
+            reader: Hashable,
             piv: PivInterface,
         ) -> Store:
         raw_data = piv.read_object(reader, OBJECT_ID_ZERO)
