@@ -29,13 +29,20 @@ class Crypto:
             cls,
             reader: str,
             slot: str,
-            subject:str
+            subject: str,
+            pin: str | None = None,
+            management_key: str | None = None,
+            debug: bool = False,
         ) -> None:
         '''
         Generate an EC P-256 keypair in the given PIV slot using yubico-piv-tool.
 
         Parameters:
         - slot: PIV slot to generate key in
+        - subject: X.509 subject for the certificate
+        - pin: YubiKey PIN (optional, will prompt if not provided)
+        - management_key: Management key (optional, will use default if not provided)
+        - debug: Enable debug output
         '''
         subject += '/'
 
@@ -49,47 +56,121 @@ class Crypto:
             # --- Generate ECCP256 keypair
 
             print(f'Generating EC P-256 keypair in slot {slot}...', file=sys.stderr)
-            subprocess.run(
-                [
-                    'yubico-piv-tool',
-                    '--reader', reader,
-                    '--action', 'generate',
-                    '--slot', slot,
-                    '--algorithm', 'ECCP256',
-                    '--touch-policy', 'never',
-                    '--pin-policy', 'once',
-                    '--output', pubkey_path,
-                ],
-                check=True,
-            )
+            cmd = [
+                'yubico-piv-tool',
+                '--reader', reader,
+                '--action', 'generate',
+                '--slot', slot,
+                '--algorithm', 'ECCP256',
+                '--touch-policy', 'never',
+                '--pin-policy', 'once',
+                '--output', pubkey_path,
+            ]
+            if management_key:
+                cmd += [f'--key={management_key}']
+                if debug:
+                    print(f'[DEBUG] Crypto: Added --key to generate command', file=sys.stderr)
+            else:
+                if debug:
+                    print(f'[DEBUG] Crypto: WARNING - No management_key provided!', file=sys.stderr)
+
+            if debug:
+                print(f'[DEBUG] Crypto: Full command ({len(cmd)} args):', file=sys.stderr)
+                for i, arg in enumerate(cmd):
+                    print(f'[DEBUG] Crypto:   [{i}] = {repr(arg)}', file=sys.stderr)
+
+            result = subprocess.run(cmd, capture_output=True, text=True)
+
+            if debug:
+                print(f'[DEBUG] Crypto: yubico-piv-tool generate exit code: {result.returncode}', file=sys.stderr)
+                if result.stdout:
+                    print(f'[DEBUG] Crypto: generate stdout:', file=sys.stderr)
+                    print(result.stdout, file=sys.stderr)
+                if result.stderr:
+                    print(f'[DEBUG] Crypto: generate stderr:', file=sys.stderr)
+                    print(result.stderr, file=sys.stderr)
+
+            if result.returncode != 0:
+                raise subprocess.CalledProcessError(result.returncode, cmd, result.stdout, result.stderr)
 
             # --- Generate self-signed certificate using public key
 
-            subprocess.run(
-                [
-                    'yubico-piv-tool',
-                    '--reader', reader,
-                    '--action', 'verify-pin',
-                    '--slot', slot,
-                    '--subject', subject,
-                    '--action', 'selfsign',
-                    '--input', pubkey_path,
-                    '--output', cert_path,
-                ],
-                check=True,
-            )
+            cmd = [
+                'yubico-piv-tool',
+                '--reader', reader,
+                '--action', 'verify-pin',
+                '--slot', slot,
+                '--subject', subject,
+                '--action', 'selfsign',
+                '--input', pubkey_path,
+                '--output', cert_path,
+            ]
+            if pin:
+                cmd += ['--pin', pin]
+            if management_key:
+                cmd += [f'--key={management_key}']
+                if debug:
+                    print(f'[DEBUG] Crypto: Added --key to selfsign command', file=sys.stderr)
+            else:
+                if debug:
+                    print(f'[DEBUG] Crypto: WARNING - No management_key for selfsign!', file=sys.stderr)
+
+            if debug:
+                print(f'[DEBUG] Crypto: Running yubico-piv-tool selfsign', file=sys.stderr)
+                print(f'[DEBUG] Crypto: Full command ({len(cmd)} args):', file=sys.stderr)
+                for i, arg in enumerate(cmd):
+                    print(f'[DEBUG] Crypto:   [{i}] = {repr(arg)}', file=sys.stderr)
+
+            result = subprocess.run(cmd, capture_output=True, text=True)
+
+            if debug:
+                print(f'[DEBUG] Crypto: yubico-piv-tool selfsign exit code: {result.returncode}', file=sys.stderr)
+                if result.stdout:
+                    print(f'[DEBUG] Crypto: selfsign stdout:', file=sys.stderr)
+                    print(result.stdout, file=sys.stderr)
+                if result.stderr:
+                    print(f'[DEBUG] Crypto: selfsign stderr:', file=sys.stderr)
+                    print(result.stderr, file=sys.stderr)
+
+            if result.returncode != 0:
+                raise subprocess.CalledProcessError(result.returncode, cmd, result.stdout, result.stderr)
+
             # --- Import certificate into the Yubikey
 
-            subprocess.run(
-                [
-                    'yubico-piv-tool',
-                    '--reader', reader,
-                    '--action', 'import-certificate',
-                    '--slot', slot,
-                    '--input', cert_path,
-                ],
-                check=True,
-            )
+            cmd = [
+                'yubico-piv-tool',
+                '--reader', reader,
+                '--action', 'import-certificate',
+                '--slot', slot,
+                '--input', cert_path,
+            ]
+            if management_key:
+                cmd += [f'--key={management_key}']
+                if debug:
+                    print(f'[DEBUG] Crypto: Added --key to import-certificate command', file=sys.stderr)
+            else:
+                if debug:
+                    print(f'[DEBUG] Crypto: WARNING - No management_key for import-certificate!', file=sys.stderr)
+
+            if debug:
+                print(f'[DEBUG] Crypto: Running yubico-piv-tool import-certificate', file=sys.stderr)
+                print(f'[DEBUG] Crypto: Full command ({len(cmd)} args):', file=sys.stderr)
+                for i, arg in enumerate(cmd):
+                    print(f'[DEBUG] Crypto:   [{i}] = {repr(arg)}', file=sys.stderr)
+
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+
+            if debug:
+                print(f'[DEBUG] Crypto: yubico-piv-tool import-certificate exit code: {result.returncode}', file=sys.stderr)
+                if result.stdout:
+                    print(f'[DEBUG] Crypto: import-certificate stdout:', file=sys.stderr)
+                    print(result.stdout, file=sys.stderr)
+                if result.stderr:
+                    print(f'[DEBUG] Crypto: import-certificate stderr:', file=sys.stderr)
+                    print(result.stderr, file=sys.stderr)
+
+            if result.returncode != 0:
+                raise subprocess.CalledProcessError(result.returncode, cmd, result.stdout, result.stderr)
 
 
     # --- CRYPTO GET_CERTIFICATE_SUBJECT ---------------------------------------

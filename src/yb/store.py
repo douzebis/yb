@@ -66,7 +66,7 @@ class Store:
 
     def __init__(
             self,
-            reader: str,
+            reader: Hashable,
             yblob_magic: int,
             object_size_in_store: int,
             object_count_in_store: int,

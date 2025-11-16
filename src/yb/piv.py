@@ -120,13 +120,14 @@ class PivInterface(ABC):
         pass
 
     @abstractmethod
-    def verify_reader(self, reader: Hashable, id: int) -> bool:
+    def verify_reader(self, reader: Hashable, id: int, pin: str | None = None) -> bool:
         """
         Verify reader by attempting PIN verification.
 
         Parameters:
         - reader: The name of the reader to verify.
         - id: The numeric ID for verification.
+        - pin: YubiKey PIN (optional, will prompt if not provided).
 
         Returns:
         - True if verification succeeds, False otherwise.
@@ -292,7 +293,7 @@ class HardwarePiv(PivInterface):
 
         # Add management key if provided
         if management_key is not None:
-            cmd.extend(['--key', management_key])
+            cmd.append(f'--key={management_key}')
 
         cmd.extend([
             '--action', 'write-object',
@@ -350,17 +351,21 @@ class HardwarePiv(PivInterface):
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"Failed to read object: {e.stderr.decode().strip()}") from e
         
-    def verify_reader(self, reader: Hashable, id: int) -> bool:
-        ''''''
+    def verify_reader(self, reader: Hashable, id: int, pin: str | None = None) -> bool:
+        '''Verify reader by attempting PIN verification.'''
         try:
+            cmd = [
+                'yubico-piv-tool',
+                '--reader', str(reader),
+                '--action', 'verify-pin',
+                '--id', f'{id:#06x}',
+            ]
+            if pin:
+                cmd += ['--pin', pin]
+
             with open("/dev/null", "rb") as devnull:
                 subprocess.run(
-                    [
-                        'yubico-piv-tool',
-                        '--reader', str(reader),
-                        '--action', 'verify-pin',
-                        '--id', f'{id:#06x}',
-                    ],
+                    cmd,
                     stdin=devnull,
                     capture_output=True,
                     text=True,
@@ -521,9 +526,9 @@ class EmulatedPiv(PivInterface):
             raise RuntimeError(f"Object {id:#06x} not found on device")
         return device.objects[id]
 
-    def verify_reader(self, reader: Hashable, id: int) -> bool:
+    def verify_reader(self, reader: Hashable, id: int, pin: str | None = None) -> bool:
         """Always returns True for emulated devices (no PIN required)."""
-        # Just verify the reader exists
+        # Just verify the reader exists (ignore PIN for emulated devices)
         try:
             self._get_device_by_reader(reader)
             return True

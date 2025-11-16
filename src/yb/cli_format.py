@@ -109,14 +109,30 @@ def cli_format(ctx,
 
     reader: str = ctx.obj['reader']
     management_key: str | None = ctx.obj.get('management_key')
+    pin: str | None = ctx.obj.get('pin')
     piv = ctx.obj['piv']
+    debug = ctx.obj.get('debug', False)
+
+    if debug:
+        import sys
+        print(f'[DEBUG] cli_format received from context:', file=sys.stderr)
+        print(f'[DEBUG]   management_key: {management_key}', file=sys.stderr)
+        print(f'[DEBUG]   pin: {pin}', file=sys.stderr)
 
     # Provision or check the ECCP256 key
     if generate:
+        if debug:
+            print(f'[DEBUG] cli_format calling Crypto.generate_certificate with:', file=sys.stderr)
+            print(f'[DEBUG]   pin={pin}', file=sys.stderr)
+            print(f'[DEBUG]   management_key={management_key}', file=sys.stderr)
+
         Crypto.generate_certificate(
             reader=reader,
             slot=key_slot,
             subject=subject,
+            pin=pin,
+            management_key=management_key,
+            debug=debug,
         )
     else:
         sub = Crypto.get_certificate_subject(
