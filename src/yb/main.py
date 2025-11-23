@@ -37,6 +37,10 @@ def complete_serial(ctx, param, incomplete):
         piv = HardwarePiv()
         devices = piv.list_devices()
 
+        # Normalize incomplete to empty string if None
+        if incomplete is None:
+            incomplete = ""
+
         # Filter devices and create completion items
         completions = []
         for serial, version, _ in devices:
@@ -48,7 +52,7 @@ def complete_serial(ctx, param, incomplete):
             serial_str = str(serial)
 
             # Match against incomplete input (empty string matches all)
-            if not incomplete or serial_str.startswith(incomplete):
+            if incomplete == "" or serial_str.startswith(incomplete):
                 completions.append(
                     CompletionItem(
                         serial_str,
@@ -58,8 +62,11 @@ def complete_serial(ctx, param, incomplete):
 
         return completions
 
-    except Exception:
+    except Exception as e:
         # If anything goes wrong (no ykman, no devices, etc.), return empty list
+        # Debug: log to stderr
+        import sys
+        print(f"DEBUG: complete_serial error: {e}", file=sys.stderr)
         return []
 
 
