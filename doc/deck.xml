@@ -1,0 +1,583 @@
+<mxfile host="Electron" agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/26.1.1 Chrome/138.0.7204.251 Electron/37.7.1 Safari/537.36" version="26.1.1">
+  <diagram name="Hybrid Encryption Overview" id="overview">
+    <mxGraphModel dx="1434" dy="844" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1920" pageHeight="1200" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- Title -->
+        <mxCell id="title1" value="YubiKey Hybrid Encryption - High Level" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=24;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="660" y="40" width="600" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- YubiKey Box -->
+        <mxCell id="yubikey" value="YubiKey&#xa;(Hardware Security)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=14;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="240" y="200" width="200" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- YubiKey Private Key -->
+        <mxCell id="yk_privkey" value="Private Key&#xa;(Never Leaves YubiKey)&#xa;ECC P-256" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=12" vertex="1" parent="1">
+          <mxGeometry x="260" y="320" width="160" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- YubiKey Public Key -->
+        <mxCell id="yk_pubkey" value="Public Key&#xa;(Extractable)&#xa;ECC P-256" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12" vertex="1" parent="1">
+          <mxGeometry x="260" y="400" width="160" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Ephemeral Key Pair -->
+        <mxCell id="ephemeral_box" value="Ephemeral Key Pair&#xa;(Generated per encryption)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=14;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="1280" y="200" width="200" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="eph_privkey" value="Ephemeral Private&#xa;(Discarded after use)&#xa;ECC P-256" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12" vertex="1" parent="1">
+          <mxGeometry x="1300" y="320" width="160" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="eph_pubkey" value="Ephemeral Public&#xa;(Sent with ciphertext)&#xa;ECC P-256" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12" vertex="1" parent="1">
+          <mxGeometry x="1300" y="400" width="160" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- ECDH Box -->
+        <mxCell id="ecdh_box" value="ECDH&#xa;(Elliptic Curve Diffie-Hellman)" style="ellipse;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=14;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="740" y="320" width="200" height="140" as="geometry" />
+        </mxCell>
+
+        <!-- Shared Secret -->
+        <mxCell id="shared_secret" value="Shared Secret&#xa;(256 bits)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=14;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="740" y="520" width="200" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- HKDF -->
+        <mxCell id="hkdf" value="HKDF-SHA256&#xa;Key Derivation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=12" vertex="1" parent="1">
+          <mxGeometry x="740" y="640" width="200" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- AES Key -->
+        <mxCell id="aes_key" value="AES-256 Key&#xa;(32 bytes)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=14;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="740" y="760" width="200" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Plaintext -->
+        <mxCell id="plaintext" value="Plaintext Data" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14" vertex="1" parent="1">
+          <mxGeometry x="1100" y="760" width="160" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- AES Encryption -->
+        <mxCell id="aes_enc" value="AES-256-CBC&#xa;+ PKCS7 Padding" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=12" vertex="1" parent="1">
+          <mxGeometry x="1100" y="880" width="160" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Ciphertext -->
+        <mxCell id="ciphertext" value="Ciphertext" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=14" vertex="1" parent="1">
+          <mxGeometry x="1100" y="1000" width="160" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Final Package -->
+        <mxCell id="final_package" value="Encrypted Blob&#xa;[Ephemeral Pubkey (65B) | IV (16B) | Ciphertext]" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="1360" y="1000" width="320" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Arrows -->
+        <!-- YubiKey to ECDH -->
+        <mxCell id="arrow1" value="YubiKey Private Key" style="endArrow=classic;html=1;rounded=0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#b85450" edge="1" parent="1" source="yk_privkey" target="ecdh_box">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="500" y="400" as="sourcePoint" />
+            <mxPoint x="550" y="350" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Ephemeral to ECDH -->
+        <mxCell id="arrow2" value="Ephemeral Private Key" style="endArrow=classic;html=1;rounded=0;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#d6b656" edge="1" parent="1" source="eph_privkey" target="ecdh_box">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="1200" y="400" as="sourcePoint" />
+            <mxPoint x="1150" y="350" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- ECDH to Shared Secret -->
+        <mxCell id="arrow3" value="" style="endArrow=classic;html=1;rounded=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeWidth=3;strokeColor=#9673a6" edge="1" parent="1" source="ecdh_box" target="shared_secret">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="800" y="500" as="sourcePoint" />
+            <mxPoint x="850" y="450" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Shared Secret to HKDF -->
+        <mxCell id="arrow4" value="" style="endArrow=classic;html=1;rounded=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeWidth=3;strokeColor=#d79b00" edge="1" parent="1" source="shared_secret" target="hkdf">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="800" y="620" as="sourcePoint" />
+            <mxPoint x="850" y="570" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- HKDF to AES Key -->
+        <mxCell id="arrow5" value="" style="endArrow=classic;html=1;rounded=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeWidth=3;strokeColor=#d79b00" edge="1" parent="1" source="hkdf" target="aes_key">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="800" y="740" as="sourcePoint" />
+            <mxPoint x="850" y="690" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- AES Key to Encryption -->
+        <mxCell id="arrow6" value="Encrypts" style="endArrow=classic;html=1;rounded=0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#d79b00" edge="1" parent="1" source="aes_key" target="aes_enc">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="980" y="860" as="sourcePoint" />
+            <mxPoint x="1030" y="810" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Plaintext to AES -->
+        <mxCell id="arrow7" value="" style="endArrow=classic;html=1;rounded=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#82b366" edge="1" parent="1" source="plaintext" target="aes_enc">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="1150" y="840" as="sourcePoint" />
+            <mxPoint x="1200" y="790" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- AES to Ciphertext -->
+        <mxCell id="arrow8" value="" style="endArrow=classic;html=1;rounded=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#b85450" edge="1" parent="1" source="aes_enc" target="ciphertext">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="1150" y="980" as="sourcePoint" />
+            <mxPoint x="1200" y="930" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Ciphertext + Ephemeral Pub to Final -->
+        <mxCell id="arrow9" value="Combine" style="endArrow=classic;html=1;rounded=0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#6c8ebf" edge="1" parent="1" source="ciphertext" target="final_package">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="1300" y="1030" as="sourcePoint" />
+            <mxPoint x="1350" y="980" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <mxCell id="arrow10" value="Include" style="endArrow=classic;html=1;rounded=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#d6b656;dashed=1" edge="1" parent="1" source="eph_pubkey" target="final_package">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="1380" y="520" as="sourcePoint" />
+            <mxPoint x="1430" y="470" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Legend -->
+        <mxCell id="legend_box" value="Key Concepts:&#xa;• YubiKey holds private key (never exposed)&#xa;• Ephemeral keys generated per encryption&#xa;• ECDH creates shared secret without key exchange&#xa;• HKDF derives encryption key from shared secret&#xa;• AES-256-CBC encrypts actual data&#xa;• Decryption: YubiKey performs ECDH with ephemeral public key" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;align=left;verticalAlign=top;fontColor=#333333" vertex="1" parent="1">
+          <mxGeometry x="120" y="880" width="440" height="180" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+
+  <diagram name="Hybrid Decryption Overview" id="decryption-overview">
+    <mxGraphModel dx="1434" dy="844" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1920" pageHeight="1200" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- Title -->
+        <mxCell id="title_dec" value="YubiKey Hybrid Decryption - High Level" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=24;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="660" y="40" width="600" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- Encrypted Blob (Starting Point) -->
+        <mxCell id="dec_encrypted_blob" value="Encrypted Blob&#xa;[Ephemeral Pubkey (65B) | IV (16B) | Ciphertext]" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="1360" y="200" width="320" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Parse Blob -->
+        <mxCell id="dec_parse" value="Parse Blob" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=14;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="1400" y="320" width="240" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Extracted Components -->
+        <mxCell id="dec_eph_pubkey" value="Ephemeral Public Key&#xa;(Extracted from blob)&#xa;ECC P-256" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12" vertex="1" parent="1">
+          <mxGeometry x="1300" y="440" width="160" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="dec_iv" value="IV&#xa;(Extracted from blob)&#xa;16 bytes" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12" vertex="1" parent="1">
+          <mxGeometry x="1490" y="440" width="160" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="dec_ciphertext" value="Ciphertext&#xa;(Encrypted data)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=12" vertex="1" parent="1">
+          <mxGeometry x="1300" y="540" width="350" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- YubiKey Box -->
+        <mxCell id="dec_yubikey" value="YubiKey&#xa;(Hardware Security)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=14;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="240" y="320" width="200" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- YubiKey Private Key -->
+        <mxCell id="dec_yk_privkey" value="Private Key&#xa;(Never Leaves YubiKey)&#xa;ECC P-256" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=12" vertex="1" parent="1">
+          <mxGeometry x="260" y="440" width="160" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- ECDH Box -->
+        <mxCell id="dec_ecdh_box" value="ECDH on YubiKey&#xa;(via PKCS#11)&#xa;Elliptic Curve Diffie-Hellman" style="ellipse;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=14;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="720" y="400" width="240" height="140" as="geometry" />
+        </mxCell>
+
+        <!-- Shared Secret -->
+        <mxCell id="dec_shared_secret" value="Shared Secret&#xa;(256 bits)&#xa;Same as encryption!" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=14;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="740" y="600" width="200" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- HKDF -->
+        <mxCell id="dec_hkdf" value="HKDF-SHA256&#xa;Key Derivation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=12" vertex="1" parent="1">
+          <mxGeometry x="740" y="740" width="200" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- AES Key -->
+        <mxCell id="dec_aes_key" value="AES-256 Key&#xa;(32 bytes)&#xa;Same as encryption!" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=14;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="740" y="860" width="200" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- AES Decryption -->
+        <mxCell id="dec_aes_dec" value="AES-256-CBC&#xa;Decryption" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=12" vertex="1" parent="1">
+          <mxGeometry x="1100" y="860" width="160" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Remove Padding -->
+        <mxCell id="dec_unpad" value="Remove PKCS7&#xa;Padding" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12" vertex="1" parent="1">
+          <mxGeometry x="1100" y="980" width="160" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Plaintext -->
+        <mxCell id="dec_plaintext" value="Plaintext Data&#xa;(Recovered)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="1100" y="1100" width="160" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Arrows -->
+        <!-- Encrypted Blob to Parse -->
+        <mxCell id="dec_arrow1" value="" style="endArrow=classic;html=1;rounded=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeWidth=3;strokeColor=#6c8ebf" edge="1" parent="1" source="dec_encrypted_blob" target="dec_parse">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="1500" y="280" as="sourcePoint" />
+            <mxPoint x="1550" y="230" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Parse to Components -->
+        <mxCell id="dec_arrow2" value="Extract" style="endArrow=classic;html=1;rounded=0;exitX=0;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#d6b656;dashed=1" edge="1" parent="1" source="dec_parse" target="dec_eph_pubkey">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="1420" y="400" as="sourcePoint" />
+            <mxPoint x="1470" y="350" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <mxCell id="dec_arrow3" value="Extract" style="endArrow=classic;html=1;rounded=0;exitX=1;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#6c8ebf;dashed=1" edge="1" parent="1" source="dec_parse" target="dec_iv">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="1600" y="400" as="sourcePoint" />
+            <mxPoint x="1650" y="350" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <mxCell id="dec_arrow4" value="Extract" style="endArrow=classic;html=1;rounded=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#b85450;dashed=1" edge="1" parent="1" source="dec_parse" target="dec_ciphertext">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="1500" y="460" as="sourcePoint" />
+            <mxPoint x="1550" y="410" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- YubiKey Private to ECDH -->
+        <mxCell id="dec_arrow5" value="YubiKey Private Key" style="endArrow=classic;html=1;rounded=0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#b85450" edge="1" parent="1" source="dec_yk_privkey" target="dec_ecdh_box">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="500" y="470" as="sourcePoint" />
+            <mxPoint x="550" y="420" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Ephemeral Public to ECDH -->
+        <mxCell id="dec_arrow6" value="Ephemeral Public Key" style="endArrow=classic;html=1;rounded=0;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#d6b656" edge="1" parent="1" source="dec_eph_pubkey" target="dec_ecdh_box">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="1200" y="470" as="sourcePoint" />
+            <mxPoint x="1150" y="420" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- ECDH to Shared Secret -->
+        <mxCell id="dec_arrow7" value="" style="endArrow=classic;html=1;rounded=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeWidth=3;strokeColor=#9673a6" edge="1" parent="1" source="dec_ecdh_box" target="dec_shared_secret">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="840" y="570" as="sourcePoint" />
+            <mxPoint x="890" y="520" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Shared Secret to HKDF -->
+        <mxCell id="dec_arrow8" value="" style="endArrow=classic;html=1;rounded=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeWidth=3;strokeColor=#d79b00" edge="1" parent="1" source="dec_shared_secret" target="dec_hkdf">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="840" y="710" as="sourcePoint" />
+            <mxPoint x="890" y="660" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- HKDF to AES Key -->
+        <mxCell id="dec_arrow9" value="" style="endArrow=classic;html=1;rounded=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeWidth=3;strokeColor=#d79b00" edge="1" parent="1" source="dec_hkdf" target="dec_aes_key">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="840" y="830" as="sourcePoint" />
+            <mxPoint x="890" y="780" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- AES Key to Decryption -->
+        <mxCell id="dec_arrow10" value="Decrypts" style="endArrow=classic;html=1;rounded=0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#d79b00" edge="1" parent="1" source="dec_aes_key" target="dec_aes_dec">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="980" y="900" as="sourcePoint" />
+            <mxPoint x="1030" y="850" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Ciphertext + IV to AES Dec -->
+        <mxCell id="dec_arrow11" value="Ciphertext + IV" style="endArrow=classic;html=1;rounded=0;exitX=0;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#b85450;dashed=1" edge="1" parent="1" source="dec_ciphertext" target="dec_aes_dec">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="1200" y="800" as="sourcePoint" />
+            <mxPoint x="1250" y="750" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- AES Dec to Unpad -->
+        <mxCell id="dec_arrow12" value="" style="endArrow=classic;html=1;rounded=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#6c8ebf" edge="1" parent="1" source="dec_aes_dec" target="dec_unpad">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="1180" y="950" as="sourcePoint" />
+            <mxPoint x="1230" y="900" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Unpad to Plaintext -->
+        <mxCell id="dec_arrow13" value="" style="endArrow=classic;html=1;rounded=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeWidth=3;strokeColor=#82b366" edge="1" parent="1" source="dec_unpad" target="dec_plaintext">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="1180" y="1070" as="sourcePoint" />
+            <mxPoint x="1230" y="1020" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Legend -->
+        <mxCell id="dec_legend_box" value="Key Concepts:&#xa;• Encrypted blob arrives from storage or transmission&#xa;• Ephemeral public key extracted from blob&#xa;• YubiKey private key never leaves hardware&#xa;• ECDH performed securely on YubiKey via PKCS#11&#xa;• Same shared secret and AES key as encryption&#xa;• PIN required to authorize ECDH operation&#xa;• Decryption requires physical YubiKey" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;align=left;verticalAlign=top;fontColor=#333333" vertex="1" parent="1">
+          <mxGeometry x="120" y="880" width="440" height="180" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+
+  <diagram name="Encryption-Decryption Flow" id="flow">
+    <mxGraphModel dx="1434" dy="844" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1920" pageHeight="1200" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- Title -->
+        <mxCell id="title2" value="Hybrid Encryption Flow: Store and Fetch" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=24;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="660" y="40" width="600" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- ENCRYPTION SIDE (LEFT) -->
+        <mxCell id="enc_label" value="ENCRYPTION (yb store)" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=18;fontStyle=1;fontColor=#2E7D32" vertex="1" parent="1">
+          <mxGeometry x="200" y="120" width="400" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="enc_step1" value="1. Read YubiKey Public Key&#xa;(from certificate in slot 9e)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12" vertex="1" parent="1">
+          <mxGeometry x="200" y="180" width="240" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="enc_step2" value="2. Generate Ephemeral Key Pair&#xa;(ECC P-256)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12" vertex="1" parent="1">
+          <mxGeometry x="200" y="270" width="240" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="enc_step3" value="3. Perform ECDH&#xa;ephemeral_private × yubikey_public&#xa;→ Shared Secret (32 bytes)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=12" vertex="1" parent="1">
+          <mxGeometry x="200" y="360" width="240" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="enc_step4" value="4. Derive AES Key&#xa;HKDF-SHA256(shared_secret)&#xa;→ AES-256 Key (32 bytes)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=12" vertex="1" parent="1">
+          <mxGeometry x="200" y="470" width="240" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="enc_step5" value="5. Generate Random IV&#xa;(16 bytes)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12" vertex="1" parent="1">
+          <mxGeometry x="200" y="580" width="240" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="enc_step6" value="6. Encrypt Data&#xa;AES-256-CBC(plaintext, key, iv)&#xa;+ PKCS7 Padding" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=12" vertex="1" parent="1">
+          <mxGeometry x="200" y="670" width="240" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="enc_step7" value="7. Create Encrypted Blob&#xa;[ephemeral_pubkey (65B) |&#xa; iv (16B) |&#xa; ciphertext]" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="200" y="780" width="240" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="enc_step8" value="8. Store in YubiKey&#xa;(PIV custom objects)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="200" y="890" width="240" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- DECRYPTION SIDE (RIGHT) -->
+        <mxCell id="dec_label" value="DECRYPTION (yb fetch)" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=18;fontStyle=1;fontColor=#C62828" vertex="1" parent="1">
+          <mxGeometry x="1280" y="120" width="400" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="dec_step1" value="1. Read Encrypted Blob&#xa;(from YubiKey PIV objects)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12" vertex="1" parent="1">
+          <mxGeometry x="1280" y="180" width="240" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="dec_step2" value="2. Parse Encrypted Blob&#xa;Extract: ephemeral_pubkey (65B)&#xa;        iv (16B)&#xa;        ciphertext" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12" vertex="1" parent="1">
+          <mxGeometry x="1280" y="270" width="240" height="90" as="geometry" />
+        </mxCell>
+
+        <mxCell id="dec_step3" value="3. Perform ECDH on YubiKey&#xa;yubikey_private × ephemeral_public&#xa;→ Shared Secret (32 bytes)&#xa;(via PKCS#11)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=12;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="1280" y="390" width="240" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="dec_step4" value="4. Derive Same AES Key&#xa;HKDF-SHA256(shared_secret)&#xa;→ AES-256 Key (32 bytes)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=12" vertex="1" parent="1">
+          <mxGeometry x="1280" y="520" width="240" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="dec_step5" value="5. Decrypt Data&#xa;AES-256-CBC(ciphertext, key, iv)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=12" vertex="1" parent="1">
+          <mxGeometry x="1280" y="630" width="240" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="dec_step6" value="6. Remove PKCS7 Padding" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12" vertex="1" parent="1">
+          <mxGeometry x="1280" y="720" width="240" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="dec_step7" value="7. Return Plaintext" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="1280" y="810" width="240" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Center diagram - YubiKey and Data Flow -->
+        <mxCell id="yubikey_center" value="YubiKey&#xa;ECC P-256 Private Key&#xa;(Slot 9e)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=16;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="800" y="320" width="240" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="shared_secret_center" value="Shared Secret&#xa;(Same on both sides!)" style="ellipse;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=14;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="820" y="500" width="200" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- Arrows connecting encryption to center -->
+        <mxCell id="enc_arrow1" value="Public Key" style="endArrow=classic;html=1;rounded=0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.25;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#82b366;dashed=1" edge="1" parent="1" source="enc_step1" target="yubikey_center">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="500" y="400" as="sourcePoint" />
+            <mxPoint x="550" y="350" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <mxCell id="enc_arrow2" value="ECDH" style="endArrow=classic;html=1;rounded=0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#9673a6" edge="1" parent="1" source="enc_step3" target="shared_secret_center">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="500" y="500" as="sourcePoint" />
+            <mxPoint x="550" y="450" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Arrows connecting decryption to center -->
+        <mxCell id="dec_arrow1" value="Private Key (via PKCS#11)" style="endArrow=classic;html=1;rounded=0;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#b85450;dashed=1" edge="1" parent="1" source="dec_step3" target="yubikey_center">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="1200" y="400" as="sourcePoint" />
+            <mxPoint x="1150" y="350" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <mxCell id="dec_arrow2" value="ECDH" style="endArrow=classic;html=1;rounded=0;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#9673a6" edge="1" parent="1" source="dec_step4" target="shared_secret_center">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="1200" y="500" as="sourcePoint" />
+            <mxPoint x="1150" y="450" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Encryption flow arrows -->
+        <mxCell id="enc_flow1" value="" style="endArrow=classic;html=1;rounded=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#2E7D32" edge="1" parent="1" source="enc_step1" target="enc_step2">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="300" y="300" as="sourcePoint" />
+            <mxPoint x="350" y="250" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <mxCell id="enc_flow2" value="" style="endArrow=classic;html=1;rounded=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#2E7D32" edge="1" parent="1" source="enc_step2" target="enc_step3">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="300" y="380" as="sourcePoint" />
+            <mxPoint x="350" y="330" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <mxCell id="enc_flow3" value="" style="endArrow=classic;html=1;rounded=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#2E7D32" edge="1" parent="1" source="enc_step3" target="enc_step4">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="300" y="480" as="sourcePoint" />
+            <mxPoint x="350" y="430" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <mxCell id="enc_flow4" value="" style="endArrow=classic;html=1;rounded=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#2E7D32" edge="1" parent="1" source="enc_step4" target="enc_step5">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="300" y="590" as="sourcePoint" />
+            <mxPoint x="350" y="540" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <mxCell id="enc_flow5" value="" style="endArrow=classic;html=1;rounded=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#2E7D32" edge="1" parent="1" source="enc_step5" target="enc_step6">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="300" y="690" as="sourcePoint" />
+            <mxPoint x="350" y="640" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <mxCell id="enc_flow6" value="" style="endArrow=classic;html=1;rounded=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#2E7D32" edge="1" parent="1" source="enc_step6" target="enc_step7">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="300" y="790" as="sourcePoint" />
+            <mxPoint x="350" y="740" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <mxCell id="enc_flow7" value="" style="endArrow=classic;html=1;rounded=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#2E7D32" edge="1" parent="1" source="enc_step7" target="enc_step8">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="300" y="900" as="sourcePoint" />
+            <mxPoint x="350" y="850" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Decryption flow arrows -->
+        <mxCell id="dec_flow1" value="" style="endArrow=classic;html=1;rounded=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#C62828" edge="1" parent="1" source="dec_step1" target="dec_step2">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="1380" y="300" as="sourcePoint" />
+            <mxPoint x="1430" y="250" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <mxCell id="dec_flow2" value="" style="endArrow=classic;html=1;rounded=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#C62828" edge="1" parent="1" source="dec_step2" target="dec_step3">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="1380" y="410" as="sourcePoint" />
+            <mxPoint x="1430" y="360" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <mxCell id="dec_flow3" value="" style="endArrow=classic;html=1;rounded=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#C62828" edge="1" parent="1" source="dec_step3" target="dec_step4">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="1380" y="530" as="sourcePoint" />
+            <mxPoint x="1430" y="480" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <mxCell id="dec_flow4" value="" style="endArrow=classic;html=1;rounded=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#C62828" edge="1" parent="1" source="dec_step4" target="dec_step5">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="1380" y="640" as="sourcePoint" />
+            <mxPoint x="1430" y="590" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <mxCell id="dec_flow5" value="" style="endArrow=classic;html=1;rounded=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#C62828" edge="1" parent="1" source="dec_step5" target="dec_step6">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="1380" y="730" as="sourcePoint" />
+            <mxPoint x="1430" y="680" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <mxCell id="dec_flow6" value="" style="endArrow=classic;html=1;rounded=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeWidth=2;strokeColor=#C62828" edge="1" parent="1" source="dec_step6" target="dec_step7">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="1380" y="820" as="sourcePoint" />
+            <mxPoint x="1430" y="770" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Notes -->
+        <mxCell id="note1" value="Key Security Properties:&#xa;• YubiKey private key NEVER leaves hardware&#xa;• Each encryption uses fresh ephemeral key pair&#xa;• Decryption requires physical YubiKey + PIN&#xa;• ECDH provides forward secrecy" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;align=left;verticalAlign=top;fontColor=#333333" vertex="1" parent="1">
+          <mxGeometry x="680" y="700" width="360" height="120" as="geometry" />
+        </mxCell>
+
+        <mxCell id="note2" value="Encrypted Blob Format:&#xa;[0..64]: Ephemeral Public Key (65 bytes, uncompressed P-256 point)&#xa;[65..80]: IV (16 bytes)&#xa;[81..]: Ciphertext (variable length)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;align=left;verticalAlign=top;fontColor=#333333" vertex="1" parent="1">
+          <mxGeometry x="680" y="850" width="360" height="100" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

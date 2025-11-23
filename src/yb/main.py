@@ -132,11 +132,6 @@ def validate_management_key(key: str) -> str:
     help='PC/SC reader name (legacy, use --serial instead)'
 )
 @click.option(
-    '-x', '--no-verify',
-    is_flag=True,
-    help='Skip reader verification (no PIN prompt)'
-)
-@click.option(
     '-k', '--key',
     type=str,
     default=None,
@@ -160,7 +155,6 @@ def cli(
     ctx,
     serial: int | None,
     reader: Hashable | None,
-    no_verify: bool,
     key: str | None,
     pin: str | None,
     debug: bool,
@@ -303,7 +297,6 @@ def cli(
     ctx.obj['management_key'] = management_key  # Store management key in context
     ctx.obj['pin'] = pin  # Store PIN in context
     ctx.obj['piv'] = piv  # Store PIV interface in context
-    ctx.obj['no_verify'] = no_verify  # Store -x flag in context
     ctx.obj['debug'] = debug  # Store --debug flag in context
 
 cli.add_command(cli_fsck)
