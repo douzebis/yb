@@ -36,14 +36,28 @@ def complete_serial(ctx, param, incomplete):
     try:
         piv = HardwarePiv()
         devices = piv.list_devices()
-        return [
-            CompletionItem(
-                str(serial),
-                help=f"YubiKey {version}"
-            )
-            for serial, version, _ in devices
-            if str(serial).startswith(incomplete)
-        ]
+
+        # Filter devices and create completion items
+        completions = []
+        for serial, version, _ in devices:
+            # Skip devices without serial numbers
+            if serial is None:
+                continue
+
+            # Convert to string for comparison
+            serial_str = str(serial)
+
+            # Match against incomplete input (empty string matches all)
+            if not incomplete or serial_str.startswith(incomplete):
+                completions.append(
+                    CompletionItem(
+                        serial_str,
+                        help=f"YubiKey {version}"
+                    )
+                )
+
+        return completions
+
     except Exception:
         # If anything goes wrong (no ykman, no devices, etc.), return empty list
         return []
