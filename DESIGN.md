@@ -50,7 +50,7 @@ The yb architecture consists of four main layers:
 │  Hybrid encrypt   │              │    Device I/O        │
 │  ECDH, AES, HKDF  │              │    yubico-piv-tool   │
 └───────────────────┘              └──────────────────────┘
-                           │
+
 ┌─────────────────────────────────────────────────────────┐
 │                External Dependencies                    │
 │  yubico-piv-tool, pkcs11-tool, opensc                   │

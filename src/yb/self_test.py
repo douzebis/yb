@@ -19,8 +19,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 
-from yb.test_helpers import OpType, Operation, OperationGenerator, ToyFilesystem
-
+from yb.test_helpers import OperationGenerator, OpType, ToyFilesystem
 
 # === SUBPROCESS EXECUTOR ======================================================
 
@@ -260,9 +259,10 @@ def flash_yubikey_continuously(serial: int, stop_event: threading.Event, debug: 
     Continues flashing until stop_event is set.
     """
     try:
+        from typing import Protocol, cast
+
         from ykman.device import list_all_devices
         from yubikit.core.smartcard import SmartCardConnection
-        from typing import cast, Protocol
 
         class PcscConnection(Protocol):
             """Protocol for pyscard connection object."""
@@ -347,7 +347,7 @@ def confirm_destructive_test(serial: int, num_operations: int = 200, flash: bool
     print("WARNING: DESTRUCTIVE OPERATION")
     print("=" * 70)
     print()
-    print(f"YubiKey to test:")
+    print( "YubiKey to test:")
     print(f"  Serial: {serial}")
     print()
     print("This self-test will:")
@@ -558,7 +558,7 @@ def run_test_operations(
                 if success:
                     print(" OK")
                 else:
-                    print(f" FAIL")
+                    print( " FAIL")
                     print(f"  Error: {error_msg}", file=sys.stderr)
                     # Stop on first true error - state is now unknown
                     print(f"\nStopping at first error (operation {i+1}/{num_operations})", file=sys.stderr)

@@ -2,11 +2,9 @@
 #
 # SPDX-License-Identifier: MIT
 
+import sys
+
 import click
-from yb.store import Store, Object
-from yb.x509_subject import verify_x509_subject
-from yb.crypto import Crypto
-from yb.auxiliaries import verify_device_if_needed
 
 from yb.constants import (
     DEFAULT_OBJECT_COUNT,
@@ -17,8 +15,10 @@ from yb.constants import (
     OBJECT_MIN_SIZE,
     YBLOB_MAGIC,
 )
-
+from yb.crypto import Crypto
 from yb.parse_int import parse_int_base_0
+from yb.store import Object, Store
+from yb.x509_subject import verify_x509_subject
 
 # === FORMAT ===================================================================
 
@@ -83,9 +83,6 @@ def cli_format(ctx,
 ) -> None:
     'Format a PIV device for storing binary blobs.'''
 
-    # Verify device PIN before write operation
-    verify_device_if_needed(ctx)
-
     # --- Check options sanity -------------------------------------------------
 
     if object_size < OBJECT_MIN_SIZE:
@@ -114,15 +111,16 @@ def cli_format(ctx,
     debug = ctx.obj.get('debug', False)
 
     if debug:
-        import sys
-        print(f'[DEBUG] cli_format received from context:', file=sys.stderr)
+        print( '[DEBUG] cli_format received from context:', file=sys.stderr)
         print(f'[DEBUG]   management_key: {management_key}', file=sys.stderr)
         print(f'[DEBUG]   pin: {pin}', file=sys.stderr)
 
     # Provision or check the ECCP256 key
+    # Note: generate_certificate() will verify the PIN during the selfsign action
+    # if generating a new key.
     if generate:
         if debug:
-            print(f'[DEBUG] cli_format calling Crypto.generate_certificate with:', file=sys.stderr)
+            print( '[DEBUG] cli_format calling Crypto.generate_certificate with:', file=sys.stderr)
             print(f'[DEBUG]   pin={pin}', file=sys.stderr)
             print(f'[DEBUG]   management_key={management_key}', file=sys.stderr)
 

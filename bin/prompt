@@ -1,0 +1,443 @@
+#!/usr/bin/env bash
+
+# SPDX-FileCopyrightText: 2025 Frederic Ruget <fred@s3ns.io> (GitHub: @douzebis)
+# SPDX-FileCopyrightText: 2025 Thales Cloud Sécurisé
+#
+# SPDX-License-Identifier: MIT
+
+# ============================================================================
+# INITIALIZATION
+# ============================================================================
+
+CONFIG_FILE="$1"
+[[ -f "$CONFIG_FILE" ]] || { echo "Usage: $0 <commands_file>"; exit 1; }
+
+# Create temporary directory for any temporary files
+trap '[[ -n "$TMPDIR" && -d "$TMPDIR" ]] && rm -rf "$TMPDIR"' EXIT
+TMPDIR=$(mktemp -d)
+
+# ============================================================================
+# LOAD COMMANDS FROM FILE
+# ============================================================================
+# This section handles three types of multi-line commands:
+# 1. Heredocs: cat <<EOF ... EOF (need newlines preserved)
+# 2. Backslash continuations: command \ (can be collapsed to single line)
+# 3. Single-line commands (no special handling)
+#
+# Each command is stored in two formats:
+# - commands[]: Single-line executable format (for eval)
+# - display_commands[]: Original multi-line format (for display/editing)
+
+commands=()
+display_commands=()
+accumulated=""              # Accumulates executable format (collapsed)
+display_accumulated=""      # Accumulates display format (preserves newlines)
+heredoc_delimiter=""        # Tracks active heredoc delimiter (e.g., "EOF")
+
+while IFS= read -r line || [[ -n "$line" ]]; do
+    # STATE 1: Inside a heredoc - accumulate until we find the delimiter
+    if [[ -n "$heredoc_delimiter" ]]; then
+        accumulated="${accumulated}${line}"$'\n'
+        display_accumulated="${display_accumulated}${line}"$'\n'
+
+        # Check if this line matches the heredoc delimiter
+        # Note: <<- allows leading tabs before delimiter
+        line_trimmed="${line#"${line%%[![:space:]]*}"}"
+        if [[ "$line_trimmed" == "$heredoc_delimiter" ]]; then
+            # Found delimiter - heredoc complete
+            commands+=("${accumulated%$'\n'}")
+            display_commands+=("${display_accumulated%$'\n'}")
+            accumulated=""
+            display_accumulated=""
+            heredoc_delimiter=""
+        fi
+
+    # STATE 2: Start of heredoc - extract delimiter and begin accumulating
+    elif [[ "$line" =~ \<\<-?[[:space:]]*(.+)$ ]]; then
+        raw_delimiter="${BASH_REMATCH[1]}"
+        # Strip quotes (<<'EOF', <<"EOF") and whitespace
+        delimiter="${raw_delimiter//[\'\"]/}"
+        delimiter="${delimiter## }"
+        delimiter="${delimiter%% }"
+        heredoc_delimiter="$delimiter"
+        # Start accumulating (include the heredoc start line)
+        accumulated="${line}"$'\n'
+        display_accumulated="${line}"$'\n'
+
+    # STATE 3: Backslash continuation - keep accumulating
+    elif [[ "$line" =~ \\[[:space:]]*$ ]]; then
+        # For execution: remove backslash, add space
+        accumulated="${accumulated}${line%\\} "
+        # For display: keep backslash and newline
+        display_accumulated="${display_accumulated}${line}"$'\n'
+
+    # STATE 4: Regular line or end of continuation - complete the command
+    else
+        commands+=("${accumulated}${line}")
+        if [[ -n "$display_accumulated" ]]; then
+            # Multi-line command - use accumulated display version
+            display_commands+=("${display_accumulated}${line}")
+        else
+            # Single-line command
+            display_commands+=("${line}")
+        fi
+        accumulated=""
+        display_accumulated=""
+    fi
+done < "$CONFIG_FILE"
+
+# Handle edge case: file ended mid-command (incomplete heredoc or continuation)
+if [[ -n "$accumulated" ]]; then
+    commands+=("$accumulated")
+    display_commands+=("$display_accumulated")
+fi
+
+index=0
+n=${#commands[@]}
+prev_status=0
+
+trap 'stty sane; kill -STOP $$' TSTP
+resume_after_fg=0
+trap 'resume_after_fg=1; echo; echo "[Resumed demo: hit ENTER to continue]"' CONT
+
+# === ANSI COLOR CODES (Readline-compliant) ===
+BOLD=$'\001\e[1m\002'
+BLUE=$'\001\e[94m\002'
+BBLUE=$'\001\e[1;94m\002'
+GRAY=$'\001\e[90m\002'
+BGREEN=$'\001\e[1;32m\002'
+DGREEN=$'\001\e[32m\002'
+RED=$'\001\e[31m\002'
+BRED=$'\001\e[1;91m\002'
+WHITE=$'\001\e[97m\002'
+YELLOW=$'\001\e[93m\002'
+BYELLOW=$'\001\e[1;93m\002'
+DYELLOW=$'\001\e[33m\002'
+RESET=$'\001\e[0m\002'
+
+# === PURE ANSI ESCAPES (For screen control) ===
+# NOTE: Removed \001/\002 wrappers for screen control
+MOVE_CURSOR_UP=$'\033[1A'     # Moves cursor up 1 line
+ERASE_LINE_TO_END=$'\033[K' # Erases from cursor to end of line
+
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+# Collapse multi-line command to single line for execution
+#
+# Heredocs (<<EOF) require newlines to work, so they are preserved as-is.
+# Backslash continuations can be safely collapsed by removing newlines and
+# backslashes, then collapsing multiple spaces.
+#
+# Args:
+#   $1: Command string (possibly multi-line)
+# Output:
+#   Single-line version suitable for eval, or original if contains heredoc
+collapse_to_single_line() {
+    local cmd="$1"
+
+    # Heredocs need their newlines - don't collapse them
+    if [[ "$cmd" =~ \<\< ]]; then
+        echo "$cmd"
+        return
+    fi
+
+    # Backslash continuations: pure bash replacement (no subprocesses!)
+    local result="${cmd//$'\n'/}"       # Remove all newlines
+    result="${result//\\/ }"            # Remove backslashes, replace with space
+
+    # Collapse multiple consecutive spaces to single space
+    while [[ "$result" =~ '  ' ]]; do
+        result="${result//  / }"
+    done
+
+    echo "$result"
+}
+
+# Calculate the number of screen lines a string occupies
+#
+# Handles both actual newlines in the string and terminal line wrapping.
+#
+# Args:
+#   $1: The string (command text)
+#   $2: The visible width of the prompt string
+# Output:
+#   Number of lines the string will occupy on screen
+calculate_lines() {
+    local str="$1"
+    local prompt_width="$2"
+
+    # Check if string contains actual newlines
+    if [[ "$str" == *$'\n'* ]]; then
+        # Count newlines + 1 (for the last line)
+        local count=$(echo -n "$str" | grep -c $'\n')
+        echo $((count + 1))
+    else
+        # Single line - calculate wrapping based on terminal width
+        local total_length="${#str}"
+        COLUMNS=${COLUMNS:-80} # Use environment variable or default
+
+        local first_line_width=$(( COLUMNS - prompt_width ))
+        local remaining_length=$(( total_length - first_line_width ))
+        local lines=1
+
+        if (( remaining_length > 0 )); then
+            # Integer division for number of remaining lines
+            lines=$(( lines + (remaining_length + COLUMNS - 1) / COLUMNS ))
+        fi
+
+        echo "$lines"
+    fi
+}
+
+# ============================================================================
+# NAVIGATION FUNCTIONS
+# ============================================================================
+# These functions handle arrow key navigation and preserve user edits
+
+browse_up() {
+    # Save current edits (preserves multi-line format for display)
+    display_commands[$index]="$READLINE_LINE"
+    # Convert to executable single-line format
+    commands[$index]=$(collapse_to_single_line "$READLINE_LINE")
+    (( index-- ))
+    if (( index < 0 )); then
+        index=0
+        return
+    fi
+    # Load the display version (multi-line format)
+    READLINE_LINE="${display_commands[$index]}"
+    READLINE_POINT=${#READLINE_LINE}
+}
+
+browse_down() {
+    # Save current edits (preserves multi-line format for display)
+    display_commands[$index]="$READLINE_LINE"
+    # Convert to executable single-line format
+    commands[$index]=$(collapse_to_single_line "$READLINE_LINE")
+    (( index++ ))
+    if (( index >= n )); then
+        index=$((n-1))
+        return
+    fi
+    # Load the display version (multi-line format)
+    READLINE_LINE="${display_commands[$index]}"
+    READLINE_POINT=${#READLINE_LINE}
+}
+
+# ============================================================================
+# LINE EDITING FUNCTIONS
+# ============================================================================
+# These functions handle line manipulation (duplicate, insert, delete)
+
+duplicate_line() {
+    # Save and collapse current line
+    display_commands[$index]="$READLINE_LINE"
+    commands[$index]=$(collapse_to_single_line "$READLINE_LINE")
+    # Insert a duplicate below current index
+    commands=("${commands[@]:0:index+1}" "${commands[$index]}" "${commands[@]:index+1}")
+    display_commands=("${display_commands[@]:0:index+1}" "${display_commands[$index]}" "${display_commands[@]:index+1}")
+    ((index++))
+    n=${#commands[@]}
+}
+
+insert_line() {
+    # Save and collapse current line
+    display_commands[$index]="$READLINE_LINE"
+    commands[$index]=$(collapse_to_single_line "$READLINE_LINE")
+    # Insert empty line
+    commands=("${commands[@]:0:index}" "" "${commands[@]:index}")
+    display_commands=("${display_commands[@]:0:index}" "" "${display_commands[@]:index}")
+    n=${#commands[@]}
+}
+
+delete_line() {
+    # Remove current line from both arrays
+    commands=("${commands[@]:0:index}" "${commands[@]:index+1}")
+    display_commands=("${display_commands[@]:0:index}" "${display_commands[@]:index+1}")
+
+    # Move cursor to previous line if not at start
+    (( index > 0 )) && ((index--))
+
+    # Update total count and restore display format
+    n=${#commands[@]}
+    READLINE_LINE="${display_commands[$index]}"
+    READLINE_POINT=${#READLINE_LINE}
+}
+
+save_commands() {
+    # Save current line before writing to file
+    display_commands[$index]="$READLINE_LINE"
+
+    # Write display versions to preserve multi-line format (heredocs, backslash continuations)
+    printf "%s\n" "${display_commands[@]}" > "$CONFIG_FILE"
+    echo -e "\n${BGREEN}[Saved to $CONFIG_FILE]${RESET}"
+}
+
+# ============================================================================
+# READLINE KEY BINDINGS
+# ============================================================================
+
+# === ENTER KEY HOOK ===
+# Problem: bash's read -e collapses multi-line input (removes newlines) when
+# ENTER is pressed, making it impossible to distinguish between "user didn't
+# edit" vs "user removed newlines manually".
+#
+# Solution: Capture READLINE_LINE before the collapse happens using bind -x.
+# This preserves the original multi-line structure for both display and
+# heredoc execution.
+
+CAPTURED_READLINE_BUFFER=""  # Global to store captured buffer
+
+capture_line_before_accept() {
+    # Save buffer state with actual newlines preserved (before read collapses them)
+    CAPTURED_READLINE_BUFFER="$READLINE_LINE"
+}
+
+# Bind custom sequence to our capture function
+bind -x '"\C-x\C-m": capture_line_before_accept' 2>/dev/null
+
+# Make ENTER run: capture (Ctrl-X Ctrl-M), then accept-line (Ctrl-J)
+# Can't bind Ctrl-M directly with bind -x because it consumes the key
+bind '"\C-m": "\C-x\C-m\C-j"' 2>/dev/null
+
+# === ARROW KEYS AND ALTERNATIVE BINDINGS ===
+bind -x '"\e[A": browse_up' 2>/dev/null    # Up arrow
+bind -x '"\e[B": browse_down' 2>/dev/null  # Down arrow
+bind -x '"\C-p": browse_up' 2>/dev/null    # Ctrl-P (Emacs-style)
+bind -x '"\C-n": browse_down' 2>/dev/null  # Ctrl-N (Emacs-style)
+
+# === EDITING COMMANDS ===
+bind -x '"\C-d": duplicate_line' 2>/dev/null  # Ctrl-D: duplicate current line
+bind -x '"\C-l": insert_line' 2>/dev/null     # Ctrl-L: insert blank line above
+bind -x '"\C-k": delete_line' 2>/dev/null     # Ctrl-K: delete current line
+
+# === FILE OPERATIONS ===
+stty -ixon  # Disable terminal flow control (allows Ctrl-S)
+bind -x '"\C-s": save_commands' 2>/dev/null   # Ctrl-S: save to file
+
+# ============================================================================
+# MAIN EXECUTION LOOP
+# ============================================================================
+while true; do
+
+    # 1. ASSEMBLE THE PROMPT
+
+    # Determine displayable $cwd length for width calculation
+    cwd="$PWD"
+    cwd_display=""
+    if [[ "$cwd" == "$HOME"* ]]; then
+        cwd_display="~${cwd#$HOME}"
+    else
+        cwd_display="$cwd"
+    fi
+
+    # Final prompt string
+    prompt="${BOLD}${BYELLOW}[demo:$cwd_display]$ ${RESET}${YELLOW}"
+    prompt_bw="[demo:$cwd_display]$ "
+    PROMPT_DISPLAY_WIDTH="${#prompt_bw}"
+
+    # 2. READ COMMAND (Execution pauses here until ENTER is hit)
+    # Pass the display version to readline (with actual newlines for multi-line commands)
+    read -e -i "${display_commands[$index]}" -p "$prompt" usercmd || break
+
+    # 2b. CHECK IF WE CAPTURED THE LINE VIA ENTER HOOK
+    # If CAPTURED_READLINE_BUFFER is set, use it instead of $usercmd
+    # This preserves multi-line structure that would otherwise be lost
+    if [[ -n "$CAPTURED_READLINE_BUFFER" ]]; then
+        usercmd="$CAPTURED_READLINE_BUFFER"
+        CAPTURED_READLINE_BUFFER=""  # Clear for next iteration
+    fi
+
+    # Handle Ctrl-Z resume - save state and skip execution
+    if (( resume_after_fg )); then
+        resume_after_fg=0
+        commands[$index]=$(collapse_to_single_line "$usercmd")
+        display_commands[$index]="$usercmd"
+        continue  # Reprompt without executing
+    fi
+
+    # 3. PREPARE FOR EXECUTION
+
+    # Save user edits (preserves multi-line for display)
+    display_commands[$index]="$usercmd"
+
+    # Convert to single-line for execution
+    # (heredocs are preserved as-is, backslash continuations are collapsed)
+    usercmd_exec=$(collapse_to_single_line "$usercmd")
+
+    # Store both versions
+    commands[$index]="$usercmd_exec"        # Single-line executable version
+    display_cmd="$usercmd"                  # Original multi-line for display
+
+    # 4. SCREEN MANIPULATION (Erase and Re-display with Colors)
+
+    # Calculate how many lines to erase (command could wrap or have newlines)
+    lines_to_erase=$(calculate_lines "$usercmd" "$PROMPT_DISPLAY_WIDTH")
+
+    # Position cursor at start of command for re-display
+    # Multi-line: cursor is on last line, move up (lines - 1)
+    # Single-line: cursor moved to next line, move up (lines)
+    if [[ "$usercmd" == *$'\n'* ]]; then
+        moves_up=$((lines_to_erase - 1))
+    else
+        moves_up=$lines_to_erase
+    fi
+
+    # Move cursor up to beginning of command
+    for (( i=1; i<=moves_up; i++ )); do
+        printf "%s" "$MOVE_CURSOR_UP" >/dev/tty
+    done
+
+    # Split command into code and comment parts (for coloring)
+    car=${display_cmd%%#*}  # Code part (before #)
+    if [[ $display_cmd == "$car"* ]]; then
+        cdr=${display_cmd#"$car"}  # Comment part (# and after)
+    else
+        cdr=
+    fi
+
+    # Re-display command with syntax highlighting
+    if [[ "$display_cmd" == *$'\n'* ]]; then
+        # Multi-line command: print first line with prompt, continuation lines without
+        IFS=$'\n' read -rd '' -a lines <<< "$display_cmd"
+
+        # First line (with prompt)
+        first_line="${lines[0]}"
+        first_car=${first_line%%#*}
+        first_cdr=""
+        [[ $first_line == "$first_car"* ]] && first_cdr=${first_line#"$first_car"}
+        printf "\r%s%s%s%s%s%s\n" "$prompt" "${WHITE}" "$first_car" "${BBLUE}" "$first_cdr" "${RESET}" >/dev/tty
+
+        # Continuation lines (no prompt, just code)
+        for (( i=1; i<${#lines[@]}; i++ )); do
+            line="${lines[i]}"
+            line_car=${line%%#*}
+            line_cdr=""
+            [[ $line == "$line_car"* ]] && line_cdr=${line#"$line_car"}
+            printf "%s%s%s%s%s\n" "${WHITE}" "$line_car" "${BBLUE}" "$line_cdr" "${RESET}" >/dev/tty
+        done
+    else
+        # Single-line command
+        printf "\r%s%s%s%s%s%s\n" "$prompt" "${WHITE}" "$car" "${BBLUE}" "$cdr" "${RESET}" >/dev/tty
+    fi
+
+    # 5. EXECUTE THE COMMAND
+
+    eval "$usercmd_exec"
+    status=$?
+
+    # Add spacing after output (if command wasn't empty)
+    [[ -n "$car" ]] && echo
+
+    # Display error status if command failed
+    if [[ "$status" != 0 ]]; then
+        printf "%s[Error status: %s]%s\n" "$BRED" "$status" "$RESET"
+    fi
+
+    # 6. ADVANCE TO NEXT COMMAND
+
+    ((index++))
+    (( index >= n )) && break  # Exit when all commands executed
+done
