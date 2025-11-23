@@ -26,6 +26,7 @@ def store_blob(
     payload: bytes,
     encrypted: bool = False,
     management_key: str | None = None,
+    pin: str | None = None,
 ) -> bool:
     """
     Store a blob in the YubiKey store.
@@ -37,9 +38,10 @@ def store_blob(
         payload: Binary data to store
         encrypted: Whether to encrypt the payload
         management_key: Optional management key for write operations
+        pin: Optional PIN for PIN-protected management key mode
 
     Returns:
-        True if successful, False if store is full or operation failed
+        True if successful, False if successful, False if store is full or operation failed
 
     Raises:
         ValueError: If name is invalid
@@ -132,7 +134,7 @@ def store_blob(
         store.commit_object(obj)
 
     # Sync to device
-    store.sync(management_key)
+    store.sync(management_key, pin)
     return True
 
 
@@ -237,6 +239,7 @@ def remove_blob(
     piv: PivInterface,
     name: str,
     management_key: str | None = None,
+    pin: str | None = None,
 ) -> bool:
     """
     Remove a blob from the YubiKey store.
@@ -282,7 +285,7 @@ def remove_blob(
         obj = store.objects[next_index]
 
     # Sync to device
-    store.sync(management_key)
+    store.sync(management_key, pin)
     return True
 
 

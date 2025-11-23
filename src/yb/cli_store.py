@@ -51,8 +51,11 @@ def cli_store(
     ) -> None:
     ''''''
 
+    from yb.auxiliaries import get_management_key_for_write
+
     reader: str = ctx.obj['reader']
-    management_key: str | None = ctx.obj.get('management_key')
+    management_key: str | None = get_management_key_for_write(ctx)
+    pin: str | None = ctx.obj.get('pin')
     piv = ctx.obj['piv']
 
     # Determine blob name
@@ -86,6 +89,7 @@ def cli_store(
             payload=payload,
             encrypted=encrypted,
             management_key=management_key,
+            pin=pin,
         )
 
         if not success:
