@@ -440,10 +440,3 @@ pip install yubikey-manager
 
 - NIST SP 800-73-4: PIV Standard
 - NIST SP 800-78-4: Cryptographic algorithms for PIV
-
----
-
-**Maintainer**: Claude (Sonnet 4.5)
-**Tested On**: YubiKey 5.7.1, Serial 32283417
-**Implementation Date**: 2025-11-23
-**Verified**: Against official Yubico documentation

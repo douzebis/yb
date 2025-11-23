@@ -1641,18 +1641,8 @@ yb/
 │   ├── auxiliaries.py       # Helper functions
 │   ├── parse_int.py         # Integer parsing utilities
 │   └── x509_subject.py      # X.509 subject handling
-├── tests/
-│   └── test_store_comprehensive.py  # Comprehensive unit tests
-├── pyproject.toml           # Python package metadata
-├── default.nix              # Nix build configuration
-├── shell.nix                # Development shell
-├── README.md                # User documentation
-├── DESIGN.md                # Design documentation
-├── USER_GUIDE.md            # User guide
-├── TODO.md                  # Future work
-└── .cache/                  # Claude workspace
-    ├── README.md            # Development rules
-    └── CONTEXT.md           # Session context
+└── tests/
+    └── test_store_comprehensive.py  # Comprehensive unit tests
 ```
 
 ### External Documentation

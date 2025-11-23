@@ -426,9 +426,3 @@ The ykman Python API is **production-ready** for integration into yb:
 - ✅ Better developer experience (type safety, error handling)
 
 **Recommended approach**: Incremental adoption starting with Phase 1 (serial number support).
-
----
-
-**Author**: Claude (Sonnet 4.5)
-**Tested with**: YubiKey 5.7.1, Serial 32283437
-**Environment**: Nix shell, yubikey-manager 5.6.1
