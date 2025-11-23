@@ -13,71 +13,61 @@
 # Check which YubiKey is connected
 ykman list
 
-# Auto-detect serial number
+# Auto-detect serial number for credential changes
 SERIAL=$(ykman list | grep -o 'Serial: [0-9]*' | cut -d' ' -f2)
-echo "Using YubiKey serial: $SERIAL"
 
 # === STEP 2: CHANGE DEFAULT CREDENTIALS =====================================
 
 # Change PIN from factory default (123456) to a new PIN (654321)
-echo "Changing PIN from default 123456 to 654321..."
 ykman --device $SERIAL piv access change-pin --pin 123456 --new-pin 654321
 
 # Change PUK from factory default (12345678) to a new PUK (87654321)
-echo "Changing PUK from default 12345678 to 87654321..."
 ykman --device $SERIAL piv access change-puk --puk 12345678 --new-puk 87654321
 
 # Enable PIN-protected management key mode (generates random AES-192 key)
-# This stores the management key on the YubiKey, accessible only with PIN
-echo "Enabling PIN-protected management key mode..."
+# This stores the management key on-device, accessible only with PIN
+# With PIN-protected mode, you only need PIN for write operations!
 ykman --device $SERIAL piv access change-management-key --generate --protect --pin 654321
 
-# Verify the new configuration
-echo "Current PIV configuration:"
+# Verify the new configuration (notice "protected by PIN")
 ykman --device $SERIAL piv info
 
 # === STEP 3: FORMAT YUBIKEY FOR BLOB STORAGE ================================
 
 # Initialize yb store with encryption key generation
-# With PIN-protected mode, we only need --pin (no --key needed!)
-yb --serial $SERIAL --pin 654321 format --generate
+# From now on, you'll enter the PIN (654321) when prompted
+yb format --generate
 
 # === STEP 4: STORE A SECRET ==================================================
 
-# Store an encrypted secret (password, API key, etc.)
-echo "my-super-secret-password-123" | yb --serial $SERIAL --pin 654321 store --encrypted my-secret
+# Store an encrypted secret (you'll be prompted for PIN)
+echo "my-super-secret-password-123" | yb store --encrypted my-secret
 
-# Verify it was stored
-echo "Stored blobs:"
-yb --serial $SERIAL ls
+# List stored blobs (no credentials needed for read-only operations)
+yb ls
 
 # === STEP 5: RETRIEVE THE SECRET =============================================
 
-# Fetch the encrypted secret (requires PIN for decryption)
-echo "Retrieving secret..."
-yb --serial $SERIAL --pin 654321 fetch my-secret
-
-# === DEMO COMPLETE ===========================================================
-
-echo ""
-echo "✓ Demo complete!"
-echo ""
-echo "What we did:"
-echo "  1. Changed PIN from 123456 → 654321"
-echo "  2. Changed PUK from 12345678 → 87654321"
-echo "  3. Enabled PIN-protected management key mode"
-echo "  4. Initialized yb store with encryption"
-echo "  5. Stored and retrieved an encrypted secret"
-echo ""
-echo "Notice: With PIN-protected mode, you only need --pin for all operations!"
-echo "        No need to remember or store a 48-character management key."
-echo ""
-echo "Next steps:"
-echo "  - Store more secrets: yb --serial $SERIAL --pin 654321 store --encrypted <name>"
-echo "  - List all blobs:     yb --serial $SERIAL ls"
-echo "  - Remove a blob:      yb --serial $SERIAL --pin 654321 rm <name>"
-echo "  - See USER_GUIDE.md for complete documentation"
+# Fetch the encrypted secret (you'll be prompted for PIN for decryption)
+yb fetch my-secret
 
 # ============================================================================
-# END OF 3-MINUTE DEMO
+# DEMO COMPLETE
+# ============================================================================
+# What we did:
+#   1. Changed PIN from 123456 → 654321
+#   2. Changed PUK from 12345678 → 87654321
+#   3. Enabled PIN-protected management key mode
+#   4. Initialized yb store with encryption
+#   5. Stored and retrieved an encrypted secret
+#
+# Notice: With PIN-protected mode, you only need PIN for all operations!
+#         No need to remember or store a 48-character management key.
+#
+# Next steps:
+#   - Store more secrets:  yb store --encrypted <name>
+#   - List all blobs:      yb ls
+#   - Filter by pattern:   yb ls "*.txt"
+#   - Remove a blob:       yb rm <name>
+#   - See USER_GUIDE.md for complete documentation
 # ============================================================================
