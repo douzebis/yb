@@ -528,11 +528,16 @@ yb fetch [--output FILE] NAME
 
 ### list
 
-Display all stored blobs.
+Display stored blobs, optionally filtered by glob pattern.
 
 ```bash
-yb list [--long]
+yb ls [PATTERN]
 ```
+
+**Options**:
+- `PATTERN`: Optional glob pattern to filter blobs (default: `*` shows all)
+  - Supports wildcards: `*`, `?`, `[seq]`, `[!seq]`
+  - Examples: `*.txt`, `config*`, `test?`, `[!a]*`
 
 **Output** (per blob):
 - Encryption status (U=unencrypted, -=encrypted)
@@ -540,6 +545,8 @@ yb list [--long]
 - Unencrypted size
 - Modification timestamp
 - Blob name
+
+**Shell Completion**: Tab completion available for blob names
 
 ### remove
 
@@ -553,6 +560,8 @@ yb rm NAME
 - Sanitizes store first
 - Finds and resets all chunks of named blob
 - Marks objects as dirty for sync
+
+**Shell Completion**: Tab completion available for blob names
 
 ### fsck
 
@@ -1419,17 +1428,20 @@ yb --serial <TAB>
 #   87654321  -- YubiKey 5.4.3
 ```
 
-**Autocompletion for Blob Names** (cli_fetch.py):
-- `complete_blob_names()` function provides blob name completion for `fetch` command
-- Queries YubiKey store to list available blobs
-- Handles single-device auto-selection
-- Returns empty list if multiple devices without explicit `--serial/--reader`
-- Safe for shell completion (never fails loudly)
+**Autocompletion for Blob Names**:
+- `complete_blob_names()` (cli_fetch.py): Completion for `fetch` command
+- `complete_blob_names_for_ls()` (cli_list.py): Completion for `ls` command
+- `complete_blob_names_for_rm()` (cli_remove.py): Completion for `rm` command
+- All functions query YubiKey store to list available blobs
+- Handle single-device auto-selection
+- Return empty list if multiple devices without explicit `--serial/--reader`
+- Safe for shell completion (never fail loudly)
 
 **Usage**:
 ```bash
-yb fetch <TAB>
-# Shows list of stored blob names
+yb fetch <TAB>    # Shows blob names for retrieval
+yb ls <TAB>       # Shows blob names for filtering
+yb rm <TAB>       # Shows blob names for deletion
 ```
 
 **Implementation Details**:
@@ -1437,6 +1449,8 @@ yb fetch <TAB>
 - Zero overhead when not using completion (functions only called during TAB)
 - No dependencies on external completion libraries
 - Works with bash/zsh/fish via Click's built-in support
+- Completion functions create their own `HardwarePiv()` instance
+- Access parent context to check for `--serial` or `--reader` options
 
 ---
 
