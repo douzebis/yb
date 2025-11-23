@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: 2025 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+
+SPDX-License-Identifier: MIT
+-->
+
 # Implementation Summary: Phase 1, Phase 5, and Phase 6
 
 ## Overview

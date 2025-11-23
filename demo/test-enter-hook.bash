@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2025 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+#
+# SPDX-License-Identifier: MIT
+
 # Simple test for ENTER hook
 # Run with: bin/prompt demo/test-enter-hook.bash
 

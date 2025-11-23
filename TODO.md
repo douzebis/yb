@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: 2025 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+
+SPDX-License-Identifier: MIT
+-->
+
 # SPDX-FileCopyrightText: 2025 2025 Frederic Ruget <fred@atlant.is>
 #
 # SPDX-License-Identifier: MIT
