@@ -21,7 +21,9 @@ python3Packages.buildPythonApplication rec {
     owner = "douzebis";
     repo = "yb";
     rev = "v${version}";
-    hash = "";  # To be calculated with: nix-prefetch-url --unpack https://github.com/douzebis/yb/archive/v0.1.0.tar.gz
+    # To be calculated with: nix-prefetch-url \
+    # --unpack https://github.com/douzebis/yb/archive/v0.1.0.tar.gz
+    hash = "1023x8mpxyvd2ya35kkxb3rgb76hfc58pjhsgs7wwcnw9q9nyy55";
   };
 
   build-system = with python3Packages; [
@@ -33,7 +35,9 @@ python3Packages.buildPythonApplication rec {
     click
     cryptography
     prompt-toolkit
+    pyscard
     pyyaml
+    yubikey-manager
   ];
 
   buildInputs = [

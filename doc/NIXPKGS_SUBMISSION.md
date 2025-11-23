@@ -129,27 +129,26 @@ Note: The maintainer field is already set to `douzebis` in the template.
 ### 2.5 Test the Package Locally
 
 ```bash
+cd ~/nixpkgs
+
 # Build the package
 nix-build -A yb
 
 # Test that it runs
 ./result/bin/yb --help
-
-# Test with nix shell
-nix-shell -p yb --run "yb --help"
+./result/bin/yb format --help
 ```
 
 ### 2.6 Run Package Quality Checks
 
 ```bash
-# Format check (optional but recommended)
+cd ~/nixpkgs
+
+# Format check (recommended)
 nix fmt pkgs/by-name/yb/yb/package.nix
 
-# Check for issues
-nix-instantiate --eval --strict --json pkgs/by-name/yb/yb/package.nix
-
-# Ensure it evaluates without errors
-nix-build '<nixpkgs>' -A yb
+# Verify Python imports work
+nix-build -A yb
 ```
 
 ---
@@ -161,49 +160,65 @@ Before submitting, test the package thoroughly:
 ### 3.1 Basic Functionality Tests
 
 ```bash
-# Install in a clean nix-shell
-nix-shell -p yb
+cd ~/nixpkgs
 
-# Test help
-yb --help
-yb format --help
-yb store --help
+# Ensure the build is complete
+nix-build -A yb
+
+# Test all subcommands show help
+./result/bin/yb --help
+./result/bin/yb format --help
+./result/bin/yb store --help
+./result/bin/yb fetch --help
+./result/bin/yb ls --help
+./result/bin/yb rm --help
+./result/bin/yb fsck --help
 
 # Test with actual YubiKey (if available)
-yb format --generate
-echo "test-data" | yb store --encrypted test-blob
-yb ls
-yb fetch test-blob
-yb rm test-blob
+./result/bin/yb format --generate
+echo "test-data" | ./result/bin/yb store --encrypted test-blob
+./result/bin/yb ls
+./result/bin/yb fetch test-blob
+./result/bin/yb rm test-blob
 ```
 
 ### 3.2 Cross-Platform Testing (if possible)
 
 ```bash
-# Test on different architectures
-nix-build '<nixpkgs>' -A yb --argstr system x86_64-linux
-nix-build '<nixpkgs>' -A yb --argstr system aarch64-linux
+cd ~/nixpkgs
+
+# Test on different architectures (if available)
+nix-build -A yb --argstr system x86_64-linux
+nix-build -A yb --argstr system aarch64-linux
 ```
 
 ### 3.3 Check Dependencies
 
 ```bash
-# Verify all runtime dependencies are available
-nix-shell -p yb --run "which yubico-piv-tool"
-nix-shell -p yb --run "which pkcs11-tool"
-nix-shell -p yb --run "which openssl"
-nix-shell -p yb --run "which ykman"
+cd ~/nixpkgs
+
+# Verify runtime dependencies are properly wrapped
+# Create a temporary nix-shell with yb from local checkout
+nix-shell -E 'with import ./. {}; mkShell { buildInputs = [ yb ]; }' --run "which yubico-piv-tool"
+nix-shell -E 'with import ./. {}; mkShell { buildInputs = [ yb ]; }' --run "which pkcs11-tool"
+nix-shell -E 'with import ./. {}; mkShell { buildInputs = [ yb ]; }' --run "which openssl"
+nix-shell -E 'with import ./. {}; mkShell { buildInputs = [ yb ]; }' --run "which ykman"
+
+# Or simply check the wrapped executable has correct library paths
+ldd ./result/bin/.yb-wrapped | grep -i yubico
 ```
 
 ### 3.4 Installation Test
 
 ```bash
-# Test permanent installation in user profile
-nix-env -iA nixpkgs.yb
+cd ~/nixpkgs
+
+# Test installation from local nixpkgs
+nix-env -f . -iA yb
 
 # Verify it's in PATH
 which yb
-yb --version
+yb --help
 
 # Clean up
 nix-env -e yb
