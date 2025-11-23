@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: 2025 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+
+SPDX-License-Identifier: MIT
+-->
+
 # yb User Guide
 
 **yb** is a command-line tool for securely storing encrypted or unencrypted binary data on your YubiKey using its PIV (Personal Identity Verification) application.

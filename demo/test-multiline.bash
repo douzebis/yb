@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2025 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+#
+# SPDX-License-Identifier: MIT
+
 # Test file for bin/prompt multi-line handling
 # Run with: bin/prompt demo/test-multiline.bash
 

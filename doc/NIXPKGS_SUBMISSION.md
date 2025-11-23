@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: 2025 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+
+SPDX-License-Identifier: MIT
+-->
+
 # Nixpkgs Submission Guide for yb
 
 This guide walks through the complete process of submitting yb to nixpkgs.

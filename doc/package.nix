@@ -1,9 +1,6 @@
 # SPDX-FileCopyrightText: 2025 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
 #
 # SPDX-License-Identifier: MIT
-#
-# This is the nixpkgs-compatible package definition for yb.
-# It should be placed at: pkgs/by-name/yb/yb/package.nix in nixpkgs
 
 {
   lib,

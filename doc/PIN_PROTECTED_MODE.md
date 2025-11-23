@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: 2025 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+
+SPDX-License-Identifier: MIT
+-->
+
 # PIN-Protected Management Key Mode
 
 **Status**: ✅ Implemented (Phase 6)

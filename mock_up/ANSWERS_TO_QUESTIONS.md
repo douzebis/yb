@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: 2025 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+
+SPDX-License-Identifier: MIT
+-->
+
 # Answers to Fred's Questions
 
 **Date**: 2025-11-15
