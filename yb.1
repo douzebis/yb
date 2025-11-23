@@ -124,11 +124,41 @@ Arguments:
 Name(s) of blob(s) to retrieve. Tab completion available if shell completion is enabled.
 .RE
 .SS ls
-Display all blobs stored on the YubiKey.
+Display stored blobs, optionally filtered by glob pattern.
 .PP
 .B yb ls
+[\fIPATTERN\fR]
 .PP
-Lists all stored blobs with metadata. No options.
+Lists stored blobs with metadata. If PATTERN is specified, only blobs matching the glob pattern are shown.
+.PP
+Arguments:
+.RS
+.TP
+.I PATTERN
+Optional glob pattern to filter blob names (default: * shows all). Supports wildcards:
+.RS
+.TP
+.B *
+Matches everything
+.TP
+.B ?
+Matches any single character
+.TP
+.B [seq]
+Matches any character in seq
+.TP
+.B [!seq]
+Matches any character not in seq
+.RE
+.PP
+Examples:
+.B yb ls "*.txt"
+(only .txt files),
+.B yb ls "config*"
+(files starting with 'config'),
+.B yb ls "test?"
+(test1, test2, etc.)
+.RE
 .PP
 Output format (one blob per line):
 .RS
@@ -148,19 +178,21 @@ Last modification timestamp (YYYY-MM-DD HH:MM)
 Column 5: Name
 Blob name
 .RE
+.PP
+Shell completion: Tab completion available for blob names.
 .SS rm
 Remove a named blob from the YubiKey.
 .PP
 .B yb rm
 \fINAME\fR
 .PP
-Deletes the blob with the specified name, freeing its storage space. Requires PIN verification.
+Deletes the blob with the specified name, freeing its storage space. Requires management key authentication (prompts for PIN in PIN-protected mode).
 .PP
 Arguments:
 .RS
 .TP
 .I NAME
-Name of the blob to remove.
+Name of the blob to remove. Tab completion available if shell completion is enabled.
 .RE
 .SS fsck
 Perform integrity check and display low-level store information.
@@ -212,6 +244,14 @@ Example output:
 U  1       512  2025-06-01 13:36  vim-config
 -  3     10240  2025-06-02 09:15  backup
 .fi
+.SS Filter blobs by pattern
+.nf
+.B yb ls "*.txt"
+.B yb ls "config*"
+.B yb ls "backup-2025-??-??"
+.fi
+.PP
+Lists only blobs matching the specified glob pattern. The first example shows only .txt files, the second shows files starting with "config", and the third shows date-formatted backups.
 .SS Extract multiple blobs at once
 .nf
 .B yb fetch --extract ssh-key vim-config backup
@@ -307,7 +347,11 @@ Completion supports:
 .IP \(bu 2
 Serial numbers (--serial option)
 .IP \(bu 2
-Blob names (fetch command)
+Blob names for fetch command
+.IP \(bu 2
+Blob names for ls command (pattern filtering)
+.IP \(bu 2
+Blob names for rm command
 .SH FILES
 .TP
 .I ~/.config/yb/config.yaml

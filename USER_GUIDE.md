@@ -285,7 +285,7 @@ yb fetch --extract ssh-key app-config github-token
 
 ### Shell Completion
 
-Enable tab completion for blob names:
+Enable tab completion for various yb commands:
 
 ```bash
 # For bash
@@ -294,6 +294,12 @@ eval "$(_YB_COMPLETE=bash_source yb)"
 # For zsh
 eval "$(_YB_COMPLETE=zsh_source yb)"
 ```
+
+**What gets auto-completed:**
+- `--serial` option: Shows connected YubiKey serial numbers
+- `yb fetch <TAB>`: Shows blob names for retrieval
+- `yb ls <TAB>`: Shows blob names for filtering
+- `yb rm <TAB>`: Shows blob names for deletion
 
 ---
 
@@ -304,8 +310,21 @@ eval "$(_YB_COMPLETE=zsh_source yb)"
 See what's stored on your YubiKey:
 
 ```bash
+# List all blobs
 yb ls
+
+# Filter by pattern (supports glob wildcards)
+yb ls "*.txt"        # Only .txt files
+yb ls "config*"      # Files starting with 'config'
+yb ls "test?"        # test1, test2, etc.
+yb ls "[!a]*"        # Files NOT starting with 'a'
 ```
+
+**Glob Pattern Support**:
+- `*` - matches everything
+- `?` - matches any single character
+- `[seq]` - matches any character in seq
+- `[!seq]` - matches any character not in seq
 
 **Output format**:
 ```
@@ -321,6 +340,13 @@ U  1       10  2025-06-01 13:36  public-data
 4. **Modified**: Last modification timestamp
 5. **Name**: Blob name
 
+**Shell Completion**:
+Tab completion works for blob names:
+```bash
+yb ls <TAB>          # Shows all blob names
+yb ls conf<TAB>      # Completes to matching names
+```
+
 ### Remove a Blob
 
 Delete a blob by name:
@@ -330,9 +356,16 @@ yb rm blobname
 ```
 
 This will:
-1. **Prompt for confirmation** (PIN verification)
+1. **Prompt for confirmation** (PIN verification in PIN-protected mode)
 2. **Remove all chunks** of the named blob
 3. **Free the space** for new blobs
+
+**Shell Completion**:
+Tab completion works for blob names:
+```bash
+yb rm <TAB>          # Shows all blob names
+yb rm old<TAB>       # Completes to matching names
+```
 
 **Example**:
 ```bash
