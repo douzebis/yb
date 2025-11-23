@@ -23,6 +23,9 @@ Select YubiKey by PC/SC reader name. Legacy option, prefer --serial for multi-de
 .BR \-k ", " \-\-key " " \fIKEY\fR
 Management key for write operations. Specify 48 hexadecimal characters or use '-' to prompt interactively. If not specified, the YubiKey factory default management key is used.
 .TP
+.B \-\-allow\-defaults
+Allow operations even with default PIN/PUK/Management Key. This bypasses the default credential detection check. INSECURE - use only for testing/development.
+.TP
 .B \-\-debug
 Enable verbose debugging output showing encryption/decryption steps, PKCS#11 operations, and internal state.
 .TP
@@ -314,6 +317,9 @@ User configuration file (future feature)
 USB HID device nodes for YubiKey access
 .SH ENVIRONMENT
 .TP
+.B YB_SKIP_DEFAULT_CHECK
+If set to 1, skips the default credential detection check. INSECURE - use only for testing/development.
+.TP
 .B PYTHONPATH
 Must include yb source directory if running from source
 .TP
@@ -377,11 +383,39 @@ Management key stored in plaintext if provided on command line
 PIN can be locked after 3 failed attempts (requires reset)
 .IP \(bu 2
 Physical possession of YubiKey allows reading unencrypted blobs
+.SS Default Credential Detection
+.B yb
+automatically detects and refuses to operate on YubiKeys using default credentials (requires firmware 5.3+). Default credentials checked:
+.IP \(bu 2
+PIN: 123456
+.IP \(bu 2
+PUK: 12345678
+.IP \(bu 2
+Management Key: 010203040506070801020304050607080102030405060708
+.PP
+If defaults are detected,
+.B yb
+will refuse to operate and display instructions for changing credentials using
+.BR ykman .
+This check does NOT consume retry attempts and is safe to perform.
+.PP
+To bypass this check for testing (INSECURE):
+.IP \(bu 2
+Use
+.B \-\-allow\-defaults
+flag
+.IP \(bu 2
+Set
+.B YB_SKIP_DEFAULT_CHECK=1
+environment variable
 .SS Recommendations
 .IP \(bu 2
 Always use encryption for sensitive data
 .IP \(bu 2
-Change default YubiKey PIN from factory default (123456)
+Change ALL default credentials immediately (PIN, PUK, Management Key)
+.IP \(bu 2
+Use PIN-protected management key mode for convenience:
+.B ykman piv access change-management-key --generate --protect
 .IP \(bu 2
 Keep backups - YubiKey is not a backup solution
 .IP \(bu 2

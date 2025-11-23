@@ -602,6 +602,129 @@ yb fsck [--long]
 - Store operations with `--encrypted` read public key only (no PIN)
 - Format with `--generate` requires PIN for key generation
 
+**Default Credential Detection**:
+- yb uses the GET_METADATA command (YubiKey firmware 5.3+) to detect default credentials
+- Refuses operations if default PIN (123456), PUK (12345678), or Management Key are detected
+- This check does NOT consume retry attempts (safe to perform)
+- Can be bypassed with `--allow-defaults` flag for testing (INSECURE)
+- Can be skipped entirely with `YB_SKIP_DEFAULT_CHECK=1` environment variable
+- On firmware <5.3, displays warning but continues (cannot safely detect)
+
+**PIN-Protected Management Key Mode**:
+
+yb supports PIN-protected management key mode, where the YubiKey stores its management key on-device, encrypted and protected by the PIN. This significantly improves both security and usability.
+
+**How It Works**:
+1. User configures PIN-protected mode once: `ykman piv access change-management-key --generate --protect`
+2. ykman generates a cryptographically random AES-192 management key
+3. Key is stored in the PRINTED object (0x5FC109), readable only after PIN verification
+4. ADMIN DATA object (0x5FFF00) contains metadata indicating PIN-protected mode is active
+5. yb automatically detects this configuration on startup and uses it transparently
+
+**Implementation Details**:
+
+PIV Objects Used:
+- **ADMIN DATA (0x5FFF00)**: Contains TLV-encoded metadata with bitfield
+  - Bit 0x01: Management key stored (3DES mode)
+  - Bit 0x02: Management key stored (AES mode) - used by modern YubiKeys
+  - Bit 0x04: PIN-derived mode (deprecated, insecure - rejected by yb)
+- **PRINTED (0x5FC109)**: Contains TLV-encoded management key
+  - Format: `88 <len> [ 89 <len> <24-byte AES-192 key> ]`
+  - Accessible only after PIN verification
+
+Detection Algorithm (`src/yb/auxiliaries.py`):
+```python
+def detect_pin_protected_mode(reader, piv) -> tuple[bool, bool]:
+    # Read ADMIN DATA object
+    admin_data = piv.read_object(reader, 0x5FFF00)
+
+    # Parse TLV structure
+    parsed = parse_admin_data(admin_data)
+
+    # Check bitfield (0x01 or 0x02 indicates PIN-protected)
+    is_pin_protected = parsed['mgmt_key_stored']
+    is_pin_derived = parsed['pin_derived']  # Deprecated mode
+
+    return (is_pin_protected, is_pin_derived)
+```
+
+Key Retrieval Process (`src/yb/piv.py`):
+```python
+def _write_object_with_ykman(self, reader, id, input, pin):
+    # Use YubiKit Python API to retrieve management key
+    with device.open_connection(SmartCardConnection) as conn:
+        piv = PivSession(conn)
+        piv.verify_pin(pin)  # Unlock access to PRINTED
+
+        # Read and parse PRINTED object
+        printed_data = piv.get_object(0x5FC109)
+        # Parse TLV: 88 <len> [ 89 <len> <key-bytes> ]
+        key_bytes = parse_printed_tlv(printed_data)
+        management_key_hex = key_bytes.hex()
+
+    # Use yubico-piv-tool for actual write (handles APDU chunking)
+    subprocess.run(['yubico-piv-tool',
+                    '--reader', reader,
+                    f'--key={management_key_hex}',
+                    '--action', 'write-object', ...])
+```
+
+**Hybrid Approach Rationale**:
+- **YubiKit for retrieval**: Native Python API, automatic PIV applet selection, built-in PRINTED object support
+- **yubico-piv-tool for writing**: Production-tested APDU chunking for large objects (16KB+), proper error handling
+- YubiKit's `put_object()` doesn't support chunking, but yubico-piv-tool handles this correctly
+
+**User Experience**:
+
+Before PIN-protected mode:
+```bash
+# Must provide 48-character management key
+yb --key 010203040506070801020304050607080102030405060708 store myfile
+```
+
+After PIN-protected mode (one-time setup):
+```bash
+# Setup (once)
+ykman piv access change-management-key --generate --protect
+
+# Daily usage - just provide PIN!
+yb --pin 123456 store myfile
+yb --pin 123456 rm myfile
+yb --pin 123456 format
+```
+
+**Security Properties**:
+- ✅ Management key is cryptographically random (not default)
+- ✅ Key never leaves the YubiKey hardware
+- ✅ Requires PIN to access (physical possession + knowledge factor)
+- ✅ Automatically detected - users don't need to remember which mode is active
+- ⚠ PIN compromise grants full write access (vs. manual key management requiring both PIN and key)
+
+**Best Practices**:
+1. Change default PIN before enabling PIN-protected mode
+2. Use strong PIN (6-8 digits, avoid patterns like 123456 or birthdates)
+3. Change default PUK as well for recovery capability
+4. Understand that PIN protection is single-factor for write operations
+
+**Comparison to Manual Key Management**:
+
+| Aspect | PIN-Protected Mode | Manual Key Management |
+|--------|-------------------|----------------------|
+| Usability | ✅ Excellent (just PIN) | ❌ Poor (48-char hex) |
+| Security | ✅ Good (random + hardware-bound) | ✅ Good (if managed properly) |
+| Key Storage | ✅ On YubiKey | ❌ External (password manager, paper) |
+| Risk: Key Exposure | ✅ Low (never leaves device) | ⚠ Medium (stored externally) |
+| Risk: PIN Compromise | ⚠ Full access | ✅ Limited (still need key) |
+
+**Recommendation**: PIN-protected mode for most users. Manual key management only for:
+- High-security environments requiring two-factor device access (PIN + separate key custody)
+- Shared YubiKeys with separate management key custody
+- Compliance requirements mandating two-factor write authorization
+
+**Verification**: Implementation verified against official Yubico documentation:
+- [PIV PIN-only Mode](https://docs.yubico.com/yesdk/users-manual/application-piv/pin-only.html)
+- [PIV PIN, PUK, Management Key](https://docs.yubico.com/yesdk/users-manual/application-piv/pin-puk-mgmt-key.html)
+
 ### Limitations
 
 - No authentication/integrity for ciphertext (no MAC or AEAD)

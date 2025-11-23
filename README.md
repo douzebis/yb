@@ -136,6 +136,77 @@ Use --serial to select one, for example:
 
 ---
 
+## Security: Default Credential Detection
+
+For security, yb automatically checks if your YubiKey uses default credentials and refuses to operate if detected:
+
+- **Default PIN**: 123456
+- **Default PUK**: 12345678
+- **Default Management Key**: 010203040506070801020304050607080102030405060708
+
+If your YubiKey uses any default credentials, yb will display an error like:
+
+```
+Error: YubiKey is using default credentials (INSECURE):
+  - PIN (default: 123456, 3 attempts remaining)
+  - Management Key (default: 010203...)
+
+This is a security risk. Please change your YubiKey credentials:
+  - Change PIN: ykman piv access change-pin
+  - Change PUK: ykman piv access change-puk
+  - Change Management Key (recommended with PIN-protected mode):
+    ykman piv access change-management-key --generate --protect
+
+To proceed anyway (NOT RECOMMENDED), use --allow-defaults flag.
+```
+
+**Changing Your Credentials:**
+
+```shell
+# Change PIN
+ykman piv access change-pin
+
+# Change PUK
+ykman piv access change-puk
+
+# Change Management Key (recommended with PIN-protected mode)
+ykman piv access change-management-key --generate --protect
+```
+
+**Note**: This check requires YubiKey firmware 5.3 or later. On older firmware, yb will display a warning but continue.
+
+**For Testing/Development:**
+- Use `--allow-defaults` flag to bypass the check (insecure)
+- Set `YB_SKIP_DEFAULT_CHECK=1` environment variable to skip the check entirely
+
+---
+
+## PIN-Protected Management Key Mode
+
+For enhanced security and convenience, yb supports **PIN-protected management key mode**. This allows YubiKeys to store the management key on-device, encrypted and protected by your PIN.
+
+**Why use PIN-protected mode?**
+- ✓ More secure than default management key
+- ✓ More convenient - no need to provide 48-char hex key
+- ✓ You only need to remember your PIN
+- ✓ Management key never leaves the YubiKey
+
+**One-time setup:**
+```shell
+ykman piv access change-management-key --generate --protect
+```
+
+**Usage:**
+yb automatically detects PIN-protected mode - no `--key` flag needed:
+```shell
+yb store myfile           # Prompts for PIN if needed
+yb --pin 123456 store     # Non-interactive
+```
+
+See the [User Guide](USER_GUIDE.md) for more details.
+
+---
+
 ## License
 
 MIT License. See `LICENSE` for full text.

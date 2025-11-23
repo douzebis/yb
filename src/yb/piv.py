@@ -87,6 +87,7 @@ class PivInterface(ABC):
         id: int,
         input: bytes,
         management_key: str | None = None,
+        pin: str | None = None,
     ) -> None:
         """
         Write binary data to a PIV object slot on the device.
@@ -96,6 +97,7 @@ class PivInterface(ABC):
         - id: The numeric ID of the PIV object (e.g. 0x5fc105).
         - input: The binary content to write.
         - management_key: Optional 48-char hex management key.
+        - pin: Optional PIN for PIN-protected management key mode.
 
         Raises:
         - RuntimeError: If the write operation fails.
@@ -131,6 +133,35 @@ class PivInterface(ABC):
 
         Returns:
         - True if verification succeeds, False otherwise.
+        """
+        pass
+
+    @abstractmethod
+    def send_apdu(
+        self,
+        reader: Hashable,
+        cla: int,
+        ins: int,
+        p1: int,
+        p2: int,
+        data: bytes = b''
+    ) -> bytes:
+        """
+        Send raw APDU command to PIV application and return response.
+
+        Parameters:
+        - reader: The name of the reader to use.
+        - cla: Class byte of the APDU.
+        - ins: Instruction byte of the APDU.
+        - p1: Parameter 1 byte of the APDU.
+        - p2: Parameter 2 byte of the APDU.
+        - data: Optional data payload (default: empty).
+
+        Returns:
+        - Response data bytes (without status bytes).
+
+        Raises:
+        - RuntimeError: If APDU transmission fails or returns error status.
         """
         pass
 
@@ -272,6 +303,7 @@ class HardwarePiv(PivInterface):
         id: int,
         input: bytes,
         management_key: str | None = None,
+        pin: str | None = None,
     ) -> None:
         """
         Write binary data to a PIV object slot on the device using the specified reader.
@@ -281,14 +313,16 @@ class HardwarePiv(PivInterface):
         - id: The numeric ID of the PIV object (e.g. 0x5fc105 for the certificate slot).
         - input: The binary content to write.
         - management_key: Optional 48-char hex management key. If None, uses YubiKey default.
+        - pin: Optional PIN for PIN-protected management key mode.
 
         Raises:
         - RuntimeError: If the command fails or the write operation is unsuccessful.
         """
 
+
         cmd = [
             'yubico-piv-tool',
-            '--reader', reader,
+            '--reader', str(reader),
         ]
 
         # Add management key if provided
@@ -318,7 +352,6 @@ class HardwarePiv(PivInterface):
                     "Hint: If using a non-default management key, specify it with --key"
                 ) from e
             raise RuntimeError(f"Failed to write object: {error_msg}") from e
-
 
     def read_object(self, reader: Hashable, id: int) -> bytes:
         """
@@ -375,6 +408,89 @@ class HardwarePiv(PivInterface):
             return False
         return True
 
+    def send_apdu(
+        self,
+        reader: Hashable,
+        cla: int,
+        ins: int,
+        p1: int,
+        p2: int,
+        data: bytes = b''
+    ) -> bytes:
+        """
+        Send raw APDU command to YubiKey using pyscard library.
+
+        Implementation uses pyscard for direct smartcard communication.
+        Falls back with helpful error if pyscard is not installed.
+
+        Automatically selects the PIV applet before sending the command.
+
+        Parameters:
+        - reader: PC/SC reader name
+        - cla: Class byte
+        - ins: Instruction byte
+        - p1: Parameter 1
+        - p2: Parameter 2
+        - data: Optional command data
+
+        Returns:
+        - Response data (without SW1/SW2 status bytes)
+
+        Raises:
+        - RuntimeError: If pyscard unavailable, reader not found, or APDU fails
+        """
+        try:
+            from smartcard.System import readers
+        except ImportError as e:
+            raise RuntimeError(
+                "pyscard library required for APDU commands. "
+                "Install with: pip install pyscard"
+            ) from e
+
+        try:
+            # Find the reader
+            reader_list = readers()
+            card_reader = None
+            for r in reader_list:
+                if str(reader) in str(r):
+                    card_reader = r
+                    break
+
+            if not card_reader:
+                raise RuntimeError(f"Reader not found: {reader}")
+
+            # Connect to card
+            connection = card_reader.createConnection()
+            connection.connect()
+
+            # Select PIV applet first (AID: A0 00 00 03 08)
+            # This is required before sending any PIV-specific commands
+            select_apdu = [0x00, 0xA4, 0x04, 0x00, 0x05, 0xA0, 0x00, 0x00, 0x03, 0x08]
+            response, sw1, sw2 = connection.transmit(select_apdu)
+
+            if sw1 != 0x90 or sw2 != 0x00:
+                raise RuntimeError(f"Failed to select PIV applet: SW={sw1:02X}{sw2:02X}")
+
+            # Build the actual APDU
+            if data:
+                apdu = [cla, ins, p1, p2, len(data)] + list(data)
+            else:
+                apdu = [cla, ins, p1, p2, 0]  # Le=0 means expect up to 256 bytes
+
+            # Send APDU
+            response, sw1, sw2 = connection.transmit(apdu)
+
+            # Check status
+            if sw1 != 0x90 or sw2 != 0x00:
+                raise RuntimeError(f"APDU failed: SW={sw1:02X}{sw2:02X}")
+
+            return bytes(response)
+
+        except ImportError:
+            raise  # Re-raise ImportError as-is (already has helpful message)
+        except Exception as e:
+            raise RuntimeError(f"APDU transmission failed: {e}") from e
+
 
 class EmulatedPiv(PivInterface):
     """
@@ -387,12 +503,14 @@ class EmulatedPiv(PivInterface):
     class EmulatedDevice:
         """Represents a single emulated YubiKey device."""
 
-        def __init__(self, serial: int, version: str):
+        def __init__(self, serial: int, version: str, pin_protected: bool = False):
             self.serial = serial
             self.version = version
             self.reader = f"Emulated YubiKey {serial}"
             # PIV object storage: object_id -> bytes
             self.objects: dict[int, bytes] = {}
+            # Configuration flags
+            self.pin_protected = pin_protected  # Whether PIN-protected mode is enabled
 
     def __init__(self, ejection_probability: float = 0.0, seed: int | None = None):
         """
@@ -427,19 +545,37 @@ class EmulatedPiv(PivInterface):
         """
         self.is_ejected = False
 
-    def add_device(self, serial: int, version: str = "5.7.1") -> str:
+    def add_device(self, serial: int, version: str = "5.7.1", pin_protected: bool = False) -> str:
         """
         Add an emulated YubiKey device.
 
         Parameters:
             serial: YubiKey serial number
             version: YubiKey firmware version (default: "5.7.1")
+            pin_protected: Whether to emulate PIN-protected management key mode (default: False)
 
         Returns:
             Reader name for the newly added device
         """
-        device = EmulatedPiv.EmulatedDevice(serial, version)
+        device = EmulatedPiv.EmulatedDevice(serial, version, pin_protected)
         self._devices[serial] = device
+
+        # If PIN-protected mode, automatically create ADMIN DATA and PRINTED objects
+        if pin_protected:
+            # Create ADMIN DATA object indicating PIN-protected mode
+            # Format: 80 03 81 01 <bitfield>
+            # Bitfield: 0x01 = 3DES PIN-protected, 0x02 = AES PIN-protected
+            # Use 0x02 to simulate AES PIN-protected mode (like real YubiKeys with --protect)
+            admin_data = bytes([0x80, 0x03, 0x81, 0x01, 0x02])
+            device.objects[0x5FFF00] = admin_data
+
+            # Create PRINTED object with a test management key
+            # Format: 53 len 88 18 <24-byte key>
+            # Using a fixed test key for emulation
+            test_mgmt_key = bytes.fromhex('0102030405060708090a0b0c0d0e0f101112131415161718')
+            printed_data = bytes([0x53, 0x1A, 0x88, 0x18]) + test_mgmt_key
+            device.objects[0x5FC109] = printed_data
+
         return device.reader
 
     def list_readers(self) -> list[str]:
@@ -494,11 +630,13 @@ class EmulatedPiv(PivInterface):
         id: int,
         input: bytes,
         management_key: str | None = None,
+        pin: str | None = None,
     ) -> None:
         """
         Write object to emulated device storage.
 
         May raise EjectionError if ejection simulation is enabled and triggered.
+        Pin parameter is ignored in emulation (no authentication required).
         """
         # Check if device is already ejected
         if self.is_ejected:
@@ -534,3 +672,78 @@ class EmulatedPiv(PivInterface):
             return True
         except RuntimeError:
             return False
+
+    def send_apdu(
+        self,
+        reader: Hashable,
+        cla: int,
+        ins: int,
+        p1: int,
+        p2: int,
+        data: bytes = b''
+    ) -> bytes:
+        """
+        Emulate APDU responses for testing.
+
+        Supports GET_METADATA (INS 0xF7) for testing default credential detection.
+        Other APDUs are not implemented in emulation.
+
+        Parameters:
+        - reader: Reader name (must exist in emulated devices)
+        - cla: Class byte
+        - ins: Instruction byte
+        - p1: Parameter 1
+        - p2: Parameter 2
+        - data: Command data (unused in current implementation)
+
+        Returns:
+        - Emulated response data
+
+        Raises:
+        - RuntimeError: If reader not found or APDU not supported
+        """
+        # Verify reader exists and get device
+        device = self._get_device_by_reader(reader)
+
+        # GET_METADATA command (INS 0xF7)
+        if ins == 0xF7:
+            # Return mock metadata based on slot (P2)
+            # If device is PIN-protected, credentials should NOT be default
+
+            if p2 == 0x80:  # PIN metadata
+                if device.pin_protected:
+                    # PIN is NOT default (changed), 3 total retries, 3 remaining
+                    # Tag 0x05: is_default = 0x00 (NOT default)
+                    # Tag 0x06: retries = 0x03 0x03 (total=3, remaining=3)
+                    return bytes([0x05, 0x01, 0x00, 0x06, 0x02, 0x03, 0x03])
+                else:
+                    # Mock: PIN is default, 3 total retries, 3 remaining
+                    # Tag 0x05: is_default = 0x01 (default)
+                    # Tag 0x06: retries = 0x03 0x03 (total=3, remaining=3)
+                    return bytes([0x05, 0x01, 0x01, 0x06, 0x02, 0x03, 0x03])
+
+            elif p2 == 0x81:  # PUK metadata
+                if device.pin_protected:
+                    # PUK is NOT default (changed)
+                    return bytes([0x05, 0x01, 0x00, 0x06, 0x02, 0x03, 0x03])
+                else:
+                    # Mock: PUK is default
+                    return bytes([0x05, 0x01, 0x01, 0x06, 0x02, 0x03, 0x03])
+
+            elif p2 == 0x9B:  # Management key metadata
+                if device.pin_protected:
+                    # Management key is NOT default (stored in PRINTED)
+                    # Tag 0x01: algorithm = 0x03 (3DES)
+                    # Tag 0x05: is_default = 0x00 (NOT default)
+                    return bytes([0x01, 0x01, 0x03, 0x05, 0x01, 0x00])
+                else:
+                    # Mock: Management key is default
+                    # Tag 0x01: algorithm = 0x03 (3DES)
+                    # Tag 0x05: is_default = 0x01 (default)
+                    return bytes([0x01, 0x01, 0x03, 0x05, 0x01, 0x01])
+
+            else:
+                raise RuntimeError(f"Unsupported metadata slot: {p2:#x}")
+
+        # Other APDUs not implemented in emulation
+        raise RuntimeError(f"Unsupported APDU in emulation: INS={ins:#x}")

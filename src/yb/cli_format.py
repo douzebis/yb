@@ -104,8 +104,10 @@ def cli_format(ctx,
     except ValueError as e:
         raise click.ClickException(f'Invalid subject: {e}')
 
+    from yb.auxiliaries import get_management_key_for_write
+
     reader: str = ctx.obj['reader']
-    management_key: str | None = ctx.obj.get('management_key')
+    management_key: str | None = get_management_key_for_write(ctx)
     pin: str | None = ctx.obj.get('pin')
     piv = ctx.obj['piv']
     debug = ctx.obj.get('debug', False)
@@ -157,5 +159,5 @@ def cli_format(ctx,
         )
         store.commit_object(obj)
 
-    store.sync(management_key)
+    store.sync(management_key, pin)
     

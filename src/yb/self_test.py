@@ -484,6 +484,7 @@ def run_test_operations(
                     elif is_full_error:
                         # Store is full - undo the toy store update
                         if was_updating:
+                            assert old_value is not None
                             toy_fs.files[op.name] = old_value  # Restore old value
                         else:
                             del toy_fs.files[op.name]  # Remove the optimistic add
@@ -491,6 +492,7 @@ def run_test_operations(
                     else:
                         # Real error - undo the toy store update
                         if was_updating:
+                            assert old_value is not None
                             toy_fs.files[op.name] = old_value
                         else:
                             del toy_fs.files[op.name]
@@ -510,7 +512,8 @@ def run_test_operations(
                         # Blob shouldn't exist
                         success = (payload is None)
                         if not success:
-                            error_msg = f"Op #{i+1} FETCH({op.name}): expected not found, but got {len(payload)} bytes"
+                            len_payload = 0 if payload is None else len(payload)
+                            error_msg = f"Op #{i+1} FETCH({op.name}): expected not found, but got {len_payload} bytes"
                     else:
                         # Blob should exist
                         if payload is None:

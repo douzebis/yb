@@ -4,6 +4,7 @@
 #
 # SPDX-License-Identifier: MIT
 
+import os
 import sys
 from typing import Hashable
 
@@ -135,7 +136,8 @@ def validate_management_key(key: str) -> str:
     '-k', '--key',
     type=str,
     default=None,
-    help='Management key as 48-char hex string, or "-" to prompt (default: YubiKey default key)'
+    help='Management key as 48-char hex string, or "-" to prompt. '
+         'Not needed if YubiKey uses PIN-protected management key mode.'
 )
 @click.option(
     '--pin',
@@ -150,6 +152,12 @@ def validate_management_key(key: str) -> str:
     hidden=True,
     help='Enable debug instrumentation (hidden flag for troubleshooting)'
 )
+@click.option(
+    '--allow-defaults',
+    is_flag=True,
+    default=False,
+    help='Allow operations even with default PIN/PUK/Management Key (INSECURE)'
+)
 @click.pass_context
 def cli(
     ctx,
@@ -158,6 +166,7 @@ def cli(
     key: str | None,
     pin: str | None,
     debug: bool,
+    allow_defaults: bool,
 ) -> None:
     """CLI tool for managing cryptographic operations."""
 
@@ -277,9 +286,41 @@ def cli(
                     'Use the --reader option to select one.'
                 )
 
+    # Check for default credentials (unless YB_SKIP_DEFAULT_CHECK is set)
+    if not os.environ.get('YB_SKIP_DEFAULT_CHECK'):
+        from yb.auxiliaries import check_for_default_credentials
+        check_for_default_credentials(
+            reader=chosen_reader,
+            piv=piv,
+            allow_defaults=allow_defaults
+        )
+
+    # Detect PIN-protected management key mode
+    pin_protected = False
+    pin_derived = False
+    try:
+        from yb.auxiliaries import detect_pin_protected_mode
+        pin_protected, pin_derived = detect_pin_protected_mode(chosen_reader, piv)
+
+        # Reject PIN-derived mode (deprecated and insecure)
+        if pin_derived:
+            raise click.ClickException(
+                "PIN-derived management key mode detected (insecure, deprecated).\n\n"
+                "This mode is no longer supported due to security concerns.\n"
+                "Please reconfigure with PIN-protected mode instead:\n"
+                "  ykman piv access change-management-key --generate --protect"
+            )
+
+    except click.ClickException:
+        raise  # Re-raise ClickException as-is
+    except Exception:
+        # Detection failed, assume not PIN-protected
+        pin_protected = False
+
     # Process management key
     management_key: str | None = None
     if key is not None:
+        # User explicitly provided --key, use it (overrides PIN-protected mode)
         if key == '-':
             # Prompt for key (hidden input)
             key_input = click.prompt(
@@ -291,6 +332,13 @@ def cli(
         else:
             # Validate provided key
             management_key = validate_management_key(key)
+    elif pin_protected:
+        # YubiKey is PIN-protected, management key will be retrieved lazily
+        # when first needed (see write commands)
+        pass
+    else:
+        # Not PIN-protected, no --key provided: use default management key
+        management_key = None
 
     ctx.ensure_object(dict)  # Ensure ctx.obj is a dict
     ctx.obj['reader'] = chosen_reader  # Store chosen reader in context
@@ -298,6 +346,8 @@ def cli(
     ctx.obj['pin'] = pin  # Store PIN in context
     ctx.obj['piv'] = piv  # Store PIV interface in context
     ctx.obj['debug'] = debug  # Store --debug flag in context
+    ctx.obj['allow_defaults'] = allow_defaults  # Store --allow-defaults flag in context
+    ctx.obj['pin_protected_mode'] = pin_protected  # Store PIN-protected mode flag
 
 cli.add_command(cli_fsck)
 cli.add_command(cli_fetch)

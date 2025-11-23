@@ -507,6 +507,45 @@ yb --key=0102030405... format --generate
 
 **Default**: YubiKey factory default management key is used if not specified.
 
+### PIN-Protected Management Key Mode (Recommended)
+
+YubiKeys can store the management key on-device, encrypted and protected by your PIN. This is the **recommended** setup for security and convenience.
+
+**Benefits**:
+- More secure than default management key
+- More convenient than manually providing 48-char hex key
+- You only need to remember your PIN
+- Management key never leaves the YubiKey
+
+**Setup** (one-time):
+```bash
+# Generate random management key and store it PIN-protected
+ykman piv access change-management-key --generate --protect
+```
+
+**Usage**:
+Once configured, `yb` automatically detects and uses PIN-protected mode:
+
+```bash
+# No --key needed! Management key retrieved automatically from YubiKey
+yb store myfile           # Will prompt for PIN if needed
+yb --pin 123456 store     # Non-interactive with PIN
+```
+
+**How it works**:
+1. `yb` reads ADMIN DATA object to detect PIN-protected mode
+2. When write operation needed, prompts for PIN (if not provided via `--pin`)
+3. After PIN verification, reads management key from PRINTED object
+4. Uses retrieved key for the operation
+
+**Override**:
+You can still explicitly provide `--key` to override PIN-protected mode:
+```bash
+yb --key 010203...0708 store myfile
+```
+
+**Note**: PIN-protected mode automatically uses non-default credentials, so you won't see default credential warnings.
+
 ### Debug Mode
 
 Enable verbose debugging output:
@@ -658,13 +697,49 @@ yb --serial 12345678 ls
 
 ## Security Best Practices
 
-### Change Default PIN
+### Default Credential Detection
 
-YubiKey ships with default PIN `123456`. Change it immediately:
+**yb automatically checks for default credentials** and refuses to operate if detected. This prevents accidental use of insecure default values.
+
+**Default credentials checked**:
+- **PIN**: 123456
+- **PUK**: 12345678
+- **Management Key**: 010203040506070801020304050607080102030405060708
+
+If defaults are detected, yb will show:
+
+```
+Error: YubiKey is using default credentials (INSECURE):
+  - PIN (default: 123456, 3 attempts remaining)
+  - Management Key (default: 010203...)
+
+This is a security risk. Please change your YubiKey credentials:
+  - Change PIN: ykman piv access change-pin
+  - Change PUK: ykman piv access change-puk
+  - Change Management Key (recommended with PIN-protected mode):
+    ykman piv access change-management-key --generate --protect
+
+To proceed anyway (NOT RECOMMENDED), use --allow-defaults flag.
+```
+
+**Change all default credentials immediately**:
 
 ```bash
+# Change PIN (default: 123456)
 ykman piv access change-pin
+
+# Change PUK (default: 12345678)
+ykman piv access change-puk
+
+# Change Management Key (recommended with PIN-protected mode)
+ykman piv access change-management-key --generate --protect
 ```
+
+**Note**: This check requires YubiKey firmware 5.3+. On older firmware, yb displays a warning but continues.
+
+**For testing/development only**:
+- Use `--allow-defaults` flag to bypass (INSECURE)
+- Set `YB_SKIP_DEFAULT_CHECK=1` environment variable to skip
 
 ### Backup Your Data
 

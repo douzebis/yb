@@ -28,6 +28,7 @@ let
 
     propagatedBuildInputs = [
       pkgs.opensc
+      pkgs.openssl
       pkgs.yubico-piv-tool
       pkgs.yubikey-manager
       pythonPkgs.click
@@ -70,6 +71,7 @@ let
     buildInputs = [
 
       pkgs.opensc
+      pkgs.openssl
       pkgs.reuse
       pkgs.yubico-piv-tool
       pkgs.yubikey-manager
