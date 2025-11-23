@@ -41,58 +41,68 @@ class ScardSmartCardConnection(Protocol):
         ...
 
 
-def flash_yubikey_continuously(serial: int, stop_event: threading.Event) -> None:
+def flash_yubikey_continuously(device_obj, stop_event: threading.Event) -> None:
     """
-    Flash the LED of the YubiKey with the given serial number continuously.
+    Flash the LED of the YubiKey continuously.
+
+    Args:
+        device_obj: The ykman device object to flash
+        stop_event: Event to signal when to stop flashing
 
     Continues flashing until stop_event is set.
     """
     try:
-        from ykman.device import list_all_devices
         from yubikit.core.smartcard import SmartCardConnection
 
-        devices = list_all_devices()
-        device_obj = None
-        for device, info in devices:
-            if info.serial == serial:
-                device_obj = device
-                break
+        # Keep connection open for the entire flashing period
+        # This avoids the overhead of reopening the connection each time
+        with device_obj.open_connection(SmartCardConnection) as _conn:
+            conn = cast(ScardSmartCardConnection, _conn)
 
-        if device_obj is None:
-            return
+            # PIV AID: A0 00 00 03 08
+            piv_aid = [0xA0, 0x00, 0x00, 0x03, 0x08]
+            select_apdu = [0x00, 0xA4, 0x04, 0x00, len(piv_aid)] + piv_aid
 
-        # Flash continuously until stopped
-        while not stop_event.is_set():
-            try:
-                with device_obj.open_connection(SmartCardConnection) as _conn:
-                    conn = cast(ScardSmartCardConnection, _conn)
+            # Flash continuously until stopped
+            while not stop_event.is_set():
+                try:
                     # SELECT PIV application - causes LED flash
-                    # PIV AID: A0 00 00 03 08
-                    piv_aid = [0xA0, 0x00, 0x00, 0x03, 0x08]
-                    apdu = [0x00, 0xA4, 0x04, 0x00, len(piv_aid)] + piv_aid
-                    conn.connection.transmit(apdu)
+                    conn.connection.transmit(select_apdu)
 
-                # Wait a bit before next flash (avoid excessive polling)
-                # Check stop_event more frequently for responsiveness
-                for _ in range(3):  # 3 x 100ms = 300ms between flashes
-                    if stop_event.is_set():
-                        break
-                    time.sleep(0.1)
-            except Exception:
-                # Ignore errors and continue flashing
-                if not stop_event.is_set():
-                    time.sleep(0.1)
+                    # Wait a bit before next flash
+                    # Check stop_event more frequently for responsiveness
+                    for _ in range(2):  # 2 x 100ms = 200ms between flashes
+                        if stop_event.is_set():
+                            break
+                        time.sleep(0.1)
+
+                except Exception:
+                    # If transmission fails, break out and close connection
+                    # (device might have been removed)
+                    break
+
     except Exception:
-        # Silently ignore errors during flashing
+        # Silently ignore errors during flashing setup
         pass
 
 
 class YubiKeySelector:
     """Interactive YubiKey selector with arrow-key navigation and LED feedback."""
 
-    def __init__(self, devices: list[tuple[int | None, str]]) -> None:
-        """Initialize the selector with a list of (serial, version) tuples."""
+    def __init__(
+        self,
+        devices: list[tuple[int | None, str]],
+        device_objects: list
+    ) -> None:
+        """
+        Initialize the selector with device information.
+
+        Args:
+            devices: List of (serial, version) tuples for display
+            device_objects: List of ykman device objects for flashing
+        """
         self.devices = devices
+        self.device_objects = device_objects
         self.selected_index = 0
         self.selected_serial: int | None = None
         self.flash_thread: threading.Thread | None = None
@@ -130,15 +140,17 @@ class YubiKeySelector:
             self.flash_thread.join(timeout=0.5)
 
         # Start new flashing thread for currently selected device
-        if 0 <= self.selected_index < len(self.devices):
-            serial = self.devices[self.selected_index][0]
-            self.stop_flash_event = threading.Event()
-            self.flash_thread = threading.Thread(
-                target=flash_yubikey_continuously,
-                args=(serial, self.stop_flash_event),
-                daemon=True
-            )
-            self.flash_thread.start()
+        if 0 <= self.selected_index < len(self.device_objects):
+            device_obj = self.device_objects[self.selected_index]
+            # Only flash if we have a valid device object
+            if device_obj is not None:
+                self.stop_flash_event = threading.Event()
+                self.flash_thread = threading.Thread(
+                    target=flash_yubikey_continuously,
+                    args=(device_obj, self.stop_flash_event),
+                    daemon=True
+                )
+                self.flash_thread.start()
 
     def move_up(self) -> None:
         """Move selection up."""
@@ -217,8 +229,35 @@ def select_yubikey_interactively(devices: list[tuple[int | None, str, Hashable]]
     Raises:
         ImportError: If prompt_toolkit is not available
     """
-    # Extract (serial, version) tuples for the selector
-    device_list = [(serial, version) for serial, version, _ in devices]
+    try:
+        from ykman.device import list_all_devices
 
-    selector = YubiKeySelector(device_list)
-    return selector.run()
+        # Get device objects from ykman (needed for flashing)
+        # Only enumerate once, not repeatedly!
+        all_devices = list_all_devices()
+
+        # Match devices to the ones we were given (by serial number)
+        device_objects = []
+        device_list = []
+        for serial, version, _ in devices:
+            for dev_obj, dev_info in all_devices:
+                if dev_info.serial == serial:
+                    device_objects.append(dev_obj)
+                    device_list.append((serial, version))
+                    break
+
+        if not device_objects:
+            # Fallback: if we can't match devices, just show the list without flashing
+            device_list = [(serial, version) for serial, version, _ in devices]
+            # Create dummy objects
+            device_objects = [None] * len(device_list)
+
+        selector = YubiKeySelector(device_list, device_objects)
+        return selector.run()
+
+    except ImportError:
+        # If ykman not available, fall back to simple selector without flashing
+        device_list = [(serial, version) for serial, version, _ in devices]
+        device_objects = [None] * len(device_list)
+        selector = YubiKeySelector(device_list, device_objects)
+        return selector.run()
