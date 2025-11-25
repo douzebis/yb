@@ -4,6 +4,8 @@ SPDX-FileCopyrightText: 2025 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
 SPDX-License-Identifier: MIT
 -->
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/douzebis/yb)
+
 # yb — Secure Blob Storage in Your YubiKey
 
 **yb** is a command-line tool for securely storing, retrieving, and managing
