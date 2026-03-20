@@ -188,7 +188,7 @@ impl PcscSession {
         let (p1, block_size) = match key_bytes.len() {
             24 => (0x03u8, 8usize),  // 3DES
             16 => (0x08u8, 16usize), // AES-128
-            32 => (0x0Eu8, 16usize), // AES-256
+            32 => (0x0Cu8, 16usize), // AES-256
             n => bail!("unsupported management key length: {n} bytes"),
         };
 
@@ -246,8 +246,10 @@ impl PcscSession {
         slot: u8,
         peer_point: &[u8],
     ) -> Result<Vec<u8>> {
-        // Data: 7C <len> [ 85 <len> <peer-uncompressed-point> ]
-        let inner = encode_tlv(0x85, peer_point);
+        // Data: 7C <len> [ 82 00  85 <len> <peer-uncompressed-point> ]
+        // Tag 82 00 is the empty response placeholder (required by spec).
+        let mut inner = vec![0x82, 0x00];
+        inner.extend(encode_tlv(0x85, peer_point));
         let outer = encode_tlv(0x7C, &inner);
 
         let mut apdu = vec![0x00, 0x87, 0x11, slot]; // P1=0x11 = ECC P-256
