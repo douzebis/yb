@@ -2,13 +2,4 @@
 #
 # SPDX-License-Identifier: MIT
 
-/.env
-/.cache/
-/.venv/
-/dist/
-/src/yb.egg-info/
-/yb.code-workspace
-/__pycache__
-/result*
-/rust/target/
-
+(import ./default.nix {}).devShell
