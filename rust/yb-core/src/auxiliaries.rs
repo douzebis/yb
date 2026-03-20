@@ -5,8 +5,6 @@
 //! Auxiliary helpers: TLV parsing, default-credential checks, PIN-protected
 //! management-key retrieval.
 
-#![allow(dead_code)]
-
 use crate::piv::PivBackend;
 use anyhow::{bail, Result};
 use std::collections::HashMap;
@@ -27,28 +25,17 @@ const TAG_IS_DEFAULT: u8 = 0x05;
 // TLV parser
 // ---------------------------------------------------------------------------
 
-/// Parse a flat DER/BER TLV sequence into a tag→value map.
-/// Only single-byte tags are supported (sufficient for YubiKey metadata).
-pub fn parse_tlv(data: &[u8]) -> HashMap<u8, Vec<u8>> {
+/// Parse a flat BER-TLV sequence (single-byte tags) into a tag→value map.
+pub(crate) fn parse_tlv_flat(data: &[u8]) -> HashMap<u8, Vec<u8>> {
     let mut map = HashMap::new();
     let mut i = 0;
-    while i + 1 < data.len() {
+    while i < data.len() {
         let tag = data[i];
         i += 1;
-        // Length encoding.
-        let (len, consumed) = if data[i] & 0x80 == 0 {
-            (data[i] as usize, 1)
-        } else {
-            let n_bytes = (data[i] & 0x7f) as usize;
-            if i + n_bytes >= data.len() {
-                break;
-            }
-            let mut len = 0usize;
-            for b in &data[i + 1..i + 1 + n_bytes] {
-                len = (len << 8) | (*b as usize);
-            }
-            (len, 1 + n_bytes)
-        };
+        if i >= data.len() {
+            break;
+        }
+        let (len, consumed) = decode_tlv_length(&data[i..]);
         i += consumed;
         if i + len > data.len() {
             break;
@@ -57,6 +44,55 @@ pub fn parse_tlv(data: &[u8]) -> HashMap<u8, Vec<u8>> {
         i += len;
     }
     map
+}
+
+pub(crate) fn decode_tlv_length(data: &[u8]) -> (usize, usize) {
+    if data.is_empty() {
+        return (0, 0);
+    }
+    if data[0] & 0x80 == 0 {
+        (data[0] as usize, 1)
+    } else {
+        let n = (data[0] & 0x7f) as usize;
+        if data.len() < 1 + n {
+            return (0, 1);
+        }
+        let mut len = 0usize;
+        for b in &data[1..1 + n] {
+            len = (len << 8) | (*b as usize);
+        }
+        (len, 1 + n)
+    }
+}
+
+/// Parse `88 <len> [ 89 <len> <key_bytes> ]` from the PRINTED object value.
+pub(crate) fn extract_pin_protected_key(raw: &[u8]) -> Result<String> {
+    let outer = parse_tlv_flat(raw);
+    let inner_bytes = outer
+        .get(&0x88)
+        .ok_or_else(|| anyhow::anyhow!("PRINTED object missing tag 0x88"))?;
+    let inner = parse_tlv_flat(inner_bytes);
+    let key_bytes = inner
+        .get(&0x89)
+        .ok_or_else(|| anyhow::anyhow!("PRINTED object missing tag 0x89 inside 0x88"))?;
+    Ok(hex::encode(key_bytes))
+}
+
+/// Parse a `/`-separated subject string like `"CN=foo/O=bar"` into an rcgen `DistinguishedName`.
+pub(crate) fn parse_subject_dn(subject: &str) -> rcgen::DistinguishedName {
+    use rcgen::{DistinguishedName, DnType};
+    let mut dn = DistinguishedName::new();
+    for part in subject.split('/').filter(|s| !s.is_empty()) {
+        if let Some((k, v)) = part.split_once('=') {
+            match k.trim() {
+                "CN" => dn.push(DnType::CommonName, v.trim()),
+                "O" => dn.push(DnType::OrganizationName, v.trim()),
+                "OU" => dn.push(DnType::OrganizationalUnitName, v.trim()),
+                _ => {}
+            }
+        }
+    }
+    dn
 }
 
 // ---------------------------------------------------------------------------
@@ -86,7 +122,7 @@ pub fn check_for_default_credentials(
                 return Ok(());
             }
             Ok(resp) => {
-                let tlv = parse_tlv(&resp);
+                let tlv = parse_tlv_flat(&resp);
                 if tlv.get(&TAG_IS_DEFAULT).map(|v| v.first()) == Some(Some(&0x01)) {
                     defaults_found.push(label);
                 }
@@ -119,6 +155,7 @@ pub fn check_for_default_credentials(
 /// Parsed contents of the ADMIN DATA object (0x5FFF00).
 #[derive(Debug, Default)]
 pub struct AdminData {
+    #[allow(dead_code)]
     pub puk_blocked: bool,
     pub mgmt_key_stored: bool,
     pub pin_derived: bool,
@@ -131,14 +168,14 @@ pub fn parse_admin_data(reader: &str, piv: &dyn PivBackend) -> Result<AdminData>
         Ok(r) => r,
     };
 
-    let tlv = parse_tlv(&raw);
+    let tlv = parse_tlv_flat(&raw);
     // Tag 0x80 contains a nested TLV; tag 0x81 inside holds the bitfield.
     // Bits 0x01/0x02: mgmt key stored in PRINTED object (PIN-protected mode).
     // Bit 0x04: PIN-derived (deprecated).
     let flags = tlv
         .get(&0x80)
         .and_then(|inner_bytes| {
-            let inner = parse_tlv(inner_bytes);
+            let inner = parse_tlv_flat(inner_bytes);
             inner.get(&0x81).and_then(|v| v.first()).copied()
         })
         .unwrap_or(0);
@@ -171,18 +208,7 @@ pub fn get_pin_protected_management_key(
     let mut session = PcscSession::open(reader)?;
     session.verify_pin(pin)?;
     let raw = session.get_data(OBJ_PRINTED)?;
-
-    // TLV structure: 88 <len> [ 89 <len> <key_bytes> ]
-    let outer = parse_tlv(&raw);
-    let inner_bytes = outer
-        .get(&0x88)
-        .ok_or_else(|| anyhow::anyhow!("PRINTED object missing tag 0x88"))?;
-    let inner = parse_tlv(inner_bytes);
-    let key_bytes = inner
-        .get(&0x89)
-        .ok_or_else(|| anyhow::anyhow!("PRINTED object missing tag 0x89 inside 0x88"))?;
-
-    Ok(hex::encode(key_bytes))
+    extract_pin_protected_key(&raw)
 }
 
 // ---------------------------------------------------------------------------
@@ -197,14 +223,14 @@ mod tests {
     fn tlv_simple() {
         // tag=0x05, len=1, value=0x01
         let data = [0x05u8, 0x01, 0x01];
-        let map = parse_tlv(&data);
+        let map = parse_tlv_flat(&data);
         assert_eq!(map.get(&0x05), Some(&vec![0x01u8]));
     }
 
     #[test]
     fn tlv_multi_tag() {
         let data = [0x05u8, 0x01, 0x00, 0x06, 0x02, 0x03, 0x04];
-        let map = parse_tlv(&data);
+        let map = parse_tlv_flat(&data);
         assert_eq!(map.get(&0x05), Some(&vec![0x00u8]));
         assert_eq!(map.get(&0x06), Some(&vec![0x03u8, 0x04u8]));
     }
@@ -213,7 +239,7 @@ mod tests {
     fn tlv_long_form_length() {
         // tag=0x01, length encoded as 0x81 0x03 (long form, 3 bytes), value=[0xAA,0xBB,0xCC]
         let data = [0x01u8, 0x81, 0x03, 0xAA, 0xBB, 0xCC];
-        let map = parse_tlv(&data);
+        let map = parse_tlv_flat(&data);
         assert_eq!(map.get(&0x01), Some(&vec![0xAAu8, 0xBB, 0xCC]));
     }
 }

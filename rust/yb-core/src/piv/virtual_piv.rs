@@ -16,6 +16,7 @@
 //! confuse them with production YubiKey credentials.
 
 use super::{DeviceInfo, PivBackend};
+use crate::auxiliaries::{extract_pin_protected_key, OBJ_PRINTED};
 use anyhow::{anyhow, bail, Result};
 use p256::{elliptic_curve::sec1::ToEncodedPoint, PublicKey, SecretKey};
 use rand::rngs::OsRng;
@@ -45,8 +46,7 @@ struct SlotKey {
 }
 
 impl SlotKey {
-    fn generate() -> Self {
-        let secret = SecretKey::random(&mut OsRng);
+    fn from_secret(secret: SecretKey) -> Self {
         let public_point = pubkey_to_uncompressed(&secret.public_key());
         Self {
             secret,
@@ -55,15 +55,14 @@ impl SlotKey {
         }
     }
 
+    fn generate() -> Self {
+        Self::from_secret(SecretKey::random(&mut OsRng))
+    }
+
     fn from_scalar_hex(hex: &str) -> Result<Self> {
         let bytes = hex::decode(hex).map_err(|e| anyhow!("slot key hex: {e}"))?;
         let secret = SecretKey::from_slice(&bytes).map_err(|e| anyhow!("slot key scalar: {e}"))?;
-        let public_point = pubkey_to_uncompressed(&secret.public_key());
-        Ok(Self {
-            secret,
-            public_point,
-            cert_der: None,
-        })
+        Ok(Self::from_secret(secret))
     }
 }
 
@@ -355,7 +354,8 @@ impl PivBackend for VirtualPiv {
         management_key: Option<&str>,
         pin: Option<&str>,
     ) -> Result<Vec<u8>> {
-        use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair};
+        use crate::auxiliaries::parse_subject_dn;
+        use rcgen::{CertificateParams, KeyPair};
 
         let mut s = self.state.lock().unwrap();
         check_reader(&s, reader)?;
@@ -372,6 +372,7 @@ impl PivBackend for VirtualPiv {
         let slot_key = SlotKey::generate();
         // Export as PKCS#8 DER so rcgen can build a KeyPair from it.
         use p256::pkcs8::EncodePrivateKey;
+        // pkcs8_der must remain alive until key_pair is built; it is zeroed on drop.
         let pkcs8_der = slot_key
             .secret
             .to_pkcs8_der()
@@ -381,22 +382,11 @@ impl PivBackend for VirtualPiv {
         let key_pair = KeyPair::try_from(pkcs8_der.as_bytes())
             .map_err(|e| anyhow!("virtual: rcgen KeyPair: {e}"))?;
 
-        let mut dn = DistinguishedName::new();
-        for part in subject.split('/').filter(|s| !s.is_empty()) {
-            if let Some((k, v)) = part.split_once('=') {
-                match k.trim() {
-                    "CN" => dn.push(DnType::CommonName, v.trim()),
-                    "O" => dn.push(DnType::OrganizationName, v.trim()),
-                    "OU" => dn.push(DnType::OrganizationalUnitName, v.trim()),
-                    _ => {}
-                }
-            }
-        }
         let mut params = CertificateParams::new(vec![])
             .map_err(|e| anyhow!("virtual: CertificateParams: {e}"))?;
-        params.distinguished_name = dn;
-        params.not_before = rcgen::date_time_ymd(2025, 1, 1);
-        params.not_after = rcgen::date_time_ymd(2035, 1, 1);
+        params.distinguished_name = parse_subject_dn(subject);
+        params.not_before = rcgen::date_time_ymd(2000, 1, 1);
+        params.not_after = rcgen::date_time_ymd(9999, 12, 31);
 
         let cert = params
             .self_signed(&key_pair)
@@ -456,7 +446,6 @@ fn authenticate_for_write(
     } else if let Some(p) = pin {
         do_verify_pin(s, p)?;
         // Read PIN-protected mgmt key from PRINTED object (0x5FC109).
-        const OBJ_PRINTED: u32 = 0x5F_C109;
         let raw = s
             .objects
             .get(&OBJ_PRINTED)
@@ -466,58 +455,5 @@ fn authenticate_for_write(
         do_authenticate_management_key(s, &key_hex)
     } else {
         bail!("virtual: management_key or pin required for write");
-    }
-}
-
-/// Parse `88 <len> [ 89 <len> <key_bytes> ]` from the PRINTED object value.
-fn extract_pin_protected_key(raw: &[u8]) -> Result<String> {
-    let outer = parse_tlv_flat(raw);
-    let inner_bytes = outer
-        .get(&0x88)
-        .ok_or_else(|| anyhow!("PRINTED object missing tag 0x88"))?;
-    let inner = parse_tlv_flat(inner_bytes);
-    let key_bytes = inner
-        .get(&0x89)
-        .ok_or_else(|| anyhow!("PRINTED object missing tag 0x89 inside 0x88"))?;
-    Ok(hex::encode(key_bytes))
-}
-
-/// Parse a flat BER-TLV sequence (single-byte tags only) into a tag→value map.
-fn parse_tlv_flat(data: &[u8]) -> HashMap<u8, Vec<u8>> {
-    let mut map = HashMap::new();
-    let mut i = 0;
-    while i < data.len() {
-        let tag = data[i];
-        i += 1;
-        if i >= data.len() {
-            break;
-        }
-        let (len, consumed) = decode_length(&data[i..]);
-        i += consumed;
-        if i + len > data.len() {
-            break;
-        }
-        map.insert(tag, data[i..i + len].to_vec());
-        i += len;
-    }
-    map
-}
-
-fn decode_length(data: &[u8]) -> (usize, usize) {
-    if data.is_empty() {
-        return (0, 0);
-    }
-    if data[0] & 0x80 == 0 {
-        (data[0] as usize, 1)
-    } else {
-        let n = (data[0] & 0x7f) as usize;
-        if data.len() < 1 + n {
-            return (0, 1);
-        }
-        let mut len = 0usize;
-        for b in &data[1..1 + n] {
-            len = (len << 8) | (*b as usize);
-        }
-        (len, 1 + n)
     }
 }

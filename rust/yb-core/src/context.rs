@@ -52,12 +52,7 @@ impl Context {
             auxiliaries::detect_pin_protected_mode(&selected_reader, piv.as_ref())
                 .unwrap_or((false, false));
 
-        if pin_derived {
-            bail!(
-                "PIN-derived management key mode is deprecated and not supported. \
-                 Please migrate to PIN-protected mode."
-            );
-        }
+        reject_pin_derived(pin_derived)?;
 
         Ok(Self {
             reader: selected_reader,
@@ -97,12 +92,7 @@ impl Context {
             auxiliaries::detect_pin_protected_mode(&reader, backend.as_ref())
                 .unwrap_or((false, false));
 
-        if pin_derived {
-            bail!(
-                "PIN-derived management key mode is deprecated and not supported. \
-                 Please migrate to PIN-protected mode."
-            );
-        }
+        reject_pin_derived(pin_derived)?;
 
         Ok(Self {
             reader,
@@ -144,6 +134,16 @@ impl Context {
             .with_context(|| format!("reading certificate from slot 0x{slot:02x}"))?;
         parse_ec_public_key_from_cert_der(&cert_der)
     }
+}
+
+fn reject_pin_derived(pin_derived: bool) -> Result<()> {
+    if pin_derived {
+        bail!(
+            "PIN-derived management key mode is deprecated and not supported. \
+             Please migrate to PIN-protected mode."
+        );
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -208,9 +208,6 @@ fn parse_ec_public_key_from_cert_der(cert_der: &[u8]) -> Result<PublicKey> {
 
     let encoded = p256::EncodedPoint::from_bytes(point_bytes)
         .map_err(|e| anyhow::anyhow!("parsing EC point from SPKI: {e}"))?;
-    let pk = p256::PublicKey::from_encoded_point(&encoded);
-    if pk.is_none().into() {
-        bail!("EC point in certificate is not on P-256 curve");
-    }
-    Ok(pk.unwrap())
+    let pk: Option<p256::PublicKey> = p256::PublicKey::from_encoded_point(&encoded).into();
+    pk.ok_or_else(|| anyhow::anyhow!("EC point in certificate is not on P-256 curve"))
 }

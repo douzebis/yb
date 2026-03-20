@@ -62,7 +62,6 @@ let
     nativeBuildInputs = rustCommon.nativeBuildInputs ++ [
       pkgs.llvmPackages.libclang
     ];
-    buildInputs   = rustCommon.buildInputs;
     LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
     # bindgen (used by littlefs2-sys) needs clang built-in headers.
     BINDGEN_EXTRA_CLANG_ARGS =
@@ -73,6 +72,7 @@ let
 
   harnessDeps = crane.buildDepsOnly (harnessCommon // {
     pname          = "yb-harness-deps";
+    cargoArtifacts = rustDeps;
     cargoExtraArgs = "-p yb-piv-harness --features integration-tests";
   });
 
