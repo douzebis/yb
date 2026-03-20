@@ -45,4 +45,4 @@ pub mod store;
 pub use context::Context;
 pub use orchestrator::{fetch_blob, list_blobs, remove_blob, store_blob, BlobInfo};
 pub use piv::hardware::HardwarePiv;
-pub use piv::{DeviceInfo, PivBackend};
+pub use piv::{DeviceInfo, PivBackend, VirtualPiv};

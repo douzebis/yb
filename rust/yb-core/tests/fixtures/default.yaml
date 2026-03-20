@@ -1,0 +1,17 @@
+# WARNING: DISPOSABLE TEST KEY MATERIAL
+# This file contains credentials for use in automated tests only.
+# Do not use these to protect real data.
+# Do not confuse these with production YubiKey credentials.
+
+identity:
+  serial: 99999999
+  version: "5.4.3"
+  reader: "Virtual YubiKey 00 00"
+
+credentials:
+  pin: "123456"
+  puk: "12345678"
+  management_key: "010203040506070801020304050607080102030405060708"
+
+slots: {}
+objects: {}

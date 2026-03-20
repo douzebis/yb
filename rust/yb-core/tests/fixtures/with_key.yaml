@@ -1,0 +1,20 @@
+# WARNING: DISPOSABLE TEST KEY MATERIAL
+# This file contains private keys for use in automated tests only.
+# Do not use these keys to protect real data.
+# Do not confuse these with production YubiKey credentials.
+
+identity:
+  serial: 88888888
+  version: "5.4.3"
+  reader: "Virtual YubiKey 00 01"
+
+credentials:
+  pin: "123456"
+  puk: "12345678"
+  management_key: "010203040506070801020304050607080102030405060708"
+
+slots:
+  "82":
+    private_key_hex: "64055b21eefa9776a601bd99b0a5aa45c9d29d8ac0106b83844871bc4a9c748c"
+
+objects: {}
