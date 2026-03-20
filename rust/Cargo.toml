@@ -4,7 +4,7 @@
 
 [workspace]
 resolver = "2"
-members = ["yb"]
+members = ["yb-core", "yb"]
 
 [profile.release]
 codegen-units = 1

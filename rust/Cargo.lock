@@ -1489,14 +1489,25 @@ dependencies = [
 name = "yb"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "clap_complete",
+ "crossterm",
+ "globset",
+ "tempfile",
+ "yb-core",
+]
+
+[[package]]
+name = "yb-core"
+version = "0.1.0"
+dependencies = [
  "aes",
  "anyhow",
  "cbc",
  "chrono",
  "cipher",
- "clap",
- "clap_complete",
- "crossterm",
  "globset",
  "hex",
  "hkdf",

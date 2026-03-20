@@ -2,16 +2,10 @@
 //
 // SPDX-License-Identifier: MIT
 
-mod auxiliaries;
 mod cli;
-mod context;
-mod crypto;
-mod orchestrator;
-mod piv;
-mod store;
 
 use clap::{Parser, Subcommand};
-use context::Context;
+use yb_core::Context;
 
 // ---------------------------------------------------------------------------
 // Top-level CLI definition
