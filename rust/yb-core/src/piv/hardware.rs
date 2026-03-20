@@ -6,7 +6,11 @@
 //! via PC/SC APDUs (NIST SP 800-73-4).  No external subprocesses required.
 
 use super::{DeviceInfo, PivBackend};
+use crate::auxiliaries::{
+    decode_tlv_length, extract_pin_protected_key, parse_tlv_flat, OBJ_PRINTED,
+};
 use anyhow::{bail, Context, Result};
+use std::ffi::CString;
 
 // ---------------------------------------------------------------------------
 // PcscSession — card handle + helpers for a single PC/SC connection
@@ -34,8 +38,7 @@ impl PcscSession {
 
     /// SELECT PIV applet (AID A0 00 00 03 08).
     pub(crate) fn select_piv(&mut self) -> Result<()> {
-        let apdu = &[0x00, 0xA4, 0x04, 0x00, 0x05, 0xA0, 0x00, 0x00, 0x03, 0x08];
-        self.transmit_check(apdu, "SELECT PIV")?;
+        self.transmit_check(SELECT_PIV, "SELECT PIV")?;
         Ok(())
     }
 
@@ -234,6 +237,41 @@ impl PcscSession {
         Ok(())
     }
 
+    /// GENERAL AUTHENTICATE — inner helper used by ECDH and SIGN.
+    /// `p1` is the algorithm byte, `inner_tag` is 0x85 (ECDH input) or 0x81 (sign digest),
+    /// `payload` is the data for that tag, `label` is used in error messages.
+    fn general_authenticate(
+        &mut self,
+        slot: u8,
+        p1: u8,
+        inner_tag: u8,
+        payload: &[u8],
+        label: &str,
+    ) -> Result<Vec<u8>> {
+        // Data: 7C <len> [ 82 00  <inner_tag> <len> <payload> ]
+        let mut inner = vec![0x82, 0x00];
+        inner.extend(encode_tlv(inner_tag, payload));
+        let outer = encode_tlv(0x7C, &inner);
+
+        let mut apdu = vec![0x00, 0x87, p1, slot];
+        apdu.extend(encode_length(outer.len()));
+        apdu.extend(&outer);
+        apdu.push(0x00); // Le
+
+        let resp = self.transmit_check(&apdu, label)?;
+
+        // Response: 7C <len> 82 <len> <result>
+        let tlv = parse_tlv_flat(&resp);
+        let outer_r = tlv
+            .get(&0x7C)
+            .ok_or_else(|| anyhow::anyhow!("{label}: missing tag 7C in response"))?;
+        let tlv_inner = parse_tlv_flat(outer_r);
+        Ok(tlv_inner
+            .get(&0x82)
+            .ok_or_else(|| anyhow::anyhow!("{label}: missing tag 82 in response"))?
+            .clone())
+    }
+
     /// GENERAL AUTHENTICATE ECDH — slot-based key agreement.
     /// Returns the raw shared secret (65-byte uncompressed EC point for P-256).
     pub(crate) fn general_authenticate_ecdh(
@@ -241,61 +279,13 @@ impl PcscSession {
         slot: u8,
         peer_point: &[u8],
     ) -> Result<Vec<u8>> {
-        // Data: 7C <len> [ 82 00  85 <len> <peer-uncompressed-point> ]
-        // Tag 82 00 is the empty response placeholder (required by spec).
-        let mut inner = vec![0x82, 0x00];
-        inner.extend(encode_tlv(0x85, peer_point));
-        let outer = encode_tlv(0x7C, &inner);
-
-        let mut apdu = vec![0x00, 0x87, 0x11, slot]; // P1=0x11 = ECC P-256
-        apdu.extend(encode_length(outer.len()));
-        apdu.extend(&outer);
-        apdu.push(0x00); // Le
-
-        let resp = self.transmit_check(&apdu, "GENERAL AUTHENTICATE ECDH")?;
-
-        // Response: 7C <len> 82 <len> <shared-secret-x-coord>
-        let tlv = parse_tlv_flat(&resp);
-        let outer_r = tlv
-            .get(&0x7C)
-            .ok_or_else(|| anyhow::anyhow!("ECDH: missing tag 7C in response"))?;
-        let tlv_inner = parse_tlv_flat(outer_r);
-        let secret = tlv_inner
-            .get(&0x82)
-            .ok_or_else(|| anyhow::anyhow!("ECDH: missing tag 82 in response"))?
-            .clone();
-
-        Ok(secret)
+        self.general_authenticate(slot, 0x11, 0x85, peer_point, "GENERAL AUTHENTICATE ECDH")
     }
 
     /// GENERAL AUTHENTICATE SIGN — produce an EC signature over `digest`.
     /// Returns the DER-encoded signature.
     pub(crate) fn general_authenticate_sign(&mut self, slot: u8, digest: &[u8]) -> Result<Vec<u8>> {
-        // Data: 7C <len> [ 82 00  81 <len> <digest> ]
-        // Tag 82 = response placeholder; tag 81 = challenge (digest).
-        let mut inner = vec![0x82, 0x00];
-        inner.extend(encode_tlv(0x81, digest));
-        let outer = encode_tlv(0x7C, &inner);
-
-        let mut apdu = vec![0x00, 0x87, 0x11, slot]; // P1=0x11 = ECC P-256
-        apdu.extend(encode_length(outer.len()));
-        apdu.extend(&outer);
-        apdu.push(0x00); // Le
-
-        let resp = self.transmit_check(&apdu, "GENERAL AUTHENTICATE SIGN")?;
-
-        // Response: 7C <len> 82 <len> <signature>
-        let tlv = parse_tlv_flat(&resp);
-        let outer_r = tlv
-            .get(&0x7C)
-            .ok_or_else(|| anyhow::anyhow!("SIGN: missing tag 7C in response"))?;
-        let tlv_inner = parse_tlv_flat(outer_r);
-        let sig = tlv_inner
-            .get(&0x82)
-            .ok_or_else(|| anyhow::anyhow!("SIGN: missing tag 82 in response"))?
-            .clone();
-
-        Ok(sig)
+        self.general_authenticate(slot, 0x11, 0x81, digest, "GENERAL AUTHENTICATE SIGN")
     }
 
     /// GENERATE ASYMMETRIC KEY — generate an EC P-256 key in `slot`.
@@ -312,6 +302,26 @@ impl PcscSession {
         // Note: 7F 49 is a two-byte tag (constructed).
         let point = parse_gen_key_response(&resp)?;
         Ok(point)
+    }
+
+    fn resolve_and_auth_management_key(
+        &mut self,
+        management_key: Option<&str>,
+        pin: Option<&str>,
+        caller: &str,
+    ) -> Result<String> {
+        if let Some(k) = management_key {
+            self.authenticate_management_key(k)?;
+            return Ok(k.to_owned());
+        }
+        if let Some(p) = pin {
+            self.verify_pin(p)?;
+            let raw = self.get_data(OBJ_PRINTED)?;
+            let key_hex = extract_pin_protected_key(&raw)?;
+            self.authenticate_management_key(&key_hex)?;
+            return Ok(key_hex);
+        }
+        bail!("{caller}: management_key or pin required");
     }
 }
 
@@ -376,20 +386,7 @@ impl PivBackend for HardwarePiv {
         pin: Option<&str>,
     ) -> Result<()> {
         let mut session = PcscSession::open(reader)?;
-        let key_hex: String;
-        let effective_key: &str = if let Some(k) = management_key {
-            k
-        } else if let Some(p) = pin {
-            // PIN-protected management key: VERIFY PIN then GET DATA (PRINTED)
-            // — all in one session so the YubiKey accepts the subsequent PUT DATA.
-            session.verify_pin(p)?;
-            let raw = session.get_data(OBJ_PRINTED)?;
-            key_hex = extract_pin_protected_key(&raw)?;
-            &key_hex
-        } else {
-            bail!("write_object: management_key or pin required");
-        };
-        session.authenticate_management_key(effective_key)?;
+        session.resolve_and_auth_management_key(management_key, pin, "write_object")?;
         session.put_data(id, data)
     }
 
@@ -452,29 +449,18 @@ impl PivBackend for HardwarePiv {
         management_key: Option<&str>,
         pin: Option<&str>,
     ) -> Result<Vec<u8>> {
+        use crate::auxiliaries::parse_subject_dn;
         use rcgen::{
-            CertificateParams, DistinguishedName, DnType, KeyPair, RemoteKeyPair,
-            SignatureAlgorithm, PKCS_ECDSA_P256_SHA256,
+            CertificateParams, KeyPair, RemoteKeyPair, SignatureAlgorithm, PKCS_ECDSA_P256_SHA256,
         };
         use sha2::{Digest, Sha256};
         use std::sync::Mutex;
 
         // ---- Step 1: resolve management key, authenticate, generate key ----
         let mut session = PcscSession::open(reader)?;
-        let key_hex: String;
-        let effective_key: &str = if let Some(k) = management_key {
-            k
-        } else if let Some(p) = pin {
-            session.verify_pin(p)?;
-            let raw = session.get_data(OBJ_PRINTED)?;
-            key_hex = extract_pin_protected_key(&raw)?;
-            &key_hex
-        } else {
-            bail!("generate_certificate: management_key or pin required");
-        };
-        session.authenticate_management_key(effective_key)?;
+        let mgmt_key_owned =
+            session.resolve_and_auth_management_key(management_key, pin, "generate_certificate")?;
         let pubkey_point = session.generate_key(slot)?;
-        let mgmt_key_owned = effective_key.to_owned();
         drop(session);
 
         // ---- Step 2: self-signed certificate via rcgen + YubiKey SIGN ----
@@ -518,20 +504,9 @@ impl PivBackend for HardwarePiv {
 
         let mut params = CertificateParams::new(vec![])
             .map_err(|e| anyhow::anyhow!("CertificateParams: {e}"))?;
-        let mut dn = DistinguishedName::new();
-        for part in subject.split('/').filter(|s| !s.is_empty()) {
-            if let Some((key, val)) = part.split_once('=') {
-                match key.trim() {
-                    "CN" => dn.push(DnType::CommonName, val.trim()),
-                    "O" => dn.push(DnType::OrganizationName, val.trim()),
-                    "OU" => dn.push(DnType::OrganizationalUnitName, val.trim()),
-                    _ => {}
-                }
-            }
-        }
-        params.distinguished_name = dn;
-        params.not_before = rcgen::date_time_ymd(2025, 1, 1);
-        params.not_after = rcgen::date_time_ymd(2035, 1, 1);
+        params.distinguished_name = parse_subject_dn(subject);
+        params.not_before = rcgen::date_time_ymd(2000, 1, 1);
+        params.not_after = rcgen::date_time_ymd(9999, 12, 31);
 
         let cert = params
             .self_signed(&key_pair)
@@ -556,23 +531,6 @@ impl PivBackend for HardwarePiv {
 // Low-level helpers
 // ---------------------------------------------------------------------------
 
-/// PIV object ID for the PRINTED object (holds the PIN-protected management key).
-const OBJ_PRINTED: u32 = 0x5F_C109;
-
-/// Parse the management key from the raw bytes of the PRINTED object.
-/// TLV structure: 88 <len> [ 89 <len> <key_bytes> ]
-fn extract_pin_protected_key(raw: &[u8]) -> Result<String> {
-    let outer = parse_tlv_flat(raw);
-    let inner_bytes = outer
-        .get(&0x88)
-        .ok_or_else(|| anyhow::anyhow!("PRINTED object missing tag 0x88"))?;
-    let inner = parse_tlv_flat(inner_bytes);
-    let key_bytes = inner
-        .get(&0x89)
-        .ok_or_else(|| anyhow::anyhow!("PRINTED object missing tag 0x89 inside 0x88"))?;
-    Ok(hex::encode(key_bytes))
-}
-
 /// Transmit an APDU via a `&pcsc::Card` (or anything that derefs to it, like `Transaction`).
 fn transmit_raw_card(card: &pcsc::Card, apdu: &[u8]) -> Result<Vec<u8>> {
     let mut buf = vec![0u8; pcsc::MAX_BUFFER_SIZE_EXTENDED];
@@ -580,50 +538,38 @@ fn transmit_raw_card(card: &pcsc::Card, apdu: &[u8]) -> Result<Vec<u8>> {
     Ok(resp.to_vec())
 }
 
-fn connect_reader(ctx: &pcsc::Context, reader: &str) -> Result<pcsc::Card> {
-    connect_reader_mode(ctx, reader, pcsc::ShareMode::Shared)
-}
-
 fn connect_reader_mode(
     ctx: &pcsc::Context,
     reader: &str,
     mode: pcsc::ShareMode,
 ) -> Result<pcsc::Card> {
-    let mut name = reader.to_owned();
-    name.push('\0');
-    let cstr = std::ffi::CStr::from_bytes_with_nul(name.as_bytes())
-        .map_err(|e| anyhow::anyhow!("reader name: {e}"))?;
-    ctx.connect(cstr, mode, pcsc::Protocols::ANY)
+    let cstring = CString::new(reader).map_err(|e| anyhow::anyhow!("reader name: {e}"))?;
+    ctx.connect(&cstring, mode, pcsc::Protocols::ANY)
         .map_err(|e| anyhow::anyhow!("connecting to reader '{reader}': {e}"))
 }
 
-fn serial_from_reader(reader: &str) -> Result<u32> {
+const SELECT_PIV: &[u8] = &[0x00, 0xA4, 0x04, 0x00, 0x05, 0xA0, 0x00, 0x00, 0x03, 0x08];
+
+fn query_card_apdu(reader: &str, query: &[u8]) -> Result<Vec<u8>> {
     let ctx = pcsc::Context::establish(pcsc::Scope::User)?;
-    let card = connect_reader(&ctx, reader)?;
+    let card = connect_reader_mode(&ctx, reader, pcsc::ShareMode::Shared)?;
     let mut buf = vec![0u8; 258];
+    let _ = card.transmit(SELECT_PIV, &mut buf)?;
+    let resp = card.transmit(query, &mut buf)?;
+    Ok(resp.to_vec())
+}
 
-    let select_piv = &[0x00, 0xA4, 0x04, 0x00, 0x05, 0xA0, 0x00, 0x00, 0x03, 0x08];
-    let _ = card.transmit(select_piv, &mut buf)?;
-
-    let get_serial = &[0x00, 0xF8, 0x00, 0x00, 0x00];
-    let resp = card.transmit(get_serial, &mut buf)?;
-    if resp.len() < 6 {
+fn serial_from_reader(reader: &str) -> Result<u32> {
+    let resp = query_card_apdu(reader, &[0x00, 0xF8, 0x00, 0x00, 0x00])?;
+    if resp.len() < 4 {
         bail!("GET_SERIAL response too short");
     }
     Ok(u32::from_be_bytes(resp[0..4].try_into().unwrap()))
 }
 
 fn version_from_reader(reader: &str) -> Option<String> {
-    let ctx = pcsc::Context::establish(pcsc::Scope::User).ok()?;
-    let card = connect_reader(&ctx, reader).ok()?;
-    let mut buf = vec![0u8; 258];
-
-    let select_piv = &[0x00, 0xA4, 0x04, 0x00, 0x05, 0xA0, 0x00, 0x00, 0x03, 0x08];
-    let _ = card.transmit(select_piv, &mut buf).ok()?;
-
-    let get_ver = &[0x00, 0xFD, 0x00, 0x00, 0x00];
-    let resp = card.transmit(get_ver, &mut buf).ok()?;
-    if resp.len() < 5 {
+    let resp = query_card_apdu(reader, &[0x00, 0xFD, 0x00, 0x00, 0x00]).ok()?;
+    if resp.len() < 3 {
         return None;
     }
     Some(format!("{}.{}.{}", resp[0], resp[1], resp[2]))
@@ -664,49 +610,8 @@ pub fn slot_to_object_id(slot: u8) -> Result<u32> {
 // TLV encoding / decoding
 // ---------------------------------------------------------------------------
 
-/// Parse a flat BER-TLV sequence into a single-byte-tag → value map.
-pub(crate) fn parse_tlv_flat(data: &[u8]) -> std::collections::HashMap<u8, Vec<u8>> {
-    use std::collections::HashMap;
-    let mut map = HashMap::new();
-    let mut i = 0;
-    while i < data.len() {
-        let tag = data[i];
-        i += 1;
-        if i >= data.len() {
-            break;
-        }
-        let (len, consumed) = decode_length(&data[i..]);
-        i += consumed;
-        if i + len > data.len() {
-            break;
-        }
-        map.insert(tag, data[i..i + len].to_vec());
-        i += len;
-    }
-    map
-}
-
-fn decode_length(data: &[u8]) -> (usize, usize) {
-    if data.is_empty() {
-        return (0, 0);
-    }
-    if data[0] & 0x80 == 0 {
-        (data[0] as usize, 1)
-    } else {
-        let n = (data[0] & 0x7f) as usize;
-        if data.len() < 1 + n {
-            return (0, 1);
-        }
-        let mut len = 0usize;
-        for b in &data[1..1 + n] {
-            len = (len << 8) | (*b as usize);
-        }
-        (len, 1 + n)
-    }
-}
-
 /// Encode `tag || length || value`.
-pub(crate) fn encode_tlv(tag: u8, value: &[u8]) -> Vec<u8> {
+fn encode_tlv(tag: u8, value: &[u8]) -> Vec<u8> {
     let mut out = vec![tag];
     out.extend(encode_length(value.len()));
     out.extend_from_slice(value);
@@ -736,7 +641,7 @@ fn parse_tlv53(data: &[u8]) -> Result<Vec<u8>> {
             data[0]
         );
     }
-    let (len, consumed) = decode_length(&data[1..]);
+    let (len, consumed) = decode_tlv_length(&data[1..]);
     let start = 1 + consumed;
     if start + len > data.len() {
         bail!(
@@ -754,7 +659,7 @@ fn parse_gen_key_response(data: &[u8]) -> Result<Vec<u8>> {
     if data.len() < 2 || data[0] != 0x7F || data[1] != 0x49 {
         bail!("GENERATE KEY response: expected tag 7F 49");
     }
-    let (outer_len, consumed) = decode_length(&data[2..]);
+    let (outer_len, consumed) = decode_tlv_length(&data[2..]);
     let inner_start = 2 + consumed;
     if inner_start + outer_len > data.len() {
         bail!("GENERATE KEY response: truncated");
@@ -768,7 +673,7 @@ fn parse_gen_key_response(data: &[u8]) -> Result<Vec<u8>> {
             inner.first().unwrap_or(&0)
         );
     }
-    let (point_len, point_consumed) = decode_length(&inner[1..]);
+    let (point_len, point_consumed) = decode_tlv_length(&inner[1..]);
     let point_start = 1 + point_consumed;
     if point_start + point_len > inner.len() {
         bail!("GENERATE KEY inner: truncated point");
