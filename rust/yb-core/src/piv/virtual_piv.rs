@@ -181,11 +181,10 @@ pub struct VirtualPiv {
 impl VirtualPiv {
     /// Create a `VirtualPiv` with default test credentials and an empty store.
     pub fn new() -> Self {
+        let id = FixtureIdentity::default();
         Self {
             state: Arc::new(Mutex::new(VirtualState::default_state(
-                default_serial(),
-                default_reader(),
-                default_version(),
+                id.serial, id.reader, id.version,
             ))),
         }
     }

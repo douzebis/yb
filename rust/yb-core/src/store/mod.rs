@@ -8,6 +8,7 @@ pub mod constants;
 
 use anyhow::{bail, Context, Result};
 use constants::*;
+use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::piv::PivBackend;
@@ -310,8 +311,7 @@ impl Store {
         // Remove chunks whose head cannot be reached.
 
         // Collect heads: name -> (index, age)
-        let mut seen: std::collections::HashMap<String, (u8, u32)> =
-            std::collections::HashMap::new();
+        let mut seen: HashMap<String, (u8, u32)> = HashMap::new();
         let mut to_reset: Vec<u8> = Vec::new();
 
         for obj in self.objects.iter().filter(|o| o.is_head()) {
@@ -329,7 +329,7 @@ impl Store {
         }
 
         // Collect all reachable chunk indices.
-        let mut reachable: std::collections::HashSet<u8> = std::collections::HashSet::new();
+        let mut reachable: HashSet<u8> = HashSet::new();
         for (_, (head_idx, _)) in &seen {
             let mut idx = *head_idx;
             loop {
