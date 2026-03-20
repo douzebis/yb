@@ -1,0 +1,38 @@
+# SPDX-FileCopyrightText: 2025 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+#
+# SPDX-License-Identifier: MIT
+
+[package]
+name    = "yb-piv-harness"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[lib]
+name = "yb_piv_harness"
+path = "src/lib.rs"
+
+[features]
+default           = []
+integration-tests = ["dep:piv-authenticator", "dep:vpicc", "dep:stoppable_thread"]
+
+[dependencies]
+pcsc             = "2"
+vpicc            = { version = "0.1.0", optional = true }
+stoppable_thread = { version = "0.2", optional = true }
+
+[dependencies.piv-authenticator]
+git      = "https://github.com/trussed-dev/piv-authenticator"
+rev      = "a4a4204e7089a6a5a99907877576cc40c75825ab"
+features = ["vpicc"]
+optional = true
+
+[dev-dependencies]
+yb-core = { path = "../yb-core" }
+p256    = { version = "0.13", features = ["ecdh"] }
+rand    = "0.8"
+
+[[test]]
+name              = "hardware_piv_tests"
+required-features = ["integration-tests"]

@@ -156,6 +156,9 @@ let
       pkg-config
       pcsclite
       ccid
+      # Tier-2 test harness (vsmartcard + piv-authenticator)
+      vsmartcard-vpcd
+      llvmPackages.libclang
       # Python toolchain
       opensc
       openssl
@@ -183,6 +186,9 @@ let
       # YubiKey / PKCS#11 env
       export LD_LIBRARY_PATH=${pkgs.yubico-piv-tool}/lib:''${LD_LIBRARY_PATH:-}
       export PKCS11_MODULE_PATH=${pkgs.yubico-piv-tool}/lib/libykcs11.so
+
+      # Required by littlefs2-sys (pulled in by piv-authenticator)
+      export LIBCLANG_PATH=${pkgs.llvmPackages.libclang.lib}/lib
 
       # Python path for the Python implementation
       export PYTHONPATH=$PWD/src:''${PYTHONPATH:-}
