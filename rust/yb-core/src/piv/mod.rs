@@ -6,6 +6,9 @@
 
 pub mod emulated;
 pub mod hardware;
+pub mod virtual_piv;
+
+pub use virtual_piv::VirtualPiv;
 
 use anyhow::Result;
 
