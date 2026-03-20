@@ -38,7 +38,7 @@ pub fn run(ctx: &Context, args: &FetchArgs) -> Result<()> {
     for name in &args.names {
         let pin = ctx.pin.as_deref();
         let data =
-            orchestrator::fetch_blob(&store, ctx.piv.as_ref(), name, ctx.serial, pin, ctx.debug)?
+            orchestrator::fetch_blob(&store, ctx.piv.as_ref(), &ctx.reader, name, pin, ctx.debug)?
                 .ok_or_else(|| anyhow::anyhow!("blob '{name}' not found"))?;
 
         if args.extract {

@@ -34,6 +34,7 @@ aes     = "0.8"
 cbc     = { version = "0.1", features = ["alloc"] }
 cipher  = { version = "0.4", features = ["block-padding"] }
 rand    = "0.8"
+des     = "0.8"
 
 # Encoding / serialization
 hex        = "0.4"
@@ -50,8 +51,13 @@ thiserror = "1"
 # Glob pattern matching (list_blobs filter)
 globset = "0.4"
 
-# Temp files (crypto.rs — removed in phase 2)
-tempfile = "3"
+# X.509 certificate parsing (replaces openssl subprocess)
+x509-cert = "0.2"
+der        = "0.7"
+spki       = "0.7"
+
+# Self-signed cert generation (replaces yubico-piv-tool selfsign)
+rcgen = "0.13"
 
 # Optional
 chrono = { version = "0.4", optional = true }

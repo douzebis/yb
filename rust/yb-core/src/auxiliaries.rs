@@ -8,7 +8,7 @@
 #![allow(dead_code)]
 
 use crate::piv::PivBackend;
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use std::collections::HashMap;
 
 // PIV object IDs used for metadata.
@@ -159,32 +159,21 @@ pub fn detect_pin_protected_mode(reader: &str, piv: &dyn PivBackend) -> Result<(
 
 /// Retrieve the management key stored in the PRINTED object (0x5FC109).
 ///
-/// PIN verification and object retrieval must happen in the same session.
-/// yubico-piv-tool subprocess calls lose PIN state between invocations, so
-/// we use `ykman piv objects export` which handles auth internally.
+/// PIN verification and object retrieval must happen in the same PC/SC session
+/// to avoid the card resetting PIN-verified state between calls.
 pub fn get_pin_protected_management_key(
-    _reader: &str,
+    reader: &str,
     _piv: &dyn PivBackend,
     pin: &str,
 ) -> Result<String> {
-    use std::process::Command;
+    use crate::piv::hardware::PcscSession;
 
-    let out = Command::new("ykman")
-        .args(["piv", "objects", "export", "0x5FC109", "-", "--pin", pin])
-        .output()
-        .context("running ykman piv objects export")?;
-
-    if !out.status.success() {
-        bail!(
-            "ykman piv objects export failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-    }
-
-    let raw = &out.stdout;
+    let mut session = PcscSession::open(reader)?;
+    session.verify_pin(pin)?;
+    let raw = session.get_data(OBJ_PRINTED)?;
 
     // TLV structure: 88 <len> [ 89 <len> <key_bytes> ]
-    let outer = parse_tlv(raw);
+    let outer = parse_tlv(&raw);
     let inner_bytes = outer
         .get(&0x88)
         .ok_or_else(|| anyhow::anyhow!("PRINTED object missing tag 0x88"))?;

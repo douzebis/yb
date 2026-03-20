@@ -158,9 +158,9 @@ pub fn store_blob(
 /// Fetch a blob by name.  Returns None if not found.
 pub fn fetch_blob(
     store: &Store,
-    _piv: &dyn PivBackend,
+    piv: &dyn PivBackend,
+    reader: &str,
     name: &str,
-    serial: u32,
     pin: Option<&str>,
     debug: bool,
 ) -> Result<Option<Vec<u8>>> {
@@ -185,7 +185,7 @@ pub fn fetch_blob(
         if pin.is_none() {
             bail!("blob '{name}' is encrypted but no PIN was provided");
         }
-        let plaintext = crypto::hybrid_decrypt(serial, key_slot, &data, pin, debug)
+        let plaintext = crypto::hybrid_decrypt(piv, reader, key_slot, &data, pin, debug)
             .with_context(|| format!("decrypting blob '{name}'"))?;
         Ok(Some(plaintext))
     } else {
