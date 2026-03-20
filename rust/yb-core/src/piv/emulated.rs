@@ -147,4 +147,18 @@ impl PivBackend for EmulatedPiv {
         }
         bail!("emulated: generate_key not implemented (use VirtualPiv for crypto tests)")
     }
+
+    fn generate_certificate(
+        &self,
+        reader: &str,
+        _slot: u8,
+        _subject: &str,
+        _management_key: Option<&str>,
+        _pin: Option<&str>,
+    ) -> Result<Vec<u8>> {
+        if reader != self.reader {
+            bail!("emulated: unknown reader '{reader}'");
+        }
+        bail!("emulated: generate_certificate not implemented (use VirtualPiv for crypto tests)")
+    }
 }
