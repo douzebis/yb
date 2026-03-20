@@ -182,6 +182,8 @@ pub fn parse_admin_data(reader: &str, piv: &dyn PivBackend) -> Result<AdminData>
 
     Ok(AdminData {
         puk_blocked: flags & 0x01 != 0,
+        // Bit 0x01 = key stored in PRINTED object; bit 0x02 = key stored in
+        // PROTECTED object.  We treat either bit as "PIN-protected mode".
         mgmt_key_stored: flags & 0x03 != 0,
         pin_derived: flags & 0x04 != 0,
     })

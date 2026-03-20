@@ -167,26 +167,22 @@ impl PcscSession {
         }
         let sw1 = resp[n - 2];
         let sw2 = resp[n - 1];
-        if sw1 == 0x90 && sw2 == 0x00 {
-            return Ok(());
+        match (sw1, sw2) {
+            (0x90, 0x00) => Ok(()),
+            (0x63, n) => bail!("VERIFY PIN failed: {} retries remaining", n & 0x0f),
+            (0x69, 0x83) => bail!("VERIFY PIN failed: PIN blocked"),
+            (s1, s2) => bail!("VERIFY PIN failed: SW={s1:02x}{s2:02x}"),
         }
-        if sw1 == 0x63 {
-            bail!("VERIFY PIN failed: {} retries remaining", sw2 & 0x0f);
-        }
-        if sw1 == 0x69 && sw2 == 0x83 {
-            bail!("VERIFY PIN failed: PIN blocked");
-        }
-        bail!("VERIFY PIN failed: SW={:02x}{:02x}", sw1, sw2);
     }
 
     /// Authenticate the management key using GENERAL AUTHENTICATE (3-pass mutual auth).
     /// `key_hex` is 48 hex chars for 3DES, or 32/48/64 for AES-128/192/256.
     pub(crate) fn authenticate_management_key(&mut self, key_hex: &str) -> Result<()> {
         let key_bytes = hex::decode(key_hex).context("decoding management key")?;
-        let (p1, block_size) = match key_bytes.len() {
-            24 => (0x03u8, 8usize),  // 3DES
-            16 => (0x08u8, 16usize), // AES-128
-            32 => (0x0Cu8, 16usize), // AES-256
+        let (p1, block_size): (u8, usize) = match key_bytes.len() {
+            24 => (0x03, 8),  // 3DES
+            16 => (0x08, 16), // AES-128
+            32 => (0x0C, 16), // AES-256
             n => bail!("unsupported management key length: {n} bytes"),
         };
 
@@ -685,82 +681,92 @@ fn parse_gen_key_response(data: &[u8]) -> Result<Vec<u8>> {
 // Management key crypto (3DES / AES ECB for the 3-pass mutual auth)
 // ---------------------------------------------------------------------------
 
-fn crypto_ecb_decrypt(key: &[u8], data: &[u8], block_size: usize) -> Result<Vec<u8>> {
+/// Apply one ECB block operation (encrypt or decrypt) using the key algorithm
+/// implied by `key.len()`.  `op` is a closure that performs the in-place block
+/// transform; `dir` is only used in error messages.
+fn crypto_ecb_op(
+    key: &[u8],
+    data: &[u8],
+    block_size: usize,
+    dir: &str,
+    op: impl FnOnce(&[u8], &mut [u8]) -> Result<()>,
+) -> Result<Vec<u8>> {
     if data.len() != block_size {
         bail!(
-            "ECB decrypt: data length {} != block size {}",
+            "ECB {dir}: data length {} != block size {}",
             data.len(),
             block_size
         );
     }
-    match key.len() {
-        24 => {
-            // 3DES
-            use des::cipher::{BlockDecrypt, KeyInit};
-            use des::TdesEde3;
-            let cipher =
-                TdesEde3::new_from_slice(key).map_err(|e| anyhow::anyhow!("3DES key: {e}"))?;
-            let mut block = des::cipher::generic_array::GenericArray::clone_from_slice(data);
-            cipher.decrypt_block(&mut block);
-            Ok(block.to_vec())
-        }
-        16 | 32 => {
-            // AES-128 or AES-256
-            use aes::cipher::{BlockDecrypt, KeyInit};
-            let out = if key.len() == 16 {
+    let mut block = data.to_vec();
+    op(key, &mut block)?;
+    Ok(block)
+}
+
+fn crypto_ecb_decrypt(key: &[u8], data: &[u8], block_size: usize) -> Result<Vec<u8>> {
+    crypto_ecb_op(key, data, block_size, "decrypt", |key, block| {
+        match key.len() {
+            24 => {
+                use des::cipher::{BlockDecrypt, KeyInit};
+                use des::TdesEde3;
+                let cipher =
+                    TdesEde3::new_from_slice(key).map_err(|e| anyhow::anyhow!("3DES key: {e}"))?;
+                let mut b = des::cipher::generic_array::GenericArray::clone_from_slice(block);
+                cipher.decrypt_block(&mut b);
+                block.copy_from_slice(&b);
+            }
+            16 => {
+                use aes::cipher::{BlockDecrypt, KeyInit};
                 let cipher = aes::Aes128::new_from_slice(key)
                     .map_err(|e| anyhow::anyhow!("AES-128 key: {e}"))?;
-                let mut block = aes::cipher::generic_array::GenericArray::clone_from_slice(data);
-                cipher.decrypt_block(&mut block);
-                block.to_vec()
-            } else {
+                let mut b = aes::cipher::generic_array::GenericArray::clone_from_slice(block);
+                cipher.decrypt_block(&mut b);
+                block.copy_from_slice(&b);
+            }
+            32 => {
+                use aes::cipher::{BlockDecrypt, KeyInit};
                 let cipher = aes::Aes256::new_from_slice(key)
                     .map_err(|e| anyhow::anyhow!("AES-256 key: {e}"))?;
-                let mut block = aes::cipher::generic_array::GenericArray::clone_from_slice(data);
-                cipher.decrypt_block(&mut block);
-                block.to_vec()
-            };
-            Ok(out)
+                let mut b = aes::cipher::generic_array::GenericArray::clone_from_slice(block);
+                cipher.decrypt_block(&mut b);
+                block.copy_from_slice(&b);
+            }
+            n => bail!("unsupported key length for ECB: {n}"),
         }
-        n => bail!("unsupported key length for ECB: {n}"),
-    }
+        Ok(())
+    })
 }
 
 fn crypto_ecb_encrypt(key: &[u8], data: &[u8], block_size: usize) -> Result<Vec<u8>> {
-    if data.len() != block_size {
-        bail!(
-            "ECB encrypt: data length {} != block size {}",
-            data.len(),
-            block_size
-        );
-    }
-    match key.len() {
-        24 => {
-            use des::cipher::{BlockEncrypt, KeyInit};
-            use des::TdesEde3;
-            let cipher =
-                TdesEde3::new_from_slice(key).map_err(|e| anyhow::anyhow!("3DES key: {e}"))?;
-            let mut block = des::cipher::generic_array::GenericArray::clone_from_slice(data);
-            cipher.encrypt_block(&mut block);
-            Ok(block.to_vec())
-        }
-        16 | 32 => {
-            use aes::cipher::{BlockEncrypt, KeyInit};
-            let out = if key.len() == 16 {
+    crypto_ecb_op(key, data, block_size, "encrypt", |key, block| {
+        match key.len() {
+            24 => {
+                use des::cipher::{BlockEncrypt, KeyInit};
+                use des::TdesEde3;
+                let cipher =
+                    TdesEde3::new_from_slice(key).map_err(|e| anyhow::anyhow!("3DES key: {e}"))?;
+                let mut b = des::cipher::generic_array::GenericArray::clone_from_slice(block);
+                cipher.encrypt_block(&mut b);
+                block.copy_from_slice(&b);
+            }
+            16 => {
+                use aes::cipher::{BlockEncrypt, KeyInit};
                 let cipher = aes::Aes128::new_from_slice(key)
                     .map_err(|e| anyhow::anyhow!("AES-128 key: {e}"))?;
-                let mut block = aes::cipher::generic_array::GenericArray::clone_from_slice(data);
-                cipher.encrypt_block(&mut block);
-                block.to_vec()
-            } else {
+                let mut b = aes::cipher::generic_array::GenericArray::clone_from_slice(block);
+                cipher.encrypt_block(&mut b);
+                block.copy_from_slice(&b);
+            }
+            32 => {
+                use aes::cipher::{BlockEncrypt, KeyInit};
                 let cipher = aes::Aes256::new_from_slice(key)
                     .map_err(|e| anyhow::anyhow!("AES-256 key: {e}"))?;
-                let mut block = aes::cipher::generic_array::GenericArray::clone_from_slice(data);
-                cipher.encrypt_block(&mut block);
-                block.to_vec()
-            };
-            Ok(out)
+                let mut b = aes::cipher::generic_array::GenericArray::clone_from_slice(block);
+                cipher.encrypt_block(&mut b);
+                block.copy_from_slice(&b);
+            }
+            n => bail!("unsupported key length for ECB: {n}"),
         }
-        n => bail!("unsupported key length for ECB: {n}"),
-    }
+        Ok(())
+    })
 }

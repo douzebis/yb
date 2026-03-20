@@ -1,6 +1,7 @@
 # Code Review — yb Rust codebase
 
-Date: 2026-03-20
+Date: 2026-03-20 (initial)
+Updated: 2026-03-20 (second pass — all first-pass items fixed)
 
 ## 1. Duplicated code
 
@@ -284,3 +285,118 @@ let cstr = std::ffi::CStr::from_bytes_with_nul(name.as_bytes())...?;
 
 This works but is awkward.  `CString::new(reader)` is the idiomatic way to
 create a null-terminated string from a `&str`.
+
+---
+
+## Status of first-pass findings
+
+All items 1.1–4.5 above were fixed in commit e8d6016.
+
+## Status of second-pass findings
+
+All items 5.1–5.6 above were fixed (see commit after e8d6016).
+
+---
+
+## Second-pass findings (2026-03-20)
+
+### 5.1 `crypto_ecb_decrypt` and `crypto_ecb_encrypt` — near-identical implementations
+
+`hardware.rs` lines ~688–766.  Both functions have the same structure: length
+check, then a `match key.len()` with 3DES / AES-128 / AES-256 branches.  The
+only difference per branch is `decrypt_block` vs `encrypt_block` and the
+matching trait import (`BlockDecrypt` vs `BlockEncrypt`).
+
+Fix: extract a generic `crypto_ecb_op<F>` helper parameterised on the
+block-cipher operation, or at minimum unify the AES-128/AES-256 branches using
+`aes::cipher::KeySizeUser` / dynamic dispatch.  Saves ~40 lines and keeps the
+two functions in sync automatically.
+
+### 5.2 `verify_pin` status-word handling — chained `if` instead of `match`
+
+`hardware.rs` lines 170–179:
+
+```rust
+if sw1 == 0x90 && sw2 == 0x00 { return Ok(()); }
+if sw1 == 0x63 { bail!("... {} retries remaining", sw2 & 0x0f); }
+if sw1 == 0x69 && sw2 == 0x83 { bail!("... PIN blocked"); }
+bail!("... SW={:02x}{:02x}", sw1, sw2);
+```
+
+A `match (sw1, sw2)` expression reads more clearly and is the idiomatic Rust
+pattern for multi-case status-word dispatch:
+
+```rust
+match (sw1, sw2) {
+    (0x90, 0x00) => Ok(()),
+    (0x63, n)    => bail!("VERIFY PIN failed: {} retries remaining", n & 0x0f),
+    (0x69, 0x83) => bail!("VERIFY PIN failed: PIN blocked"),
+    (s1, s2)     => bail!("VERIFY PIN failed: SW={s1:02x}{s2:02x}"),
+}
+```
+
+### 5.3 `mgmt_key_stored` bit mask looks wrong
+
+`auxiliaries.rs` line 185:
+
+```rust
+mgmt_key_stored: flags & 0x03 != 0,
+```
+
+The YubiKey ADMIN DATA spec defines bit 0x01 as "management key stored in
+PRINTED" and bit 0x02 as "management key stored in PROTECTED".  Using `0x03`
+means the field is true when either bit is set, which may be the intended
+semantics — but it is not documented.  A comment explaining why `0x03` (rather
+than `0x01`) is used would prevent future confusion.  If only one bit applies
+here, fix the mask.
+
+### 5.4 `VirtualPiv::new` and `VirtualPiv::from_fixture` share divergent paths for `default_*`
+
+`virtual_piv.rs` lines 183–191 and 203–208: `VirtualPiv::new` calls
+`default_serial()`, `default_reader()`, `default_version()` directly.
+`FixtureIdentity` derives `Default` using the same three functions via
+`#[serde(default = "...")]`.  If a default changes in `FixtureIdentity` the
+two code paths silently diverge.
+
+Fix: `VirtualPiv::new` should build its state from `FixtureIdentity::default()`
+(or a `Fixture::default()`) rather than calling the free functions directly.
+This was noted as item 3.3 above but not fixed — `VirtualPiv::new` still calls
+the raw functions.
+
+### 5.5 Inline `std::collections::HashMap` path in `store/mod.rs`
+
+`store/mod.rs` lines 313–314:
+
+```rust
+let mut seen: std::collections::HashMap<String, (u8, u32)> =
+    std::collections::HashMap::new();
+```
+
+`std::collections::HashMap` is written in full three times in the same
+function.  A `use std::collections::HashMap;` at the top of the module (or at
+the top of the function if it is truly local) removes the noise.
+
+### 5.6 Explicit type suffixes on match arm literals in `authenticate_management_key`
+
+`hardware.rs` lines 186–191:
+
+```rust
+let (p1, block_size) = match key_bytes.len() {
+    24 => (0x03u8, 8usize),
+    16 => (0x08u8, 16usize),
+    32 => (0x0Cu8, 16usize),
+    ...
+};
+```
+
+The type suffixes on every literal are redundant; Rust infers them from the
+binding.  Write the type once on the binding:
+
+```rust
+let (p1, block_size): (u8, usize) = match key_bytes.len() {
+    24 => (0x03, 8),
+    16 => (0x08, 16),
+    32 => (0x0C, 16),
+    ...
+};
+```
