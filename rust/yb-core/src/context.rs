@@ -70,6 +70,51 @@ impl Context {
         })
     }
 
+    /// Build a `Context` from an explicit PIV backend.
+    ///
+    /// Use this when you have a `VirtualPiv` (for tests) or any other
+    /// custom `PivBackend` implementation.  The backend must expose exactly
+    /// one device; if it exposes none or more than one, an error is returned.
+    ///
+    /// Default-credential and PIN-derived-key checks are skipped (the caller
+    /// controls the backend and is assumed to have configured it correctly).
+    pub fn with_backend(
+        backend: Arc<dyn PivBackend>,
+        pin: Option<String>,
+        debug: bool,
+    ) -> Result<Self> {
+        let devices = backend
+            .list_devices()
+            .context("listing devices in backend")?;
+        let device = match devices.as_slice() {
+            [] => bail!("no device found in backend"),
+            [d] => d.clone(),
+            _ => bail!("multiple devices in backend — use Context::new with --serial"),
+        };
+        let reader = device.reader.clone();
+
+        let (pin_protected, pin_derived) =
+            auxiliaries::detect_pin_protected_mode(&reader, backend.as_ref())
+                .unwrap_or((false, false));
+
+        if pin_derived {
+            bail!(
+                "PIN-derived management key mode is deprecated and not supported. \
+                 Please migrate to PIN-protected mode."
+            );
+        }
+
+        Ok(Self {
+            reader,
+            serial: device.serial,
+            management_key: None,
+            pin,
+            piv: backend,
+            debug,
+            pin_protected,
+        })
+    }
+
     /// Return the management key to use for write operations.
     ///
     /// Priority: explicit --key > PIN-protected retrieval > None (use default).

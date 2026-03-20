@@ -4,8 +4,6 @@
 
 //! High-level blob operations: store, fetch, remove, list.
 
-#![allow(dead_code)]
-
 use crate::crypto;
 use crate::piv::PivBackend;
 use crate::store::{constants::MAX_NAME_LEN, Object, Store};
@@ -19,8 +17,21 @@ pub struct BlobInfo {
     pub encrypted_size: u32,
     pub plain_size: u32,
     pub is_encrypted: bool,
+    /// Modification time as a Unix timestamp (seconds since epoch).
     pub mtime: u32,
     pub chunk_count: usize,
+}
+
+#[cfg(feature = "chrono")]
+impl BlobInfo {
+    /// Return `mtime` as a local [`chrono::DateTime`].
+    pub fn mtime_local(&self) -> chrono::DateTime<chrono::Local> {
+        use chrono::TimeZone as _;
+        chrono::Local
+            .timestamp_opt(self.mtime as i64, 0)
+            .single()
+            .unwrap_or_else(chrono::Local::now)
+    }
 }
 
 // ---------------------------------------------------------------------------

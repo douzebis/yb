@@ -9,11 +9,12 @@
 //! **disposable test material** and must never protect real data.
 
 use std::path::Path;
+use std::sync::Arc;
 use yb_core::{
     orchestrator::{fetch_blob, list_blobs, remove_blob, store_blob},
     piv::PivBackend,
     store::Store,
-    VirtualPiv,
+    Context, VirtualPiv,
 };
 
 // ---------------------------------------------------------------------------
@@ -319,6 +320,15 @@ fn test_remove_blob() {
     let removed = remove_blob(&mut store, &piv, "to-delete", Some(mgmt), None).unwrap();
     assert!(removed);
     assert_eq!(list_blobs(&store).len(), 0);
+}
+
+/// Context::with_backend works with VirtualPiv.
+#[test]
+fn test_context_with_backend() {
+    let piv = Arc::new(with_key_piv());
+    let ctx = Context::with_backend(piv, Some("123456".to_owned()), false).unwrap();
+    assert_eq!(ctx.serial, 88_888_888);
+    assert_eq!(ctx.pin.as_deref(), Some("123456"));
 }
 
 /// remove_blob returns false for a blob that does not exist.
