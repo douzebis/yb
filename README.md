@@ -5,8 +5,16 @@ SPDX-License-Identifier: MIT
 -->
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/douzebis/yb)
+[![Crates.io](https://img.shields.io/crates/v/yb.svg)](https://crates.io/crates/yb)
 
 # yb — Secure Blob Storage in Your YubiKey
+
+> **Rust port in progress.**
+> The current implementation is in Python. A full rewrite in Rust is underway
+> (see [`docs/rust-port-plan.md`](docs/rust-port-plan.md)). The crate name `yb`
+> on [crates.io](https://crates.io/crates/yb) is reserved for that release.
+> Once the port is complete, `cargo install yb` will be the recommended
+> installation method and the Python implementation will be retired.
 
 **yb** is a command-line tool for securely storing, retrieving, and managing
 small binary blobs directly within a [YubiKey](https://www.yubico.com/products/)
@@ -28,6 +36,17 @@ cryptography, leveraging the hardware-backed security of your YubiKey.
 ---
 
 ## Getting Started
+
+### Installation (Rust — coming soon)
+
+Once the Rust port is complete, the recommended installation will be:
+
+```shell
+cargo install yb
+```
+
+Runtime tools must also be on your `PATH`: `yubico-piv-tool`, `pkcs11-tool`
+(from `opensc`), `openssl`, and `ykman`.
 
 ### Installation (NixOS)
 

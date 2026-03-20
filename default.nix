@@ -62,6 +62,9 @@ let
   # ---------------------------------------------------------------------------
   shell = pkgs.mkShell {
     buildInputs = [ yb ];
+    shellHook = ''
+      export NIXSHELL_REPO=${toString ./.}
+    '';
   };
 
   # ---------------------------------------------------------------------------
@@ -72,7 +75,12 @@ let
 
       pkgs.opensc
       pkgs.openssl
+      pkgs.cargo
+      pkgs.clippy
+      pkgs.pkg-config
       pkgs.reuse
+      pkgs.rustc
+      pkgs.rustfmt
       pkgs.yubico-piv-tool
       pkgs.yubikey-manager
       pythonPkgs.click
@@ -85,6 +93,9 @@ let
     shellHook = ''
       old_opts=$(set +o)
       set -euo pipefail
+
+      # Required by the lint hook to confirm the active nix-shell belongs to this repo
+      export NIXSHELL_REPO=${toString ./.}
 
       # Set up environment variables
       export LD_LIBRARY_PATH=${pkgs.yubico-piv-tool}/lib:''${LD_LIBRARY_PATH:-}
