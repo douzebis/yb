@@ -17,3 +17,43 @@ categories = ["command-line-utilities", "cryptography"]
 [[bin]]
 name = "yb"
 path = "src/main.rs"
+
+[dependencies]
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+clap_complete = "4"
+
+# Cryptography (RustCrypto)
+p256 = { version = "0.13", features = ["ecdh", "pkcs8"] }
+hkdf = "0.12"
+sha2 = "0.10"
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
+cipher = { version = "0.4", features = ["block-padding"] }
+rand = "0.8"
+
+# Encoding / serialization
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+
+# PC/SC (smartcard)
+pcsc = "2"
+
+# Terminal / interactive selector
+crossterm = "0.27"
+
+# Error handling
+anyhow = "1"
+thiserror = "1"
+
+# Glob pattern matching (yb ls)
+globset = "0.4"
+
+# Date/time formatting (yb ls)
+chrono = "0.4"
+
+[dependencies.tempfile]
+version = "3"
+
+[dev-dependencies]
