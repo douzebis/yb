@@ -267,5 +267,30 @@ fn validate_name(name: &str) -> Result<()> {
     if name.len() > MAX_NAME_LEN {
         bail!("blob name too long ({} > {MAX_NAME_LEN} bytes)", name.len());
     }
+    if name.contains('\0') || name.contains('/') {
+        bail!("blob name must not contain null bytes or '/'");
+    }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_name_invalid_chars() {
+        // Null byte and slash are forbidden.
+        assert!(validate_name("foo\0bar").is_err());
+        assert!(validate_name("foo/bar").is_err());
+        assert!(validate_name("/leading").is_err());
+        assert!(validate_name("trailing/").is_err());
+
+        // Everything else is fine: spaces, Unicode, emoji, other punctuation.
+        assert!(validate_name("hello world").is_ok());
+        assert!(validate_name("café").is_ok());
+        assert!(validate_name("blob-name_v2.bin").is_ok());
+        assert!(validate_name("密钥").is_ok());
+        assert!(validate_name("🔑").is_ok());
+        assert!(validate_name("tab\there").is_ok());
+    }
 }

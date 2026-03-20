@@ -2,35 +2,72 @@
 //
 // SPDX-License-Identifier: MIT
 
-//! Hybrid encryption/decryption (ECDH + HKDF + AES-256-CBC).
+//! Hybrid encryption/decryption (ECDH + HKDF + AES-256-GCM).
 //!
-//! Encryption is fully in-process (RustCrypto).
-//! Decryption delegates the YubiKey ECDH step to the PIV backend via
-//! GENERAL AUTHENTICATE, then completes HKDF + AES in Rust.
+//! ## Wire format (v2, GCM)
+//!
+//! ```text
+//! 0x02                           (1 byte  — version tag)
+//! ephemeral_pubkey               (65 bytes — X9.62 uncompressed P-256 point)
+//! nonce                          (12 bytes — random, from OsRng)
+//! GCM ciphertext + authentication tag  (plaintext_len + 16 bytes)
+//! ```
+//!
+//! Total overhead: 1 + 65 + 12 + 16 = 94 bytes.
+//!
+//! ## Legacy wire format (v1, CBC — read-only)
+//!
+//! Old blobs written by earlier versions start with `0x04` (the X9.62
+//! uncompressed-point byte) and have no version prefix:
+//!
+//! ```text
+//! ephemeral_pubkey               (65 bytes — first byte is always 0x04)
+//! IV                             (16 bytes)
+//! AES-256-CBC+PKCS7 ciphertext   (padded to 16-byte blocks)
+//! ```
+//!
+//! `hybrid_decrypt` detects the format by inspecting the first byte:
+//! - `0x02` → GCM
+//! - `0x04` → legacy CBC
+//! - anything else → error
+//!
+//! Encryption always produces the GCM format.  No new CBC blobs are written.
 
 use crate::piv::PivBackend;
 use anyhow::{bail, Context, Result};
-use cbc::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 use hkdf::Hkdf;
 use p256::{ecdh::EphemeralSecret, elliptic_curve::sec1::ToEncodedPoint, PublicKey};
 use rand::rngs::OsRng;
 use sha2::Sha256;
 
-type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
-type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
-
 const HKDF_INFO: &[u8] = b"hybrid-encryption";
-const EPHEMERAL_PK_LEN: usize = 65; // X9.62 uncompressed P-256 point
+
+// GCM format constants
+const VERSION_GCM: u8 = 0x02;
+const VERSION_LEN: usize = 1;
+const EPHEMERAL_PK_LEN: usize = 65;
+const NONCE_LEN: usize = 12;
+const GCM_TAG_LEN: usize = 16;
+const GCM_HEADER_LEN: usize = VERSION_LEN + EPHEMERAL_PK_LEN + NONCE_LEN; // 78
+
+// Legacy CBC format constants (decryption only)
+const LEGACY_VERSION: u8 = 0x04; // X9.62 uncompressed-point prefix byte
 const IV_LEN: usize = 16;
+const LEGACY_HEADER_LEN: usize = EPHEMERAL_PK_LEN + IV_LEN; // 81
 
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Encrypt `plaintext` to the YubiKey's public key.
+/// Encrypt `plaintext` to the YubiKey's public key using AES-256-GCM.
 ///
-/// Returns `ephemeral_pubkey(65) || IV(16) || ciphertext`.
+/// Returns `version(1) || ephemeral_pubkey(65) || nonce(12) || ciphertext+tag(N+16)`.
 pub fn hybrid_encrypt(plaintext: &[u8], peer_public_key: &PublicKey) -> Result<Vec<u8>> {
+    use aes_gcm::{
+        aead::{Aead, KeyInit},
+        Aes256Gcm, Nonce,
+    };
+
     // 1. Ephemeral EC P-256 key pair.
     let ephemeral_secret = EphemeralSecret::random(&mut OsRng);
     let ephemeral_pubkey = p256::PublicKey::from(&ephemeral_secret);
@@ -41,24 +78,30 @@ pub fn hybrid_encrypt(plaintext: &[u8], peer_public_key: &PublicKey) -> Result<V
     // 3. HKDF-SHA256 → AES-256 key.
     let aes_key = hkdf_expand(shared_secret.raw_secret_bytes())?;
 
-    // 4. AES-256-CBC encrypt with random IV.
-    let iv: [u8; IV_LEN] = rand::random();
-    let ciphertext = aes256_cbc_encrypt(&aes_key, &iv, plaintext)?;
+    // 4. Random 96-bit nonce.
+    let nonce_bytes: [u8; NONCE_LEN] = rand::random();
 
-    // 5. Serialise: ephemeral_pubkey || IV || ciphertext.
-    let epk_bytes = ephemeral_pubkey
-        .to_encoded_point(false) // uncompressed = 65 bytes
-        .as_bytes()
-        .to_vec();
+    // 5. AES-256-GCM encrypt.  AAD is empty; the ephemeral public key is
+    //    implicitly authenticated by ECDH — any tampering changes the shared
+    //    secret and causes decryption to fail.
+    let cipher = Aes256Gcm::new_from_slice(&aes_key)
+        .map_err(|e| anyhow::anyhow!("AES-GCM key init: {e}"))?;
+    let ciphertext = cipher
+        .encrypt(Nonce::from_slice(&nonce_bytes), plaintext)
+        .map_err(|e| anyhow::anyhow!("AES-GCM encrypt: {e}"))?;
 
-    let mut out = Vec::with_capacity(EPHEMERAL_PK_LEN + IV_LEN + ciphertext.len());
+    // 6. Serialise: 0x02 || epk || nonce || ciphertext+tag.
+    let epk_bytes = ephemeral_pubkey.to_encoded_point(false).as_bytes().to_vec();
+
+    let mut out = Vec::with_capacity(GCM_HEADER_LEN + ciphertext.len());
+    out.push(VERSION_GCM);
     out.extend_from_slice(&epk_bytes);
-    out.extend_from_slice(&iv);
+    out.extend_from_slice(&nonce_bytes);
     out.extend_from_slice(&ciphertext);
     Ok(out)
 }
 
-/// Decrypt a blob produced by `hybrid_encrypt`.
+/// Decrypt a blob produced by `hybrid_encrypt` (GCM) or a legacy CBC blob.
 ///
 /// `piv` and `reader` identify the backend and device; `slot` is the PIV slot
 /// whose private key performs ECDH via GENERAL AUTHENTICATE.
@@ -70,24 +113,90 @@ pub fn hybrid_decrypt(
     pin: Option<&str>,
     _debug: bool,
 ) -> Result<Vec<u8>> {
-    if encrypted.len() < EPHEMERAL_PK_LEN + IV_LEN {
-        bail!("encrypted blob too short");
+    if encrypted.is_empty() {
+        bail!("encrypted blob is empty");
     }
 
-    let epk_bytes = &encrypted[..EPHEMERAL_PK_LEN];
-    let iv: [u8; IV_LEN] = encrypted[EPHEMERAL_PK_LEN..EPHEMERAL_PK_LEN + IV_LEN]
-        .try_into()
-        .unwrap();
-    let ciphertext = &encrypted[EPHEMERAL_PK_LEN + IV_LEN..];
+    match encrypted[0] {
+        VERSION_GCM => decrypt_gcm(piv, reader, slot, encrypted, pin),
+        LEGACY_VERSION => decrypt_cbc_legacy(piv, reader, slot, encrypted, pin),
+        v => bail!("encrypted blob has unknown version byte 0x{v:02x}"),
+    }
+}
 
-    // ECDH on the YubiKey: pass the ephemeral public key as an uncompressed point.
+// ---------------------------------------------------------------------------
+// GCM decryption
+// ---------------------------------------------------------------------------
+
+fn decrypt_gcm(
+    piv: &dyn PivBackend,
+    reader: &str,
+    slot: u8,
+    encrypted: &[u8],
+    pin: Option<&str>,
+) -> Result<Vec<u8>> {
+    use aes_gcm::{
+        aead::{Aead, KeyInit},
+        Aes256Gcm, Nonce,
+    };
+
+    if encrypted.len() < GCM_HEADER_LEN + GCM_TAG_LEN {
+        bail!("GCM blob too short ({} bytes)", encrypted.len());
+    }
+
+    // Layout: [0x02][epk 65][nonce 12][ciphertext+tag]
+    let epk_bytes = &encrypted[VERSION_LEN..VERSION_LEN + EPHEMERAL_PK_LEN];
+    let nonce_bytes = &encrypted[VERSION_LEN + EPHEMERAL_PK_LEN..GCM_HEADER_LEN];
+    let ciphertext = &encrypted[GCM_HEADER_LEN..];
+
     let shared_secret = piv
         .ecdh(reader, slot, epk_bytes, pin)
-        .context("ECDH with YubiKey")?;
+        .context("ECDH with YubiKey (GCM)")?;
 
-    // HKDF → AES key, then decrypt.
     let aes_key = hkdf_expand(&shared_secret)?;
-    aes256_cbc_decrypt(&aes_key, &iv, ciphertext)
+
+    let cipher = Aes256Gcm::new_from_slice(&aes_key)
+        .map_err(|e| anyhow::anyhow!("AES-GCM key init: {e}"))?;
+    cipher
+        .decrypt(Nonce::from_slice(nonce_bytes), ciphertext)
+        .map_err(|_| {
+            anyhow::anyhow!("AES-GCM authentication failed — blob may be corrupted or tampered")
+        })
+}
+
+// ---------------------------------------------------------------------------
+// Legacy CBC decryption (read-only, backward compatibility)
+// ---------------------------------------------------------------------------
+
+fn decrypt_cbc_legacy(
+    piv: &dyn PivBackend,
+    reader: &str,
+    slot: u8,
+    encrypted: &[u8],
+    pin: Option<&str>,
+) -> Result<Vec<u8>> {
+    use cbc::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
+    type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
+
+    if encrypted.len() < LEGACY_HEADER_LEN {
+        bail!("legacy CBC blob too short ({} bytes)", encrypted.len());
+    }
+
+    // Layout: [epk 65][iv 16][ciphertext] — no version byte
+    let epk_bytes = &encrypted[..EPHEMERAL_PK_LEN];
+    let iv: [u8; IV_LEN] = encrypted[EPHEMERAL_PK_LEN..LEGACY_HEADER_LEN]
+        .try_into()
+        .unwrap();
+    let ciphertext = &encrypted[LEGACY_HEADER_LEN..];
+
+    let shared_secret = piv
+        .ecdh(reader, slot, epk_bytes, pin)
+        .context("ECDH with YubiKey (legacy CBC)")?;
+
+    let aes_key = hkdf_expand(&shared_secret)?;
+    let dec = Aes256CbcDec::new(&aes_key.into(), &iv.into());
+    dec.decrypt_padded_vec_mut::<Pkcs7>(ciphertext)
+        .map_err(|e| anyhow::anyhow!("legacy CBC decrypt failed: {e}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -102,17 +211,6 @@ fn hkdf_expand(ikm: &[u8]) -> Result<[u8; 32]> {
     Ok(okm)
 }
 
-fn aes256_cbc_encrypt(key: &[u8; 32], iv: &[u8; IV_LEN], plaintext: &[u8]) -> Result<Vec<u8>> {
-    let enc = Aes256CbcEnc::new(key.into(), iv.into());
-    Ok(enc.encrypt_padded_vec_mut::<Pkcs7>(plaintext))
-}
-
-fn aes256_cbc_decrypt(key: &[u8; 32], iv: &[u8; IV_LEN], ciphertext: &[u8]) -> Result<Vec<u8>> {
-    let dec = Aes256CbcDec::new(key.into(), iv.into());
-    dec.decrypt_padded_vec_mut::<Pkcs7>(ciphertext)
-        .map_err(|e| anyhow::anyhow!("AES decrypt failed: {e}"))
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -123,32 +221,148 @@ mod tests {
     use p256::ecdh::EphemeralSecret;
     use rand::rngs::OsRng;
 
-    /// Round-trip encrypt/decrypt using a locally-generated key pair (no YubiKey).
+    /// Round-trip encrypt/decrypt using the GCM format (no YubiKey).
     #[test]
     fn encrypt_decrypt_roundtrip() {
         let plaintext = b"hello from the test suite";
 
-        // Generate a "device" key pair in software.
         let device_secret = EphemeralSecret::random(&mut OsRng);
         let device_pubkey = p256::PublicKey::from(&device_secret);
 
-        // Encrypt.
         let encrypted = hybrid_encrypt(plaintext, &device_pubkey).unwrap();
-        assert!(encrypted.len() > EPHEMERAL_PK_LEN + IV_LEN);
 
-        // Decrypt manually (simulating what the YubiKey does).
-        let epk_bytes = &encrypted[..EPHEMERAL_PK_LEN];
-        let iv: [u8; IV_LEN] = encrypted[EPHEMERAL_PK_LEN..EPHEMERAL_PK_LEN + IV_LEN]
-            .try_into()
-            .unwrap();
-        let ciphertext = &encrypted[EPHEMERAL_PK_LEN + IV_LEN..];
+        // Check version byte.
+        assert_eq!(encrypted[0], VERSION_GCM);
+        assert!(encrypted.len() >= GCM_HEADER_LEN + GCM_TAG_LEN);
+
+        // Decrypt manually (simulate YubiKey ECDH).
+        let epk_bytes = &encrypted[VERSION_LEN..VERSION_LEN + EPHEMERAL_PK_LEN];
+        let nonce_bytes = &encrypted[VERSION_LEN + EPHEMERAL_PK_LEN..GCM_HEADER_LEN];
+        let ciphertext = &encrypted[GCM_HEADER_LEN..];
 
         let epk = PublicKey::from_sec1_bytes(epk_bytes).unwrap();
-        // Simulate YubiKey ECDH: device_secret × ephemeral_pubkey.
         let shared = device_secret.diffie_hellman(&epk);
         let aes_key = hkdf_expand(shared.raw_secret_bytes()).unwrap();
-        let decrypted = aes256_cbc_decrypt(&aes_key, &iv, ciphertext).unwrap();
+
+        use aes_gcm::{
+            aead::{Aead, KeyInit},
+            Aes256Gcm, Nonce,
+        };
+        let cipher = Aes256Gcm::new_from_slice(&aes_key).unwrap();
+        let decrypted = cipher
+            .decrypt(Nonce::from_slice(nonce_bytes), ciphertext)
+            .unwrap();
 
         assert_eq!(decrypted, plaintext);
+    }
+
+    /// Backward-compatibility: a hand-crafted legacy CBC blob must still decrypt.
+    #[test]
+    fn encrypt_decrypt_legacy_cbc() {
+        use cbc::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
+        type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
+
+        let plaintext = b"legacy cbc blob";
+
+        // Ephemeral sender key pair (simulates what the old encrypt did).
+        let ephemeral_secret = EphemeralSecret::random(&mut OsRng);
+        let ephemeral_pubkey = p256::PublicKey::from(&ephemeral_secret);
+
+        // Device key pair — use a regular SecretKey so we can extract the
+        // shared secret and hand it to the mock backend.
+        use p256::SecretKey;
+        let device_sk = SecretKey::random(&mut OsRng);
+        let device_pk = device_sk.public_key();
+
+        // Compute shared secret (ephemeral × device_pk) — same as what ECDH does.
+        let shared = ephemeral_secret.diffie_hellman(&device_pk);
+        let aes_key = hkdf_expand(shared.raw_secret_bytes()).unwrap();
+
+        // Build legacy CBC blob: [epk 65][iv 16][ciphertext] — no version byte.
+        let iv: [u8; IV_LEN] = rand::random();
+        let enc = Aes256CbcEnc::new(&aes_key.into(), &iv.into());
+        let ciphertext = enc.encrypt_padded_vec_mut::<Pkcs7>(plaintext);
+
+        let epk_bytes = ephemeral_pubkey.to_encoded_point(false).as_bytes().to_vec();
+        assert_eq!(epk_bytes[0], LEGACY_VERSION, "epk must start with 0x04");
+
+        let mut legacy_blob = Vec::new();
+        legacy_blob.extend_from_slice(&epk_bytes);
+        legacy_blob.extend_from_slice(&iv);
+        legacy_blob.extend_from_slice(&ciphertext);
+
+        // Mock backend whose ecdh() returns the precomputed shared secret.
+        use crate::piv::PivBackend;
+        struct MockPiv {
+            shared_secret: Vec<u8>,
+        }
+        impl PivBackend for MockPiv {
+            fn list_readers(&self) -> Result<Vec<String>> {
+                Ok(vec!["mock".to_owned()])
+            }
+            fn list_devices(&self) -> Result<Vec<crate::piv::DeviceInfo>> {
+                Ok(vec![crate::piv::DeviceInfo {
+                    serial: 1,
+                    version: "5.4.3".to_owned(),
+                    reader: "mock".to_owned(),
+                }])
+            }
+            fn read_object(&self, _r: &str, _id: u32) -> Result<Vec<u8>> {
+                bail!("mock")
+            }
+            fn write_object(
+                &self,
+                _r: &str,
+                _id: u32,
+                _d: &[u8],
+                _mk: Option<&str>,
+                _pin: Option<&str>,
+            ) -> Result<()> {
+                bail!("mock")
+            }
+            fn verify_pin(&self, _r: &str, _pin: &str) -> Result<()> {
+                bail!("mock")
+            }
+            fn send_apdu(&self, _r: &str, _apdu: &[u8]) -> Result<Vec<u8>> {
+                bail!("mock")
+            }
+            fn ecdh(
+                &self,
+                _r: &str,
+                _slot: u8,
+                _peer: &[u8],
+                _pin: Option<&str>,
+            ) -> Result<Vec<u8>> {
+                Ok(self.shared_secret.clone())
+            }
+            fn read_certificate(&self, _r: &str, _slot: u8) -> Result<Vec<u8>> {
+                bail!("mock")
+            }
+            fn generate_key(&self, _r: &str, _slot: u8, _mk: Option<&str>) -> Result<Vec<u8>> {
+                bail!("mock")
+            }
+            fn generate_certificate(
+                &self,
+                _r: &str,
+                _slot: u8,
+                _subj: &str,
+                _mk: Option<&str>,
+                _pin: Option<&str>,
+            ) -> Result<Vec<u8>> {
+                bail!("mock")
+            }
+        }
+
+        let mock = MockPiv {
+            shared_secret: shared.raw_secret_bytes().to_vec(),
+        };
+
+        // decrypt_cbc_legacy should recover the plaintext.
+        let decrypted = decrypt_cbc_legacy(&mock, "mock", 0x9e, &legacy_blob, None).unwrap();
+        assert_eq!(decrypted, plaintext);
+
+        // hybrid_decrypt should also route to CBC via the 0x04 first byte.
+        let decrypted2 = hybrid_decrypt(&mock, "mock", 0x9e, &legacy_blob, None, false).unwrap();
+        assert_eq!(decrypted2, plaintext);
     }
 }
