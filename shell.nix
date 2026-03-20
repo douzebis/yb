@@ -2,4 +2,4 @@
 #
 # SPDX-License-Identifier: MIT
 
-(import ./default.nix {}).devShell
+(import ./default.nix {}).dev-shell
