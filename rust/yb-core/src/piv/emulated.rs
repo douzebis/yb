@@ -97,11 +97,11 @@ impl PivBackend for EmulatedPiv {
         Ok(())
     }
 
-    fn verify_pin(&self, reader: &str, _pin: &str) -> Result<bool> {
+    fn verify_pin(&self, reader: &str, _pin: &str) -> Result<()> {
         if reader != self.reader {
             bail!("emulated: unknown reader '{reader}'");
         }
-        Ok(true)
+        Ok(())
     }
 
     fn send_apdu(&self, reader: &str, apdu: &[u8]) -> Result<Vec<u8>> {
@@ -109,11 +109,42 @@ impl PivBackend for EmulatedPiv {
             bail!("emulated: unknown reader '{reader}'");
         }
         // Minimal emulation of GET_METADATA (INS=0xF7) for default-credential checks.
-        // CLA=0x00 INS=0xF7 P1=0x00 P2=<slot>
         if apdu.len() >= 4 && apdu[0] == 0x00 && apdu[1] == 0xF7 {
             // Return TLV: tag 0x05 (is_default) = 0x00 (not default).
             return Ok(vec![0x05, 0x01, 0x00]);
         }
         Ok(vec![])
+    }
+
+    fn ecdh(
+        &self,
+        reader: &str,
+        _slot: u8,
+        _peer_point: &[u8],
+        _pin: Option<&str>,
+    ) -> Result<Vec<u8>> {
+        if reader != self.reader {
+            bail!("emulated: unknown reader '{reader}'");
+        }
+        bail!("emulated: ECDH not implemented (use VirtualPiv for crypto tests)")
+    }
+
+    fn read_certificate(&self, reader: &str, slot: u8) -> Result<Vec<u8>> {
+        if reader != self.reader {
+            bail!("emulated: unknown reader '{reader}'");
+        }
+        bail!("emulated: no certificate in slot 0x{slot:02x}")
+    }
+
+    fn generate_key(
+        &self,
+        reader: &str,
+        _slot: u8,
+        _management_key: Option<&str>,
+    ) -> Result<Vec<u8>> {
+        if reader != self.reader {
+            bail!("emulated: unknown reader '{reader}'");
+        }
+        bail!("emulated: generate_key not implemented (use VirtualPiv for crypto tests)")
     }
 }

@@ -7,13 +7,16 @@
 //! # Quick start
 //!
 //! ```no_run
-//! use yb_core::{Context, fetch_blob, list_blobs};
+//! use yb_core::{store::Store, orchestrator, Context};
 //!
 //! let ctx = Context::new(None, None, None, Some("123456".into()), false, false)?;
-//! for blob in list_blobs(&ctx)? {
+//! let store = Store::from_device(&ctx.reader, ctx.piv.as_ref())?;
+//! for blob in orchestrator::list_blobs(&store) {
 //!     println!("{} ({} bytes)", blob.name, blob.plain_size);
 //! }
-//! let data = fetch_blob(&ctx, "my-secret")?;
+//! let data = orchestrator::fetch_blob(
+//!     &store, ctx.piv.as_ref(), &ctx.reader, "my-secret", ctx.pin.as_deref(), false,
+//! )?;
 //! # Ok::<(), anyhow::Error>(())
 //! ```
 //!
