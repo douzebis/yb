@@ -22,11 +22,6 @@ impl PcscSession {
         Self::open_with_mode(reader, pcsc::ShareMode::Shared)
     }
 
-    /// Open with an explicit share mode.
-    pub(crate) fn open_exclusive(reader: &str) -> Result<Self> {
-        Self::open_with_mode(reader, pcsc::ShareMode::Exclusive)
-    }
-
     fn open_with_mode(reader: &str, mode: pcsc::ShareMode) -> Result<Self> {
         let ctx =
             pcsc::Context::establish(pcsc::Scope::User).context("establishing PC/SC context")?;
