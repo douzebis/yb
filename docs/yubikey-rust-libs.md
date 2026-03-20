@@ -169,3 +169,120 @@ covers ECDH without it.
 - `pcsc` crate docs: https://docs.rs/pcsc
 - PIV standard (SP 800-73-4): https://csrc.nist.gov/publications/detail/sp/800-73/4/final
 - `cryptoki` crate docs: https://docs.rs/cryptoki
+
+---
+
+## Hard-Won APDU Implementation Notes
+
+*Recorded 2026-03-20 after implementing `piv/hardware.rs` from scratch.*
+
+These are non-obvious gotchas that cost significant debugging time.
+
+### GET DATA — SW=61xx chaining
+
+A GET DATA response can arrive in chunks.  When `SW1=0x61`, `SW2` is the
+number of remaining bytes (0x00 means 256).  You must loop issuing
+`GET RESPONSE` (00 C0 00 00 Le) until you receive `SW=9000`.  Forgetting
+this causes silent truncation: the outer `53` TLV length is correct but the
+content is incomplete.
+
+```
+00 CB 3F FF 05 5C 03 XX XX XX 00   ← GET DATA
+→ <partial data> 61 nn              ← more to come
+00 C0 00 00 nn                      ← GET RESPONSE
+→ <rest of data> 90 00
+```
+
+### GET DATA response — strip the outer 53 wrapper
+
+The raw GET DATA response is `53 <len> <content>`, not just `<content>`.
+The `53` wrapper must be stripped before parsing the inner TLV.  Cert objects
+have the additional inner structure `70 <len> <DER cert> 71 01 00 FE 00`.
+
+### PUT DATA — ISO 7816-4 extended APDU Lc encoding
+
+For data fields longer than 255 bytes, the Lc encoding changes from 1 byte
+to 3 bytes: `00 Lc_hi Lc_lo` (the leading `00` signals extended format).
+This is **not** BER-TLV length encoding — do not use `81 xx` or `82 xx yy`.
+
+```
+Short  (≤255):  00 DB 3F FF Lc <data>
+Extended (>255): 00 DB 3F FF 00 Lc_hi Lc_lo <data>
+```
+
+Sending BER-TLV length encoding instead of ISO 7816-4 encoding corrupts
+the YubiKey object (it gets written as a 3-byte blob).
+
+### VERIFY PIN — pad to 8 bytes with 0xFF
+
+The YubiKey PIV spec requires the PIN buffer in the VERIFY APDU to be exactly
+8 bytes, with unused trailing bytes filled with `0xFF`:
+
+```
+00 20 00 80 08 36 35 34 33 32 31 FF FF   ← PIN "654321"
+```
+
+Sending the PIN without padding produces `SW=6A80`.
+
+### GENERAL AUTHENTICATE ECDH — response tag is 0x82, not 0x85
+
+The ECDH request wraps the peer point under tag `0x85`:
+```
+7C <len> [ 85 <len> <65-byte peer point> ]
+```
+But the response wraps the shared secret under tag `0x82`:
+```
+7C <len> [ 82 <len> <shared secret> ]
+```
+Using `0x85` to parse the response yields "missing tag" errors.
+
+### Management key mutual auth — 3DES uses P1=0x03, block size=8
+
+GENERAL AUTHENTICATE P1 encodes the algorithm:
+- `0x03` = 3DES (24-byte key, 8-byte block)
+- `0x08` = AES-128 (16-byte key, 16-byte block)
+- `0x0E` = AES-256 (32-byte key, 16-byte block)
+
+The PRINTED object on a `ykman --protect` YubiKey today is typically a
+24-byte key even though the ykman docs say AES-192.  Treat the actual key
+length as ground truth.
+
+### PIN-protected management key — single PC/SC session required
+
+When the management key is stored in the PRINTED object (0x5FC109), the
+following operations **must all happen within the same PC/SC session**:
+
+1. VERIFY PIN (`00 20 00 80 08 ...`)
+2. GET DATA for PRINTED (`00 CB 3F FF ...`)
+3. GENERAL AUTHENTICATE (management key mutual auth)
+4. PUT DATA (`00 DB 3F FF ...`)
+
+Opening a new `Card` connection between any of these steps resets the
+PIN-verified state, causing `PUT DATA` to return
+`SCARD_E_NOT_TRANSACTED (0x80100016)`.
+
+In the `pcsc` crate this means: open one `Card`, do all four steps, then
+drop it.  In pyscard, `SCardBeginTransaction` alone is not sufficient
+because pyscard wraps each `transmit` call in its own internal transaction;
+use raw `SCardTransmit` via ctypes or `yubico-piv-tool` directly.
+
+### PRINTED object TLV layout (with outer 53 wrapper intact)
+
+After `get_data()` (which strips the `53` wrapper), the content is:
+```
+88 1A 89 18 <24 bytes of management key>
+```
+If you have the raw GET DATA response (with the `53` wrapper), parse as:
+```
+53 <len> [ 88 <len> [ 89 <len> <key bytes> ] ]
+```
+
+### parse_tlv_flat is single-level only
+
+The `parse_tlv_flat` helper in `hardware.rs` parses a flat sequence of
+single-byte-tag TLVs into a `HashMap<u8, Vec<u8>>`.  It is **not**
+recursive.  To reach nested tags (e.g. `88 → 89`), call it twice:
+```rust
+let outer = parse_tlv_flat(data);          // finds tag 0x88
+let inner = parse_tlv_flat(&outer[&0x88]); // finds tag 0x89
+```
