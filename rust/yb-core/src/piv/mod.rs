@@ -61,4 +61,16 @@ pub trait PivBackend: Send + Sync {
     /// uncompressed point (65 bytes).  Requires prior management key auth.
     fn generate_key(&self, reader: &str, slot: u8, management_key: Option<&str>)
         -> Result<Vec<u8>>;
+
+    /// Generate an EC P-256 key pair in `slot`, create a self-signed X.509
+    /// certificate with the given subject, and import it into the slot.
+    /// Returns the DER-encoded certificate.
+    fn generate_certificate(
+        &self,
+        reader: &str,
+        slot: u8,
+        subject: &str,
+        management_key: Option<&str>,
+        pin: Option<&str>,
+    ) -> Result<Vec<u8>>;
 }

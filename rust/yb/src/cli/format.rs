@@ -75,114 +75,21 @@ pub fn run(ctx: &Context, args: &FormatArgs) -> Result<()> {
 }
 
 fn generate_certificate(ctx: &Context, slot: u8, subject: &str) -> Result<()> {
-    use tempfile::NamedTempFile;
-
-    let slot_hex = format!("{slot:02x}");
-    let reader = &ctx.reader;
-
-    let pubkey_file = NamedTempFile::new()?;
-    let cert_file = NamedTempFile::new()?;
-
-    // Step 1: generate key.
-    let mut args = vec![
-        "--reader",
-        reader,
-        "--action",
-        "generate",
-        "--slot",
-        &slot_hex,
-        "--algorithm",
-        "ECCP256",
-        "--touch-policy",
-        "never",
-        "--pin-policy",
-        "once",
-        "--output",
-        pubkey_file.path().to_str().unwrap(),
-    ];
-    let key_arg;
-    if let Some(ref k) = ctx.management_key {
-        key_arg = format!("--key={k}");
-        args.push(&key_arg);
-    }
-    run_yubico_piv_tool(&args)?;
-
-    // Step 2: self-sign.
-    let mut args = vec![
-        "--reader",
-        reader,
-        "--action",
-        "verify-pin",
-        "--slot",
-        &slot_hex,
-        "--subject",
+    let mgmt_key = ctx.management_key_for_write()?;
+    ctx.piv.generate_certificate(
+        &ctx.reader,
+        slot,
         subject,
-        "--action",
-        "selfsign",
-        "--input",
-        pubkey_file.path().to_str().unwrap(),
-        "--output",
-        cert_file.path().to_str().unwrap(),
-    ];
-    let pin_arg;
-    if let Some(ref p) = ctx.pin {
-        pin_arg = format!("--pin={p}");
-        args.push(&pin_arg);
-    }
-    let key_arg;
-    if let Some(ref k) = ctx.management_key {
-        key_arg = format!("--key={k}");
-        args.push(&key_arg);
-    }
-    run_yubico_piv_tool(&args)?;
-
-    // Step 3: import certificate.
-    let mut args = vec![
-        "--reader",
-        reader,
-        "--action",
-        "import-certificate",
-        "--slot",
-        &slot_hex,
-        "--input",
-        cert_file.path().to_str().unwrap(),
-    ];
-    let key_arg;
-    if let Some(ref k) = ctx.management_key {
-        key_arg = format!("--key={k}");
-        args.push(&key_arg);
-    }
-    run_yubico_piv_tool(&args)?;
-
+        mgmt_key.as_deref(),
+        ctx.pin.as_deref(),
+    )?;
     Ok(())
 }
 
 fn verify_certificate(ctx: &Context, slot: u8, _expected_subject: &str) -> Result<()> {
     // Just check that a certificate exists in the slot.
-    let slot_hex = format!("{slot:02x}");
-    let args = [
-        "--reader",
-        &ctx.reader,
-        "--slot",
-        &slot_hex,
-        "--action",
-        "read-certificate",
-    ];
-    run_yubico_piv_tool(&args)?;
-    Ok(())
-}
-
-fn run_yubico_piv_tool(args: &[&str]) -> Result<()> {
-    use std::process::Command;
-    let out = Command::new("yubico-piv-tool")
-        .args(args)
-        .output()
-        .map_err(|e| anyhow::anyhow!("failed to run yubico-piv-tool: {e}"))?;
-    if !out.status.success() {
-        bail!(
-            "yubico-piv-tool failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-    }
+    ctx.piv
+        .read_certificate(&ctx.reader, slot)
+        .map_err(|e| anyhow::anyhow!("no certificate in slot 0x{slot:02x}: {e}"))?;
     Ok(())
 }

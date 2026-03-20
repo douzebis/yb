@@ -110,23 +110,44 @@ impl PcscSession {
         let mut data_field = vec![0x5C, 0x03, id[1], id[2], id[3]];
         data_field.append(&mut content);
 
-        // Build ISO 7816-4 APDU with proper Lc encoding.
-        // For data_field.len() > 255 we must use extended format:
-        //   CLA INS P1 P2 00 Lc_hi Lc_lo <data>
-        // For <= 255 bytes we use short format:
-        //   CLA INS P1 P2 Lc <data>
-        let mut apdu = vec![0x00, 0xDB, 0x3F, 0xFF];
-        let lc = data_field.len();
-        if lc <= 0xFF {
-            apdu.push(lc as u8);
-        } else {
-            apdu.push(0x00);
-            apdu.push((lc >> 8) as u8);
-            apdu.push((lc & 0xFF) as u8);
-        }
-        apdu.extend_from_slice(&data_field);
+        // yubico-piv-tool wraps every write in SCardBeginTransaction so that
+        // pcsclite accepts the SCardTransmit calls.  Without a transaction,
+        // pcsclite returns SCARD_E_NOT_TRANSACTED on some platforms.
+        let tx = self
+            .card
+            .transaction()
+            .context("SCardBeginTransaction for PUT DATA")?;
 
-        self.transmit_check(&apdu, "PUT DATA")?;
+        // Send via command chaining (CLA |= 0x10, 255-byte chunks) — the same
+        // approach used by yubico-piv-tool.  Extended-Lc APDUs are not used
+        // because pcsclite / some CCID drivers reject them without a transaction.
+        let mut remaining = data_field.as_slice();
+        loop {
+            let chunk_len = remaining.len().min(0xFF);
+            let is_last = chunk_len == remaining.len();
+            let cla: u8 = if is_last { 0x00 } else { 0x10 };
+            let mut apdu = vec![cla, 0xDB, 0x3F, 0xFF, chunk_len as u8];
+            apdu.extend_from_slice(&remaining[..chunk_len]);
+            remaining = &remaining[chunk_len..];
+
+            let resp = transmit_raw_card(&tx, &apdu)?;
+            let n = resp.len();
+            if n < 2 {
+                bail!("PUT DATA: response too short");
+            }
+            let sw1 = resp[n - 2];
+            let sw2 = resp[n - 1];
+            if is_last {
+                if sw1 != 0x90 || sw2 != 0x00 {
+                    bail!("PUT DATA failed: SW={sw1:02x}{sw2:02x}");
+                }
+                break;
+            } else if sw1 != 0x90 || sw2 != 0x00 {
+                bail!("PUT DATA (chained) failed: SW={sw1:02x}{sw2:02x}");
+            }
+        }
+
+        // Transaction drops here with SCARD_LEAVE_CARD (pcsc crate default).
         Ok(())
     }
 
@@ -425,6 +446,113 @@ impl PivBackend for HardwarePiv {
         }
         session.generate_key(slot)
     }
+
+    fn generate_certificate(
+        &self,
+        reader: &str,
+        slot: u8,
+        subject: &str,
+        management_key: Option<&str>,
+        pin: Option<&str>,
+    ) -> Result<Vec<u8>> {
+        use rcgen::{
+            CertificateParams, DistinguishedName, DnType, KeyPair, RemoteKeyPair,
+            SignatureAlgorithm, PKCS_ECDSA_P256_SHA256,
+        };
+        use sha2::{Digest, Sha256};
+        use std::sync::Mutex;
+
+        // ---- Step 1: resolve management key, authenticate, generate key ----
+        let mut session = PcscSession::open(reader)?;
+        let key_hex: String;
+        let effective_key: &str = if let Some(k) = management_key {
+            k
+        } else if let Some(p) = pin {
+            session.verify_pin(p)?;
+            let raw = session.get_data(OBJ_PRINTED)?;
+            key_hex = extract_pin_protected_key(&raw)?;
+            &key_hex
+        } else {
+            bail!("generate_certificate: management_key or pin required");
+        };
+        session.authenticate_management_key(effective_key)?;
+        let pubkey_point = session.generate_key(slot)?;
+        let mgmt_key_owned = effective_key.to_owned();
+        drop(session);
+
+        // ---- Step 2: self-signed certificate via rcgen + YubiKey SIGN ----
+        let reader_owned = reader.to_owned();
+        let pin_owned = pin.map(|p| p.to_owned());
+
+        struct YubikeyRemotePair {
+            slot: u8,
+            pubkey_point: Vec<u8>,
+            session: Mutex<PcscSession>,
+        }
+
+        impl RemoteKeyPair for YubikeyRemotePair {
+            fn public_key(&self) -> &[u8] {
+                &self.pubkey_point
+            }
+
+            fn sign(&self, msg: &[u8]) -> std::result::Result<Vec<u8>, rcgen::Error> {
+                let digest = Sha256::digest(msg);
+                let mut s = self.session.lock().unwrap();
+                s.general_authenticate_sign(self.slot, &digest)
+                    .map_err(|_| rcgen::Error::RemoteKeyError)
+            }
+
+            fn algorithm(&self) -> &'static SignatureAlgorithm {
+                &PKCS_ECDSA_P256_SHA256
+            }
+        }
+
+        let mut sign_session = PcscSession::open(&reader_owned)?;
+        if let Some(ref p) = pin_owned {
+            sign_session.verify_pin(p)?;
+        }
+        let remote = YubikeyRemotePair {
+            slot,
+            pubkey_point: pubkey_point.clone(),
+            session: Mutex::new(sign_session),
+        };
+        let key_pair = KeyPair::from_remote(Box::new(remote))
+            .map_err(|e| anyhow::anyhow!("rcgen KeyPair: {e}"))?;
+
+        let mut params = CertificateParams::new(vec![])
+            .map_err(|e| anyhow::anyhow!("CertificateParams: {e}"))?;
+        let mut dn = DistinguishedName::new();
+        for part in subject.split('/').filter(|s| !s.is_empty()) {
+            if let Some((key, val)) = part.split_once('=') {
+                match key.trim() {
+                    "CN" => dn.push(DnType::CommonName, val.trim()),
+                    "O" => dn.push(DnType::OrganizationName, val.trim()),
+                    "OU" => dn.push(DnType::OrganizationalUnitName, val.trim()),
+                    _ => {}
+                }
+            }
+        }
+        params.distinguished_name = dn;
+        params.not_before = rcgen::date_time_ymd(2025, 1, 1);
+        params.not_after = rcgen::date_time_ymd(2035, 1, 1);
+
+        let cert = params
+            .self_signed(&key_pair)
+            .map_err(|e| anyhow::anyhow!("self_signed: {e}"))?;
+        let cert_der = cert.der().to_vec();
+        drop(key_pair); // releases sign_session before opening write_session
+
+        // ---- Step 3: import certificate ----
+        let object_id = slot_to_object_id(slot)?;
+        let mut write_session = PcscSession::open(&reader_owned)?;
+        write_session.authenticate_management_key(&mgmt_key_owned)?;
+        // Cert TLV: 53 <len> [ 70 <len> <DER> 71 01 00 FE 00 ]
+        let mut inner = encode_tlv(0x70, &cert_der);
+        inner.extend_from_slice(&[0x71, 0x01, 0x00, 0xFE, 0x00]);
+        write_session.put_data(object_id, &inner)?;
+
+        Ok(cert_der)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -446,6 +574,13 @@ fn extract_pin_protected_key(raw: &[u8]) -> Result<String> {
         .get(&0x89)
         .ok_or_else(|| anyhow::anyhow!("PRINTED object missing tag 0x89 inside 0x88"))?;
     Ok(hex::encode(key_bytes))
+}
+
+/// Transmit an APDU via a `&pcsc::Card` (or anything that derefs to it, like `Transaction`).
+fn transmit_raw_card(card: &pcsc::Card, apdu: &[u8]) -> Result<Vec<u8>> {
+    let mut buf = vec![0u8; pcsc::MAX_BUFFER_SIZE_EXTENDED];
+    let resp = card.transmit(apdu, &mut buf).context("APDU transmit")?;
+    Ok(resp.to_vec())
 }
 
 fn connect_reader(ctx: &pcsc::Context, reader: &str) -> Result<pcsc::Card> {
