@@ -27,22 +27,39 @@ mod inner {
     /// Run `f` with a fresh virtual PIV card connected to `pcscd` via `vpcd`.
     ///
     /// `f` receives the PC/SC reader name of the virtual card.
-    /// Returns `None` if `vpcd` is not available (so callers can skip gracefully).
+    /// Returns `None` if no virtual reader is available (so callers skip gracefully).
+    ///
+    /// Two modes:
+    /// - **External card** (NixOS VM / CI): if a virtual reader is already
+    ///   registered with pcscd (e.g. piv-authenticator-vpicc is running as an
+    ///   external process), use it directly without spinning up an in-process card.
+    /// - **In-process card** (developer nix-shell): connect to vpcd ourselves,
+    ///   spin up piv-authenticator in a background thread, then run `f`.
     pub fn with_vsc<F, R>(options: Options, f: F) -> Option<R>
     where
         F: FnOnce(&str) -> R,
     {
-        // Skip gracefully if vpcd socket is absent.
-        if !std::path::Path::new("/var/run/vpcd").exists() {
-            eprintln!("with_vsc: /var/run/vpcd not found — skipping (install vsmartcard-vpcd and restart pcscd)");
-            return None;
-        }
-
         let Ok(_lock) = VSC_MUTEX.lock() else {
             panic!("VSC_MUTEX poisoned — a previous test panicked");
         };
 
-        let mut vpicc = vpicc::connect().expect("failed to connect to vpcd");
+        // Check whether a virtual reader is already present (external mode).
+        if let Some(reader_name) = try_find_virtual_reader() {
+            return Some(f(&reader_name));
+        }
+
+        // No external card — try to start one in-process via vpcd TCP port.
+        // Skip gracefully if vpcd is not listening.
+        let mut vpicc_conn = match vpicc::connect() {
+            Ok(c) => c,
+            Err(_) => {
+                eprintln!(
+                    "with_vsc: vpcd not available and no virtual reader found \
+                     — skipping (run pcscd with vsmartcard-vpcd plugin)"
+                );
+                return None;
+            }
+        };
 
         let (tx, rx) = mpsc::channel();
         let handle = spawn(move |stopped| {
@@ -51,7 +68,7 @@ mod inner {
                 let mut vpicc_card = VpiccCard::new(card);
                 let mut result = Ok(());
                 while !stopped.get() && result.is_ok() {
-                    result = vpicc.poll(&mut vpicc_card);
+                    result = vpicc_conn.poll(&mut vpicc_card);
                     if result.is_ok() {
                         let _ = tx.send(());
                     }
@@ -66,8 +83,8 @@ mod inner {
         // Give pcscd time to detect the new reader.
         sleep(Duration::from_millis(200));
 
-        // Find the virtual reader name via PC/SC.
-        let reader_name = find_virtual_reader();
+        let reader_name =
+            try_find_virtual_reader().expect("no virtual reader found after connecting to vpcd");
 
         let result = f(&reader_name);
 
@@ -80,19 +97,19 @@ mod inner {
         Some(result)
     }
 
-    fn find_virtual_reader() -> String {
-        let ctx =
-            pcsc::Context::establish(pcsc::Scope::User).expect("failed to establish PC/SC context");
+    /// Return the name of a virtual/vpcd reader already registered with pcscd,
+    /// or `None` if none is present.
+    fn try_find_virtual_reader() -> Option<String> {
+        let ctx = pcsc::Context::establish(pcsc::Scope::User).ok()?;
         let mut buf = vec![0u8; 65536];
         let readers: Vec<String> = ctx
             .list_readers(&mut buf)
-            .expect("failed to list PC/SC readers")
+            .ok()?
             .map(|r| r.to_string_lossy().into_owned())
             .collect();
         readers
             .into_iter()
             .find(|r| r.contains("Virtual") || r.contains("virtual") || r.contains("vpcd"))
-            .expect("no virtual reader found — is vpcd running?")
     }
 }
 

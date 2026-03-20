@@ -56,6 +56,31 @@ let
   });
 
   # ---------------------------------------------------------------------------
+  # TIER-2 HARNESS TESTS (compiled, not run — executed inside the NixOS VM)
+  # ---------------------------------------------------------------------------
+  harnessCommon = rustCommon // {
+    nativeBuildInputs = rustCommon.nativeBuildInputs ++ [
+      pkgs.llvmPackages.libclang
+    ];
+    buildInputs   = rustCommon.buildInputs;
+    LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
+  };
+
+  harnessDeps = crane.buildDepsOnly (harnessCommon // {
+    pname          = "yb-harness-deps";
+    cargoExtraArgs = "-p yb-piv-harness --features integration-tests";
+  });
+
+  # Build the test binary as an installable package so the VM can run it.
+  harnessTestBin = crane.buildPackage (harnessCommon // {
+    pname          = "yb-harness-test-bin";
+    cargoArtifacts = harnessDeps;
+    # --tests compiles test binaries; crane installs them to $out/bin.
+    cargoExtraArgs = "-p yb-piv-harness --features integration-tests --tests";
+    doCheck        = false;
+  });
+
+  # ---------------------------------------------------------------------------
   # RUST PACKAGE
   # ---------------------------------------------------------------------------
   ybRust = crane.buildPackage (rustCommon // {
@@ -212,15 +237,41 @@ let
     '';
   };
 
+  # ---------------------------------------------------------------------------
+  # NIXOS VM INTEGRATION TEST (tier-1 + tier-2)
+  # ---------------------------------------------------------------------------
+  integrationTests = pkgs.nixosTest {
+    name = "yb-integration-tests";
+
+    nodes.machine = { config, pkgs, ... }: {
+      services.pcscd = {
+        enable  = true;
+        plugins = [ pkgs.ccid pkgs.vsmartcard-vpcd ];
+      };
+      environment.systemPackages = [ harnessTestBin ];
+    };
+
+    testScript = ''
+      machine.start()
+      machine.wait_for_unit("pcscd.socket")
+
+      # Run the tier-2 tests. with_vsc connects to vpcd in-process (each test
+      # gets a fresh RAM-backed virtual card). RUST_TEST_THREADS=1 serialises
+      # tests to avoid concurrent vpcd connections.
+      machine.succeed("RUST_TEST_THREADS=1 hardware_piv_tests")
+    '';
+  };
+
 in
 {
-  default    = yb;
-  yb         = yb;
-  yb-rust    = ybRust;
-  shell      = shell;
-  devShell   = dev-shell;   # legacy alias
-  dev-shell  = dev-shell;
-  rust-fmt    = rustFmt;
-  rust-clippy = rustClippy;
-  rust-tests  = rustTests;
+  default          = yb;
+  yb               = yb;
+  yb-rust          = ybRust;
+  shell            = shell;
+  devShell         = dev-shell;        # legacy alias
+  dev-shell        = dev-shell;
+  rust-fmt         = rustFmt;
+  rust-clippy      = rustClippy;
+  rust-tests       = rustTests;        # tier-1 only (fast)
+  integration-tests = integrationTests; # tier-1 + tier-2 via NixOS VM
 }
