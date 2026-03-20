@@ -28,7 +28,8 @@ let
     pname      = "yb";
     version    = "0.1.0";
     strictDeps = true;
-    nativeBuildInputs = [ pkgs.cargo pkgs.rustc ];
+    nativeBuildInputs = [ pkgs.cargo pkgs.rustc pkgs.pkg-config ];
+    buildInputs = [ pkgs.pcsclite ];
   };
 
   # Shared dependency cache — rebuilt only when Cargo.lock or dep sources change.
@@ -153,6 +154,8 @@ let
       rustfmt
       clippy
       pkg-config
+      pcsclite
+      ccid
       # Python toolchain
       opensc
       openssl
@@ -166,6 +169,7 @@ let
       # Project tooling
       reuse
       gh
+      usbutils
     ];
 
     shellHook = ''
