@@ -80,8 +80,6 @@ struct VirtualState {
     puk: String,
     management_key_hex: String, // hex-encoded raw key bytes
     pin_retries: u8,
-    #[allow(dead_code)]
-    puk_retries: u8,
 
     pin_verified: bool,
     mgmt_authenticated: bool,
@@ -102,7 +100,6 @@ impl VirtualState {
             puk: "12345678".to_owned(),
             management_key_hex: "010203040506070801020304050607080102030405060708".to_owned(),
             pin_retries: 3,
-            puk_retries: 3,
             pin_verified: false,
             mgmt_authenticated: false,
             key_slots: HashMap::new(),
