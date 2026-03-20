@@ -1,8 +1,8 @@
 # 0005 — Nix Build for Integration Tests (Tier-2)
 
-**Status:** ready
+**Status:** implemented
 **App:** yb-core
-**Implemented in:** <!-- YYYY-MM-DD, fill after implementation -->
+**Implemented in:** 2026-03-20
 
 ## Problem
 

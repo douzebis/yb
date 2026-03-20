@@ -64,6 +64,11 @@ let
     ];
     buildInputs   = rustCommon.buildInputs;
     LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
+    # bindgen (used by littlefs2-sys) needs clang built-in headers.
+    BINDGEN_EXTRA_CLANG_ARGS =
+      let clangInclude = "${pkgs.llvmPackages.libclang.lib}/lib/clang";
+          version      = pkgs.lib.versions.major pkgs.llvmPackages.release_version;
+      in "-I${clangInclude}/${version}/include";
   };
 
   harnessDeps = crane.buildDepsOnly (harnessCommon // {
@@ -71,13 +76,28 @@ let
     cargoExtraArgs = "-p yb-piv-harness --features integration-tests";
   });
 
-  # Build the test binary as an installable package so the VM can run it.
-  harnessTestBin = crane.buildPackage (harnessCommon // {
-    pname          = "yb-harness-test-bin";
-    cargoArtifacts = harnessDeps;
-    # --tests compiles test binaries; crane installs them to $out/bin.
-    cargoExtraArgs = "-p yb-piv-harness --features integration-tests --tests";
-    doCheck        = false;
+  # Build the tier-2 test binary using crane's cargoTest with --no-run, then
+  # extract the compiled binary from the cargo artifact output.
+  harnessTestBin = crane.cargoTest (harnessCommon // {
+    pname              = "yb-harness-test-bin";
+    cargoArtifacts     = harnessDeps;
+    cargoExtraArgs     = "-p yb-piv-harness --features integration-tests";
+    cargoTestExtraArgs = "--no-run";
+    # Instead of running tests, install the compiled binary.
+    installPhase = ''
+      mkdir -p $out/bin
+      # Pick the newest hardware_piv_tests binary (the one built with features).
+      bin=$(find target -name 'hardware_piv_tests-*' -executable -type f \
+              ! -name '*.d' ! -name '*.rmeta' \
+              -printf '%T@ %p\n' | sort -rn | head -1 | cut -d' ' -f2-)
+      if [ -z "$bin" ]; then
+        echo "ERROR: hardware_piv_tests binary not found under target/" >&2
+        find target -name 'hardware_piv_tests*' >&2 || true
+        exit 1
+      fi
+      echo "Installing $bin -> $out/bin/hardware_piv_tests"
+      cp "$bin" $out/bin/hardware_piv_tests
+    '';
   });
 
   # ---------------------------------------------------------------------------
@@ -258,7 +278,10 @@ let
       # Run the tier-2 tests. with_vsc connects to vpcd in-process (each test
       # gets a fresh RAM-backed virtual card). RUST_TEST_THREADS=1 serialises
       # tests to avoid concurrent vpcd connections.
-      machine.succeed("RUST_TEST_THREADS=1 hardware_piv_tests")
+      out = machine.succeed("RUST_TEST_THREADS=1 hardware_piv_tests 2>&1")
+      print(out)
+      if "test result: ok" not in out:
+        raise Exception("Tier-2 tests did not all pass:\n" + out)
     '';
   };
 
