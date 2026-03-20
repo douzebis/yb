@@ -1,0 +1,59 @@
+# SPDX-FileCopyrightText: 2025 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+#
+# SPDX-License-Identifier: MIT
+
+[package]
+name        = "yb-core"
+version     = "0.1.0"
+edition     = "2021"
+license     = "MIT"
+description = "Secure blob storage on a YubiKey — core library"
+repository  = "https://github.com/douzebis/yb"
+homepage    = "https://github.com/douzebis/yb"
+readme      = "../../README.md"
+keywords    = ["yubikey", "piv", "encryption", "security"]
+categories  = ["cryptography", "hardware-support"]
+
+[lib]
+name = "yb_core"
+path = "src/lib.rs"
+
+[features]
+default          = []
+chrono           = ["dep:chrono"]
+virtual-piv      = []          # phase 3: VirtualPiv in-memory backend
+integration-tests = []         # phase 5: vsmartcard + piv-authenticator
+hardware-tests   = []          # manual only: real YubiKey destructive tests
+
+[dependencies]
+# Cryptography (RustCrypto)
+p256    = { version = "0.13", features = ["ecdh", "pkcs8"] }
+hkdf    = "0.12"
+sha2    = "0.10"
+aes     = "0.8"
+cbc     = { version = "0.1", features = ["alloc"] }
+cipher  = { version = "0.4", features = ["block-padding"] }
+rand    = "0.8"
+
+# Encoding / serialization
+hex        = "0.4"
+serde      = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+
+# PC/SC (smartcard)
+pcsc = "2"
+
+# Error handling
+anyhow    = "1"
+thiserror = "1"
+
+# Glob pattern matching (list_blobs filter)
+globset = "0.4"
+
+# Temp files (crypto.rs — removed in phase 2)
+tempfile = "3"
+
+# Optional
+chrono = { version = "0.4", optional = true }
+
+[dev-dependencies]
