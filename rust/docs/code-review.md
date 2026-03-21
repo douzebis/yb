@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: 2025 - 2026 Frederic Ruget <fred@atlant.is> <fred@s3ns.io> (GitHub: @douzebis)
+
+SPDX-License-Identifier: MIT
+-->
+
 # Code Review — yb Rust codebase
 
 Date: 2026-03-20 (initial)

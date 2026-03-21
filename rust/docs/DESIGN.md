@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: 2025 - 2026 Frederic Ruget <fred@atlant.is> <fred@s3ns.io> (GitHub: @douzebis)
+
+SPDX-License-Identifier: MIT
+-->
+
 # yb — Rust Implementation Design
 
 **Version:** 2026-03 (post CLI-improvements + subprocess test suite)

@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: 2025 - 2026 Frederic Ruget <fred@atlant.is> <fred@s3ns.io> (GitHub: @douzebis)
+
+SPDX-License-Identifier: MIT
+-->
+
 # YubiKey PIV APDU Reference
 
 Sources studied: yubico-piv-tool `lib/ykpiv.c` (C), ykman `yubikit/piv.py` (Python),

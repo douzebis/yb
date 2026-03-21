@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2025 - 2026 Frederic Ruget <fred@atlant.is> <fred@s3ns.io> (GitHub: @douzebis)
+#
+# SPDX-License-Identifier: MIT
+
 # WARNING: DISPOSABLE TEST KEY MATERIAL
 # This file contains credentials for use in automated tests only.
 # Do not use these to protect real data.
