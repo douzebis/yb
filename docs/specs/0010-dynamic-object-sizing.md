@@ -113,7 +113,7 @@ Status: OK
 
 ### 3.6 `YBLOB_FORMAT.md` update
 
-The format specification document (`doc/YBLOB_FORMAT.md`) must be updated to:
+The format specification document (`docs/YBLOB_FORMAT.md`) must be updated to:
 
 - Remove the uniform-size assumption from section 2.
 - State that `object_size` is inferred per-object from `GET DATA` response length.
@@ -139,7 +139,7 @@ The format specification document (`doc/YBLOB_FORMAT.md`) must be updated to:
 
 ## References
 
-- [`doc/YBLOB_FORMAT.md`](../../doc/YBLOB_FORMAT.md) — binary format specification
+- [`docs/YBLOB_FORMAT.md`](../../docs/YBLOB_FORMAT.md) — binary format specification
 - [`rust/docs/DESIGN.md`](../../rust/docs/DESIGN.md) section 14 — future opportunities
 - [`rust/yb-core/src/store/constants.rs`](../../rust/yb-core/src/store/constants.rs) — current size constants
 - [`rust/yb-core/src/store/mod.rs`](../../rust/yb-core/src/store/mod.rs) — `from_device`, `Store::format`, `Object::to_bytes`
