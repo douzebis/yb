@@ -295,7 +295,7 @@ Requires YubiKey firmware 5.3 or later for credential detection.
 ## Format Specification
 
 The yblob binary format is fully documented in
-[`doc/YBLOB_FORMAT.md`](doc/YBLOB_FORMAT.md).  It is designed to be
+[`docs/YBLOB_FORMAT.md`](docs/YBLOB_FORMAT.md).  It is designed to be
 implementation-independent: any tool that can read and write YubiKey PIV data
 objects can interoperate with a yblob store without using `yb` itself.
 

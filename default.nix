@@ -2,9 +2,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-{ pkgs ? import <nixpkgs> {},
-  pythonPkgs ? pkgs.python3Packages,
-}:
+{ pkgs ? import <nixpkgs> {} }:
 
 let
   # ---------------------------------------------------------------------------
@@ -16,8 +14,8 @@ let
     sha256 = "sha256-e1idZdpnnHWuosI3KsBgAgrhMR05T2oqskXCmNzGPq0=";
   }) { inherit pkgs; };
 
-  # Source filtered to only what Cargo needs (scoped to rust/ so the Python
-  # tree does not affect the hash).
+  # Source filtered to only what Cargo needs (scoped to rust/ so other
+  # top-level files do not affect the hash).
   rustSrc = pkgs.lib.cleanSourceWith {
     src    = pkgs.lib.cleanSource ./rust;
     # Include Cargo sources plus YAML fixtures used by tests.
@@ -138,66 +136,6 @@ let
   });
 
   # ---------------------------------------------------------------------------
-  # PYTHON MAIN PACKAGE
-  # ---------------------------------------------------------------------------
-  yb = pythonPkgs.buildPythonApplication rec {
-    pname = "yb";
-    version = "0.1.0";
-
-    # This tells nix where to find the package source root
-    # It assumes a src/yb layout for the yb package
-    src = ./.;
-
-    pyproject = true;
-
-    nativeBuildInputs = with pythonPkgs; [
-      setuptools
-      wheel
-      pytest
-    ];
-
-    propagatedBuildInputs = [
-      pkgs.opensc
-      pkgs.openssl
-      pkgs.yubico-piv-tool
-      pkgs.yubikey-manager
-      pythonPkgs.click
-      pythonPkgs.cryptography
-      pythonPkgs.prompt_toolkit
-      pythonPkgs.pyyaml
-    ];
-
-    makeWrapperArgs = [
-      "--set" "LD_LIBRARY_PATH" "${pkgs.yubico-piv-tool}/lib"
-    ];
-
-    checkPhase = ''
-      PYTHONPATH=${src}/src:$PYTHONPATH pytest || true
-    '';
-
-    pythonImportsCheckPhase = ''
-      PYTHONPATH=${src}/src:$PYTHONPATH python -c 'import yb'
-    '';
-
-    meta = with pkgs.lib; {
-      description = "CLI tool for securely storing and retrieving binary blobs using YubiKey";
-      homepage = "https://github.com/douzebis/yb";
-      license = licenses.mit;
-      maintainers = with maintainers; [ douzebis ];
-    };
-  };
-
-  # ---------------------------------------------------------------------------
-  # MINIMAL SHELL (default nix-shell — just the built Python yb on PATH)
-  # ---------------------------------------------------------------------------
-  shell = pkgs.mkShell {
-    buildInputs = [ yb ];
-    shellHook = ''
-      export NIXSHELL_REPO=${toString ./.}
-    '';
-  };
-
-  # ---------------------------------------------------------------------------
   # DEVELOPMENT SHELL
   # ---------------------------------------------------------------------------
   dev-shell = pkgs.mkShell {
@@ -218,16 +156,6 @@ let
       # Tier-2 test harness (vsmartcard + piv-authenticator)
       vsmartcard-vpcd
       llvmPackages.libclang
-      # Python toolchain
-      opensc
-      openssl
-      yubico-piv-tool
-      yubikey-manager
-      pythonPkgs.click
-      pythonPkgs.cryptography
-      pythonPkgs.prompt_toolkit
-      pythonPkgs.pytest
-      pythonPkgs.pyyaml
       # Project tooling
       reuse
       gh
@@ -242,16 +170,8 @@ let
       # that the active nix-shell belongs to this repo.
       export NIXSHELL_REPO="${toString ./.}"
 
-      # YubiKey / PKCS#11 env
-      export LD_LIBRARY_PATH=${pkgs.yubico-piv-tool}/lib:''${LD_LIBRARY_PATH:-}
-      export PKCS11_MODULE_PATH=${pkgs.yubico-piv-tool}/lib/libykcs11.so
-
       # Required by littlefs2-sys (pulled in by piv-authenticator)
       export LIBCLANG_PATH=${pkgs.llvmPackages.libclang.lib}/lib
-
-      # Python path for the Python implementation
-      export PYTHONPATH=$PWD/src:''${PYTHONPATH:-}
-      export PATH=$PWD/bin:$PATH
 
       # Add Rust release binary to PATH once built
       export PATH="$PWD/rust/target/release:$PATH"
@@ -268,13 +188,8 @@ let
           -e 's|words\[COMP_CWORD\]="$2"|local _cur="''${COMP_LINE:0:''${COMP_POINT}}"; _cur="''${_cur##* }"; words[COMP_CWORD]="''${_cur}"|')
       fi
 
-      # Generate .env file for VS Code integration
-      echo "PYTHON_INTERPRETER=$(which python)" > .env
-      echo "PYTHONPATH=$PYTHONPATH" >> .env
-
       echo "Development environment ready."
-      echo "  Rust:   $(cargo --version)"
-      echo "  Python: $(python --version)"
+      echo "  Rust: $(cargo --version)"
 
       eval "$old_opts"
     '';
@@ -334,14 +249,12 @@ let
 
 in
 {
-  default          = yb;
-  yb               = yb;
-  yb-rust          = ybRust;
-  shell            = shell;
-  devShell         = dev-shell;        # legacy alias
-  dev-shell        = dev-shell;
-  rust-fmt         = rustFmt;
-  rust-clippy      = rustClippy;
-  rust-tests       = rustTests;        # tier-1 only (fast)
+  default           = ybRust;
+  yb-rust           = ybRust;
+  devShell          = dev-shell;        # legacy alias
+  dev-shell         = dev-shell;
+  rust-fmt          = rustFmt;
+  rust-clippy       = rustClippy;
+  rust-tests        = rustTests;        # tier-1 only (fast)
   integration-tests = integrationTests; # tier-1 + tier-2 via NixOS VM
 }
