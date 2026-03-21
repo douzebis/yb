@@ -9,19 +9,19 @@ SPDX-PackageSupplier = "Frederic Ruget <fred@atlant.is>"
 SPDX-PackageDownloadLocation = "https://github.com/douzebis/yb"
 
 [[annotations]]
-path = ["rust/Cargo.lock", "rust/yb-core/tests/fixtures/**.yaml", "yb.1", ".gitignore", "LICENSE"]
+path = ["rust/Cargo.lock", "Cargo.lock", "rust/yb-core/tests/fixtures/**.yaml", "yb.1", ".gitignore", ".gitmodules", "LICENSE"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = ["2025 - 2026 Frederic Ruget <fred@atlant.is> <fred@s3ns.io> (GitHub: @douzebis)", "2025 - 2026 Thales Cloud Sécurisé"]
 SPDX-License-Identifier = "MIT"
 
 [[annotations]]
-path = "vendor/vpicc-rs/**"
+path = "mirror/vpicc-rs/**"
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2022 Nitrokey GmbH"
 SPDX-License-Identifier = "CC0-1.0"
 
 [[annotations]]
-path = "vendor/piv-authenticator/**"
+path = "mirror/piv-authenticator/**"
 precedence = "aggregate"
 SPDX-FileCopyrightText = ["Nicolas Stalder <n@stalder.io>", "Nitrokey GmbH"]
 SPDX-License-Identifier = "Apache-2.0 OR MIT"

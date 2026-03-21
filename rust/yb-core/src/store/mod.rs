@@ -10,6 +10,8 @@ pub mod constants;
 use anyhow::{bail, Context, Result};
 use constants::*;
 use std::collections::{HashMap, HashSet};
+
+use crate::orchestrator::BLOB_SIZE_C_BIT;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::piv::PivBackend;
@@ -45,6 +47,8 @@ pub struct Object {
     pub blob_key_slot: u8,
     /// Byte length of the plaintext before encryption.
     pub blob_plain_size: u32,
+    /// Whether the stored payload is compressed (C-bit = bit 23 of blob_plain_size).
+    pub is_compressed: bool,
     pub blob_name: String,
 
     /// Raw chunk payload bytes (excluding all header fields).
@@ -89,6 +93,7 @@ impl Object {
                 blob_size: 0,
                 blob_key_slot: 0,
                 blob_plain_size: 0,
+                is_compressed: false,
                 blob_name: String::new(),
                 payload: Vec::new(),
                 dirty: false,
@@ -98,23 +103,40 @@ impl Object {
         let chunk_pos = data[CHUNK_POS_O];
         let next_chunk = data[NEXT_CHUNK_O];
 
-        let (blob_mtime, blob_size, blob_key_slot, blob_plain_size, blob_name, payload_start) =
-            if chunk_pos == 0 {
-                let mtime = read_u32_le(data, BLOB_MTIME_O)?;
-                let bsize = read_u24_le(data, BLOB_SIZE_O)?;
-                let bkslot = data[BLOB_KEY_SLOT_O];
-                let plain = read_u24_le(data, BLOB_PLAIN_SIZE_O)?;
-                let nlen = data[BLOB_NAME_LEN_O] as usize;
-                if BLOB_NAME_O + nlen > object_size {
-                    bail!("object {index}: name length {nlen} overflows object");
-                }
-                let name = std::str::from_utf8(&data[BLOB_NAME_O..BLOB_NAME_O + nlen])
-                    .with_context(|| format!("object {index}: blob name is not valid UTF-8"))?
-                    .to_owned();
-                (mtime, bsize, bkslot, plain, name, BLOB_NAME_O + nlen)
-            } else {
-                (0, 0, 0, 0, String::new(), CONTINUATION_PAYLOAD_O)
-            };
+        let (
+            blob_mtime,
+            blob_size,
+            blob_key_slot,
+            blob_plain_size,
+            is_compressed,
+            blob_name,
+            payload_start,
+        ) = if chunk_pos == 0 {
+            let mtime = read_u32_le(data, BLOB_MTIME_O)?;
+            let bsize = read_u24_le(data, BLOB_SIZE_O)?;
+            let bkslot = data[BLOB_KEY_SLOT_O];
+            let raw_plain = read_u24_le(data, BLOB_PLAIN_SIZE_O)?;
+            let compressed = raw_plain & BLOB_SIZE_C_BIT as u32 != 0;
+            let plain = raw_plain & !(BLOB_SIZE_C_BIT as u32);
+            let nlen = data[BLOB_NAME_LEN_O] as usize;
+            if BLOB_NAME_O + nlen > object_size {
+                bail!("object {index}: name length {nlen} overflows object");
+            }
+            let name = std::str::from_utf8(&data[BLOB_NAME_O..BLOB_NAME_O + nlen])
+                .with_context(|| format!("object {index}: blob name is not valid UTF-8"))?
+                .to_owned();
+            (
+                mtime,
+                bsize,
+                bkslot,
+                plain,
+                compressed,
+                name,
+                BLOB_NAME_O + nlen,
+            )
+        } else {
+            (0, 0, 0, 0, false, String::new(), CONTINUATION_PAYLOAD_O)
+        };
 
         let payload = data[payload_start..].to_vec();
 
@@ -131,6 +153,7 @@ impl Object {
             blob_size,
             blob_key_slot,
             blob_plain_size,
+            is_compressed,
             blob_name,
             payload,
             dirty: false,
@@ -157,7 +180,11 @@ impl Object {
             write_u32_le(&mut buf, BLOB_MTIME_O, self.blob_mtime);
             write_u24_le(&mut buf, BLOB_SIZE_O, self.blob_size);
             buf[BLOB_KEY_SLOT_O] = self.blob_key_slot;
-            write_u24_le(&mut buf, BLOB_PLAIN_SIZE_O, self.blob_plain_size);
+            write_u24_le(
+                &mut buf,
+                BLOB_PLAIN_SIZE_O,
+                self.blob_plain_size | self.c_bit(),
+            );
             let name_bytes = self.blob_name.as_bytes();
             buf[BLOB_NAME_LEN_O] = name_bytes.len() as u8;
             let payload_start = BLOB_NAME_O + name_bytes.len();
@@ -197,6 +224,7 @@ impl Object {
             blob_size: 0,
             blob_key_slot: 0,
             blob_plain_size: 0,
+            is_compressed: false,
             blob_name: String::new(),
             payload: Vec::new(),
             dirty: true,
@@ -211,6 +239,12 @@ impl Object {
     /// Capacity of the payload region in a continuation chunk.
     pub fn continuation_payload_capacity(object_size: usize) -> usize {
         object_size.saturating_sub(CONTINUATION_PAYLOAD_O)
+    }
+
+    /// Returns `BLOB_SIZE_C_BIT` when the blob is compressed, 0 otherwise.
+    /// Used when serializing `blob_plain_size` to the wire format.
+    fn c_bit(&self) -> u32 {
+        BLOB_SIZE_C_BIT as u32 * self.is_compressed as u32
     }
 
     pub fn is_empty(&self) -> bool {
@@ -303,6 +337,7 @@ impl Store {
                 blob_size: 0,
                 blob_key_slot: 0,
                 blob_plain_size: 0,
+                is_compressed: false,
                 blob_name: String::new(),
                 payload: Vec::new(),
                 dirty: true,
