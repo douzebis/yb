@@ -53,6 +53,9 @@ impl Context {
         management_key: Option<String>,
         pin: Option<String>,
         pin_fn: Box<dyn Fn() -> Result<Option<String>>>,
+        device_picker: Box<
+            dyn Fn(&Arc<dyn PivBackend>, &[DeviceInfo]) -> Result<Option<DeviceInfo>>,
+        >,
         output: OutputOptions,
         allow_defaults: bool,
     ) -> Result<Self> {
@@ -69,8 +72,13 @@ impl Context {
 
         let devices = piv.list_devices().context("listing YubiKey devices")?;
 
-        let (device, selected_reader) =
-            select_device(&devices, serial.as_ref(), reader.as_deref())?;
+        let (device, selected_reader) = select_device(
+            &devices,
+            serial.as_ref(),
+            reader.as_deref(),
+            &piv,
+            &*device_picker,
+        )?;
 
         // Check for default credentials unless skipped by environment.
         if std::env::var("YB_SKIP_DEFAULT_CHECK").is_err() {
@@ -204,17 +212,19 @@ fn reject_pin_derived(pin_derived: bool) -> Result<()> {
 // Device selection
 // ---------------------------------------------------------------------------
 
-fn select_device<'a>(
-    devices: &'a [DeviceInfo],
+fn select_device(
+    devices: &[DeviceInfo],
     serial: Option<&u32>,
     reader: Option<&str>,
-) -> Result<(&'a DeviceInfo, String)> {
+    piv: &Arc<dyn PivBackend>,
+    device_picker: &dyn Fn(&Arc<dyn PivBackend>, &[DeviceInfo]) -> Result<Option<DeviceInfo>>,
+) -> Result<(DeviceInfo, String)> {
     if let Some(s) = serial {
         let dev = devices
             .iter()
             .find(|d| &d.serial == s)
             .ok_or_else(|| anyhow::anyhow!("no YubiKey with serial {s} found"))?;
-        return Ok((dev, dev.reader.clone()));
+        return Ok((dev.clone(), dev.reader.clone()));
     }
 
     if let Some(r) = reader {
@@ -222,22 +232,21 @@ fn select_device<'a>(
             .iter()
             .find(|d| d.reader == r)
             .ok_or_else(|| anyhow::anyhow!("no device on reader '{r}'"))?;
-        return Ok((dev, r.to_owned()));
+        return Ok((dev.clone(), r.to_owned()));
     }
 
     match devices.len() {
         0 => bail!("no YubiKey found"),
-        1 => Ok((&devices[0], devices[0].reader.clone())),
+        1 => Ok((devices[0].clone(), devices[0].reader.clone())),
         _ => {
-            // Multiple devices: print list and ask user to specify.
-            eprintln!("Multiple YubiKeys found. Use --serial to select one:");
-            for d in devices {
-                eprintln!(
-                    "  serial={} version={} reader={}",
-                    d.serial, d.version, d.reader
-                );
+            // Multiple devices: invoke the picker (interactive or fallback).
+            match device_picker(piv, devices)? {
+                Some(dev) => {
+                    let reader = dev.reader.clone();
+                    Ok((dev, reader))
+                }
+                None => bail!("device selection cancelled"),
             }
-            bail!("ambiguous device selection — use --serial or --reader");
         }
     }
 }

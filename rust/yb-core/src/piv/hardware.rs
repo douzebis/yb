@@ -5,9 +5,13 @@
 //! Hardware PIV backend — communicates directly with the YubiKey PIV applet
 //! via PC/SC APDUs (NIST SP 800-73-4).  No external subprocesses required.
 
-use super::{session, tlv, DeviceInfo, PivBackend};
+use super::{session, tlv, DeviceInfo, FlashHandle, PivBackend};
 use anyhow::{bail, Context, Result};
-use session::{serial_from_reader, version_from_reader, PcscSession};
+use session::{serial_from_reader, version_from_reader, PcscSession, SELECT_PIV};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 // ---------------------------------------------------------------------------
 // HardwarePiv — stateless struct implementing PivBackend
@@ -215,6 +219,76 @@ impl PivBackend for HardwarePiv {
         write_session.put_data(object_id, &inner)?;
 
         Ok(cert_der)
+    }
+
+    fn start_flash(&self, reader: &str, interval_ms: u64) -> Box<dyn FlashHandle> {
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_clone = Arc::clone(&stop);
+        let reader_owned = reader.to_owned();
+
+        let _ = std::thread::Builder::new()
+            .name("yb-flash".to_owned())
+            .spawn(move || {
+                flash_loop(&reader_owned, interval_ms, &stop_clone);
+            });
+
+        Box::new(HardwareFlash { stop })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// HardwareFlash — flash handle for real YubiKey
+// ---------------------------------------------------------------------------
+
+pub struct HardwareFlash {
+    stop: Arc<AtomicBool>,
+}
+
+impl FlashHandle for HardwareFlash {}
+
+impl Drop for HardwareFlash {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Background loop: send SELECT_PIV every `interval_ms` until `stop` is set.
+///
+/// Each SELECT_PIV causes one brief LED flash (~1–3 ms round-trip).
+/// Any PC/SC error (card removed, USB glitch) silently terminates the loop.
+/// The thread never panics the process.
+fn flash_loop(reader: &str, interval_ms: u64, stop: &AtomicBool) {
+    // Open a dedicated shared connection for flashing.
+    let ctx = match pcsc::Context::establish(pcsc::Scope::User) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    let reader_cstr = match std::ffi::CString::new(reader) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let card = match ctx.connect(&reader_cstr, pcsc::ShareMode::Shared, pcsc::Protocols::ANY) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+
+    let mut buf = vec![0u8; pcsc::MAX_BUFFER_SIZE_EXTENDED];
+    // Sleep in 10 ms increments for responsive stop detection.
+    let ticks = (interval_ms / 10).max(1);
+
+    'outer: loop {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+        if card.transmit(SELECT_PIV, &mut buf).is_err() {
+            break;
+        }
+        for _ in 0..ticks {
+            if stop.load(Ordering::Relaxed) {
+                break 'outer;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
 }
 

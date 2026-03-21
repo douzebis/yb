@@ -73,6 +73,8 @@ pub enum Commands {
     Fsck(cli::fsck::FsckArgs),
     /// List PC/SC readers.
     ListReaders(cli::list_readers::ListReadersArgs),
+    /// Interactively select a YubiKey and print its serial number.
+    Select(cli::select::SelectArgs),
     /// Run a destructive end-to-end self-test on real hardware.
     #[cfg(feature = "self-test")]
     SelfTest(cli::self_test::SelfTestArgs),

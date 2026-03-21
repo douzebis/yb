@@ -14,6 +14,24 @@ pub use virtual_piv::VirtualPiv;
 
 use anyhow::Result;
 
+// ---------------------------------------------------------------------------
+// FlashHandle — returned by PivBackend::start_flash
+// ---------------------------------------------------------------------------
+
+/// Opaque handle returned by [`PivBackend::start_flash`].
+///
+/// Dropping the handle stops the flash loop on the device.
+pub trait FlashHandle: Send {}
+
+/// No-op flash handle used by backends that do not support LED flashing
+/// (e.g. `VirtualPiv`).
+pub struct NoopFlash;
+impl FlashHandle for NoopFlash {}
+
+// ---------------------------------------------------------------------------
+// DeviceInfo
+// ---------------------------------------------------------------------------
+
 /// Device info returned by list_devices.
 #[derive(Debug, Clone)]
 pub struct DeviceInfo {
@@ -92,5 +110,18 @@ pub trait PivBackend: Send + Sync {
     /// boundaries via the `YB_FIXTURE` env var.
     fn save_fixture(&self, _path: &std::path::Path) -> Result<()> {
         Ok(())
+    }
+
+    /// Start flashing the LED on the device attached to `reader`.
+    ///
+    /// `interval_ms` controls the period between flashes in milliseconds.
+    /// Recommended values: 333 ms (3 Hz) for device selection, 200 ms (5 Hz)
+    /// for active-operation feedback.
+    ///
+    /// Returns a [`FlashHandle`]; the LED stops flashing when the handle is
+    /// dropped.  The default implementation is a no-op so existing backends
+    /// are unaffected.
+    fn start_flash(&self, _reader: &str, _interval_ms: u64) -> Box<dyn FlashHandle> {
+        Box::new(NoopFlash)
     }
 }
