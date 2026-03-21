@@ -43,6 +43,20 @@ cargo install yb
 Runtime requirement: a PC/SC daemon must be running (`pcscd` on Linux).
 No other external tools are needed.
 
+> **Man pages:** `cargo install` does not install man pages.  To generate
+> them locally, run:
+>
+> ```shell
+> cargo install --bin yb-gen-man yb
+> yb-gen-man /usr/local/share/man/man1
+> ```
+>
+> Or, if you have the source tree available:
+>
+> ```shell
+> cargo run --manifest-path rust/Cargo.toml --bin yb-gen-man -- /usr/local/share/man/man1
+> ```
+
 ### Nix (NixOS / nix-shell)
 
 Build and install from the repo:

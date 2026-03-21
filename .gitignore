@@ -13,4 +13,6 @@
 /rust/result*
 /rust/target/
 /website/public/
+/man/man1/
+/man/mandoc.db
 

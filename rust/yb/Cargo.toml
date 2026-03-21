@@ -18,6 +18,10 @@ categories  = ["command-line-utilities", "cryptography"]
 name = "yb"
 path = "src/main.rs"
 
+[[bin]]
+name = "yb-gen-man"
+path = "src/gen_man.rs"
+
 [lib]
 name = "yb"
 path = "src/lib.rs"
@@ -36,6 +40,9 @@ globset       = "0.4"
 tempfile      = "3"
 rpassword     = "7"
 atty          = "0.2"
+clap_mangen   = "0.2"
 [dev-dependencies]
 yb-core  = { path = "../yb-core", version = "0.2.0", features = ["chrono", "virtual-piv"] }
 tempfile = "3"
+
+
