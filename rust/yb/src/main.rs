@@ -114,7 +114,7 @@ fn run(cli: Cli) -> Result<()> {
         cli.allow_defaults,
     )?;
 
-    match cli.command {
+    let result = match cli.command {
         Commands::Format(args) => cli::format::run(&ctx, &args),
         Commands::Store(args) => cli::store::run(&ctx, &args),
         Commands::Fetch(args) => cli::fetch::run(&ctx, &args),
@@ -122,7 +122,16 @@ fn run(cli: Cli) -> Result<()> {
         Commands::Remove(args) => cli::remove::run(&ctx, &args),
         Commands::Fsck(args) => cli::fsck::run(&ctx, &args),
         Commands::ListReaders(_) => unreachable!("handled above"),
+    };
+
+    // When running under YB_FIXTURE (subprocess tests), persist any mutations
+    // (key generation, object writes) back to the fixture file so the next
+    // subprocess invocation starts from the updated state.
+    if let Ok(path) = std::env::var("YB_FIXTURE") {
+        ctx.piv.save_fixture(std::path::Path::new(&path))?;
     }
+
+    result
 }
 
 // ---------------------------------------------------------------------------

@@ -20,7 +20,7 @@ use crate::auxiliaries::{extract_pin_protected_key, OBJ_PRINTED};
 use anyhow::{anyhow, bail, Result};
 use p256::{elliptic_curve::sec1::ToEncodedPoint, PublicKey, SecretKey};
 use rand::rngs::OsRng;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     path::Path,
@@ -111,19 +111,19 @@ impl VirtualState {
 // Fixture deserialization
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct Fixture {
     #[serde(default)]
     identity: FixtureIdentity,
     #[serde(default)]
     credentials: FixtureCredentials,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     slots: HashMap<String, FixtureSlot>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     objects: HashMap<String, String>,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Serialize, Default)]
 struct FixtureIdentity {
     #[serde(default = "default_serial")]
     serial: u32,
@@ -143,7 +143,7 @@ fn default_reader() -> String {
     "Virtual YubiKey 00 00".to_owned()
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Serialize, Default)]
 struct FixtureCredentials {
     #[serde(default = "default_pin")]
     pin: String,
@@ -163,9 +163,11 @@ fn default_mgmt_key() -> String {
     "010203040506070801020304050607080102030405060708".to_owned()
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct FixtureSlot {
     private_key_hex: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cert_der_hex: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -212,7 +214,13 @@ impl VirtualPiv {
         for (slot_str, slot_fixture) in &fixture.slots {
             let slot_byte = u8::from_str_radix(slot_str.trim_start_matches("0x"), 16)
                 .map_err(|_| anyhow!("invalid slot key in fixture: {slot_str}"))?;
-            let key = SlotKey::from_scalar_hex(&slot_fixture.private_key_hex)?;
+            let mut key = SlotKey::from_scalar_hex(&slot_fixture.private_key_hex)?;
+            if let Some(ref cert_hex) = slot_fixture.cert_der_hex {
+                key.cert_der = Some(
+                    hex::decode(cert_hex)
+                        .map_err(|e| anyhow!("fixture slot {slot_str} cert: {e}"))?,
+                );
+            }
             state.key_slots.insert(slot_byte, key);
         }
 
@@ -232,6 +240,47 @@ impl VirtualPiv {
     /// Return the reader name this virtual device responds to.
     pub fn reader_name(&self) -> String {
         self.state.lock().unwrap().reader.clone()
+    }
+
+    /// Serialize the current state back to a YAML fixture file.
+    ///
+    /// This lets subprocess tests persist state written by one `yb` invocation
+    /// (e.g. `format`) so that subsequent invocations start from that state.
+    pub fn save_fixture(&self, path: &Path) -> Result<()> {
+        let s = self.state.lock().unwrap();
+        let mut slots = HashMap::new();
+        for (slot_byte, key) in &s.key_slots {
+            let scalar_bytes = key.secret.to_bytes();
+            slots.insert(
+                format!("0x{slot_byte:02x}"),
+                FixtureSlot {
+                    private_key_hex: hex::encode(scalar_bytes),
+                    cert_der_hex: key.cert_der.as_deref().map(hex::encode),
+                },
+            );
+        }
+        let mut objects = HashMap::new();
+        for (id, data) in &s.objects {
+            objects.insert(format!("0x{id:06x}"), hex::encode(data));
+        }
+        let fixture = Fixture {
+            identity: FixtureIdentity {
+                serial: s.serial,
+                version: s.version.clone(),
+                reader: s.reader.clone(),
+            },
+            credentials: FixtureCredentials {
+                pin: s.pin.clone(),
+                puk: s.puk.clone(),
+                management_key: s.management_key_hex.clone(),
+            },
+            slots,
+            objects,
+        };
+        let yaml =
+            serde_yaml::to_string(&fixture).map_err(|e| anyhow!("serializing fixture: {e}"))?;
+        std::fs::write(path, yaml).map_err(|e| anyhow!("writing fixture {path:?}: {e}"))?;
+        Ok(())
     }
 }
 
@@ -398,6 +447,10 @@ impl PivBackend for VirtualPiv {
         s.key_slots.insert(slot, stored_key);
 
         Ok(cert_der)
+    }
+
+    fn save_fixture(&self, path: &std::path::Path) -> Result<()> {
+        VirtualPiv::save_fixture(self, path)
     }
 }
 

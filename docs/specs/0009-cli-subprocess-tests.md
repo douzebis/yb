@@ -1,8 +1,8 @@
 # 0009 — CLI subprocess tests
 
-**Status:** draft
+**Status:** implemented
 **App:** yb
-**Implemented in:** <!-- YYYY-MM-DD, fill after implementation -->
+**Implemented in:** 2026-03-21
 
 ## Problem
 

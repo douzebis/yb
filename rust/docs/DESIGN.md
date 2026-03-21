@@ -1,6 +1,6 @@
 # yb — Rust Implementation Design
 
-**Version:** 2025-03 (post security-hardening)
+**Version:** 2026-03 (post CLI-improvements + subprocess test suite)
 **Crates:** `yb-core` (library), `yb` (CLI binary), `yb-piv-harness` (tier-2 test harness)
 
 ---
@@ -81,21 +81,28 @@ pub struct Context {
     pub pin: Option<String>,
     pub piv: Arc<dyn PivBackend>,
     pub debug: bool,
+    pub quiet: bool,              // suppress informational stderr
     pub pin_protected: bool,      // mgmt key stored in PRINTED object
 }
 ```
 
 **Device selection** (`Context::new`):
 
-1. `HardwarePiv::list_devices()` enumerates all PC/SC readers.
-2. If `--serial` is given, select that device; if `--reader` is given,
+1. If `YB_FIXTURE` env var is set (and the `virtual-piv` feature is
+   compiled in), a `VirtualPiv` is loaded from that YAML file instead
+   of opening a hardware card.  This is the test escape hatch.
+2. `HardwarePiv::list_devices()` (or `VirtualPiv::list_devices()`)
+   enumerates available devices.
+3. If `--serial` is given, select that device; if `--reader` is given,
    match by reader string; if exactly one device is present, use it;
    otherwise print the list and fail.
-3. `check_for_default_credentials` queries the YubiKey GET_METADATA
+4. `check_for_default_credentials` queries the YubiKey GET_METADATA
    APDU (fw 5.3+) for PIN, PUK, and management key default status.
    If any credential is default and `--allow-defaults` is not set, the
-   CLI aborts with a warning.
-4. `detect_pin_protected_mode` reads the PRINTED object (`0x5F_C109`),
+   CLI aborts with a warning.  Skipped when `YB_SKIP_DEFAULT_CHECK`
+   is set (used by all integration tests to avoid spurious failures
+   against the fixture's well-known factory credentials).
+5. `detect_pin_protected_mode` reads the PRINTED object (`0x5F_C109`),
    checks for the PIN-protected key structure (TLV tag `0x88`/`0x89`),
    and also checks for the deprecated PIN-derived key (admin-data tag
    `0x03` mask).  PIN-derived mode is rejected outright; PIN-protected
@@ -137,8 +144,16 @@ pub trait PivBackend: Send + Sync {
     fn generate_certificate(&self, reader: &str, slot: u8, subject: &str,
                              management_key: Option<&str>,
                              pin: Option<&str>) -> Result<Vec<u8>>;
+    // Default no-op; VirtualPiv overrides to persist state to disk.
+    fn save_fixture(&self, path: &Path) -> Result<()> { Ok(()) }
 }
 ```
+
+`save_fixture` is called by `main.rs` after every successful command
+when `YB_FIXTURE` is set.  This allows subprocess tests to share
+`VirtualPiv` state across process boundaries: `yb format` writes keys
+and objects, `save_fixture` serializes them back to the YAML file, and
+the next `yb store` invocation loads that updated state.
 
 ### `HardwarePiv`
 
@@ -199,10 +214,15 @@ VirtualState {
 ```
 
 **Fixture loading** (`VirtualPiv::from_fixture`):
-Reads a YAML file (`FixtureIdentity` + `FixtureCredentials`) that
-provides serial, reader, PIN, PUK, management key, and per-slot key
-scalars (hex-encoded P-256 scalars).  The default fixture is created
-by `FixtureIdentity::default()`.
+Reads a YAML file with sections `identity`, `credentials`, `slots`, and
+`objects`.  `slots` maps hex slot IDs (e.g. `"0x82"`) to
+`{private_key_hex, cert_der_hex?}`; `objects` maps hex object IDs to
+hex-encoded raw bytes.
+
+**Fixture saving** (`VirtualPiv::save_fixture`):
+Serializes the current in-memory state back to a YAML file in the same
+format as `from_fixture`.  Used by the `save_fixture` `PivBackend` hook
+so subprocess tests can persist mutations across process boundaries.
 
 **ECDH in `VirtualPiv`:**
 Performs the scalar multiplication directly:
@@ -276,7 +296,9 @@ and resets the other, then removes any orphaned continuation chunks.
 ### Sync
 
 `Store::sync` iterates all `dirty` objects and calls
-`piv.write_object(...)` for each, printing a `.` to stderr per write.
+`piv.write_object(...)` for each.  Progress is shown via an `indicatif`
+progress bar (`Writing objects: [=====>----] 3/7`) written to stderr;
+suppressed when `ctx.quiet` is true.
 Each object is serialized to exactly `object_size` bytes by `Object::to_bytes()`.
 
 ---
@@ -390,50 +412,93 @@ The `chrono` feature adds `BlobInfo::mtime_local() -> chrono::DateTime<Local>`.
 
 ## 8. CLI Commands
 
-All commands share global flags: `--serial`, `--reader`, `--key`,
-`--pin`, `--debug`, `--allow-defaults`.
+### Global flags
+
+| Flag | Notes |
+|---|---|
+| `-s/--serial` | Select YubiKey by serial number |
+| `-r/--reader` | Select by PC/SC reader name (legacy) |
+| `-q/--quiet` | Suppress informational stderr output |
+| `--pin-stdin` | Read PIN from stdin (one line) |
+| `--debug` | Enable debug output |
+| `--allow-defaults` | Skip default-credential check |
+| `--pin` | Hidden, deprecated — use `YB_PIN`, `--pin-stdin`, or TTY prompt |
+| `--key`/`-k` | Hidden, deprecated — use `YB_MANAGEMENT_KEY` |
+
+**PIN resolution order** (first match wins):
+`--pin-stdin` → deprecated `--pin` → `YB_PIN` env var → interactive
+`rpassword` TTY prompt → `None` (operations requiring PIN will fail).
+
+**Management key resolution:** deprecated `--key` → `YB_MANAGEMENT_KEY`
+env var → `None`.
+
+**`list-readers` is dispatched before `Context::new`** — it works even
+when no YubiKey is connected.  It also respects `YB_FIXTURE` (uses the
+fixture's reader list when set).
 
 | Command | Alias | Key args | What it does |
 |---|---|---|---|
-| `format` | — | `--object-count` (def 12), `--object-size` (def 3052), `--key-slot` (def 82), `--generate`, `--subject` | Provisions PIV objects; optionally generates ECDH key |
-| `store` | — | `<name>` `<file>`, `--encrypt`, `--key-slot` | Stores a blob |
-| `fetch` | — | `[name]` or `--all`, `--output-dir` | Retrieves blob(s) to file(s) |
-| `list` | `ls` | `--long`, `--glob` | Lists blob metadata |
-| `remove` | `rm` | `<name>` | Removes a blob |
-| `fsck` | — | `--verbose` | Dumps store metadata, checks integrity |
+| `format` | — | `--object-count` (def 12), `--object-size` (def 3052), `--key-slot` (def `0x82`), `-g/--generate`, `--subject` | Provisions PIV objects; optionally generates ECDH key |
+| `store` | — | `[files…]` (stdin if empty), `-n/--name`, `-e/--encrypted`, `-u/--unencrypted` | Stores one or more blobs |
+| `fetch` | — | `[patterns…]` (glob), `-p/--stdout`, `-o/--output`, `-O/--output-dir` | Retrieves blob(s) |
+| `list` | `ls` | `[pattern]` (glob), `-l/--long`, `-1`, `-t/--sort-time`, `-r/--reverse` | Lists blobs |
+| `remove` | `rm` | `[patterns…]` (glob), `-f/--ignore-missing` | Removes blobs |
+| `fsck` | — | `-v/--verbose` | Store integrity check |
 | `list-readers` | — | — | Lists PC/SC readers |
 
 ### `format`
 
-- Parses `--key-slot` as hex (`u8`).
-- With `--generate`: calls `piv.generate_key(slot)` then
+- `--key-slot` accepts `0x`-prefixed hex or decimal; warns for
+  non-standard PIV slots (outside `0x80–0x95`, `0x9A/9C/9D/9E`).
+- With `-g/--generate`: calls `piv.generate_key(slot)` then
   `piv.generate_certificate(slot, subject)`.
-- Without `--generate`: verifies an existing certificate is present in
-  the slot.
+- Without `-g`: verifies an existing certificate is present in the slot.
 - Calls `Store::format(...)` to write fresh empty objects.
 
 ### `store`
 
-- Reads `<file>` from disk (or stdin if `-`).
-- If `--encrypt`: calls `ctx.get_public_key(slot)` to read the public
-  key from the slot's certificate, then passes it to `store_blob`.
-- Returns an error if the store is full.
+- Positional `[files…]`: each file is stored under its basename.
+- No files + `--name`: reads from stdin.
+- `-n/--name` with a single file: overrides the stored name.
+- `-e/--encrypted` / `-u/--unencrypted`: explicit encryption choice
+  (default: encrypted if an ECDH key slot is present).
+- Performs basename-collision check and all-or-nothing capacity check
+  before writing anything.
 
 ### `fetch`
 
-- `--all` fetches every blob and writes to `<name>` files under
-  `--output-dir` (default: current directory).
-- Single-name fetch writes to stdout unless `--output-dir` is given.
+- Patterns are glob-matched against stored blob names (via `globset`).
+- Default: save each matching blob to a file in the current directory.
+- `-O/--output-dir DIR`: write files into `DIR`.
+- `-o/--output FILE`: write to a specific file (single match only).
+- `-p/--stdout`: write to stdout (single match only).
+- `-x/--extract`: hidden, deprecated alias for `-O`.
 
 ### `list`
 
-- `--long` prints mtime, sizes, encryption status, chunk count.
-- `--glob` filters by a glob pattern (via `globset`).
+- No pattern: list all blobs.
+- With pattern: glob-filter.
+- Default: names only (one per line).
+- `-l/--long`: `<flag> <chunks> <date> <size> <name>` where flag is
+  `-` (plain) or `P` (encrypted).  Date format: `%b %e %H:%M` if
+  modified within 180 days, else `%b %e  %Y`.
+- `-t`: sort by mtime descending; `-r`: reverse the sort.
+
+### `remove`
+
+- Patterns are glob-matched; duplicates (patterns matching the same
+  blob) are deduplicated before deletion.
+- A literal name that matches nothing is an error unless `-f`.
+- A glob pattern that matches nothing is silently OK.
+- Single `store.sync()` after all deletions.
 
 ### `fsck`
 
-- Calls `Store::from_device`, runs `store.sanitize()` (reporting what
-  was removed), and prints a dump of all objects.
+- Default: summary only — object count, total bytes, slot, store age,
+  free/used blob counts, and `Status: OK` or `Status: ANOMALIES FOUND`.
+- `-v/--verbose`: full per-object table before the summary.
+- Anomalies detected: duplicate blob names, orphaned continuation chunks.
+- Exits 1 if any anomaly is found.
 
 ---
 
@@ -472,46 +537,80 @@ which enforces ASN.1 UTF8String encoding rules internally.
 
 ## 10. Test Architecture
 
-### Tier 1 — Unit tests (VirtualPiv)
+### Tier 1 — Unit tests (`cargo test`)
 
-Feature flag: `virtual-piv`.
+No feature flags required.  52 tests, ~0.1 s.
 
-In-memory `VirtualPiv` with real P-256 cryptography; no hardware, no
-PC/SC.  Used for all `cargo test` runs.
+| File | What it tests |
+|---|---|
+| `yb-core/src/store/mod.rs` | `Object` serialization round-trips; Python binary-compatibility vector |
+| `yb-core/src/crypto.rs` | GCM round-trip; legacy CBC backward-compatibility via a `MockPiv` |
+| `yb-core/src/orchestrator.rs` | `validate_name` accepts/rejects inputs |
+| `yb-core/tests/virtual_piv_tests.rs` | `VirtualPiv`: store/fetch/remove, ECDH, key/cert generation, fixture round-trip |
+| `yb-core/src/lib.rs` | Doc-test for `Context::new` signature |
+| `yb/tests/cli_tests.rs` | **Direct-call CLI tests** (spec 0008): calls command handler functions via `Context::with_backend(VirtualPiv)` — 22 tests covering all 6 commands |
 
-Test categories:
-- `store/mod.rs`: `Object` serialization round-trips; Python binary-
-  compatibility vector.
-- `crypto.rs`: GCM encrypt/decrypt round-trip; legacy CBC backward-
-  compatibility (crafts a CBC blob by hand, verifies `hybrid_decrypt`
-  decodes it correctly via a `MockPiv` that injects a precomputed shared
-  secret).
-- `orchestrator.rs`: `validate_name` accepts/rejects correct inputs.
-- `piv/virtual_piv.rs`: store/fetch/remove/list via VirtualPiv.
-
-All 30 unit tests pass with `cargo test --features virtual-piv`.
+**Direct-call CLI tests** (spec 0008) verify command logic without
+spawning a subprocess.  They use `Context::with_backend` so clap
+parsing and `main.rs` wiring are bypassed — covered separately by the
+subprocess tests.
 
 ### Tier 2 — Integration tests (NixOS VM + vsmartcard)
 
 Feature flag: `integration-tests`.  Crate: `yb-piv-harness`.
+
+Run with:
+```
+BINDGEN_EXTRA_CLANG_ARGS="-I${LIBCLANG_PATH}/clang/19/include" \
+  cargo test -p yb-piv-harness --features integration-tests
+```
+
+#### `hardware_piv_tests` (10 tests)
 
 A NixOS VM test (`pkgs.nixosTest`) spins up a guest with:
 - `pcscd` (PC/SC daemon)
 - `vsmartcard-vpcd` (virtual PC/SC reader)
 - `piv-authenticator` (software PIV applet connected to vpcd)
 
-The pre-built `hardware_piv_tests` binary is copied into the VM and run
-with `RUST_TEST_THREADS=1` (sequential — shared virtual card state).
+The harness crate provides `with_vsc(f)`:
+- **In-process mode** (developer nix-shell): starts `vpicc` in a
+  background thread connected to the local vpcd socket.
+- **External card mode** (VM): the vpcd socket is already running;
+  `with_vsc` connects to it.
 
-The harness crate (`yb-piv-harness`) provides `with_vsc(f)`:
-- **External card mode** (CI/VM): connects to the vsmartcard TCP socket
-  (`localhost:35963`) via a `VirtualPivClient` or uses the real PC/SC
-  reader exposed by the vsmartcard layer.
-- **In-process mode** (developer `nix-shell`): starts `vpicc` in a
-  background thread.
+Tests are serialized (`RUST_TEST_THREADS=1`) — shared virtual card state.
 
-Test fixture: `FixtureIdentity::default()` — known test credentials that
-match the provisioned virtual card state.
+#### `yb_cli_tests` (27 tests) — spec 0009
+
+Subprocess tests: invoke the compiled `yb` binary via
+`std::process::Command`.  Tests cover clap argument parsing, env vars,
+PIN resolution order, exit codes, stderr content, and all six commands.
+
+**`YB_FIXTURE` escape hatch:** when set, `Context::new` and
+`list_readers::run` both load a `VirtualPiv` from the named YAML file
+instead of opening a hardware card.  After each successful command,
+`main.rs` calls `ctx.piv.save_fixture(path)` to persist mutations
+(key generation, object writes) back to disk.  This is what allows
+`yb format` in one subprocess to be visible to `yb store` in the next.
+
+**`YB_BIN` override:** the `yb_cli_tests` binary finds the `yb`
+executable via `YB_BIN` env var (injected in the VM `testScript`) or
+falls back to `<CARGO_MANIFEST_DIR>/../target/debug/yb` for local runs.
+
+**Fixture-per-test pattern:** each test calls `Fixture::new()` which
+copies `with_key.yaml` to a `TempDir`, then calls `Fixture::format()`
+(runs `yb format -g`) to initialize the store, then runs the actual
+test steps.
+
+Both test binaries are extracted by `harnessTestBin` and placed in
+`$out/bin/`.  The VM `testScript` runs both with `RUST_TEST_THREADS=1`:
+
+```python
+out = machine.succeed("RUST_TEST_THREADS=1 hardware_piv_tests 2>&1")
+out = machine.succeed(
+    f"RUST_TEST_THREADS=1 YB_BIN={ybRust}/bin/yb yb_cli_tests 2>&1"
+)
+```
 
 ---
 
@@ -536,8 +635,8 @@ corrupt the ordering of objects.  `BLOB_MTIME` records human-visible
 wall-clock time but is not used for ordering.
 
 **`dirty` flag, lazy sync.** Objects are modified in memory and written
-to the YubiKey only when `Store::sync` is called.  A progress dot is
-printed to stderr for each object written.
+to the YubiKey only when `Store::sync` is called.  Progress is shown
+via an `indicatif` bar; suppressed when `--quiet` / `ctx.quiet` is set.
 
 **Object-count and object-size are stored in every object.** This makes
 any single object self-describing enough to reconstruct the full store

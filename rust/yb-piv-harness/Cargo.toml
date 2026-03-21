@@ -29,10 +29,15 @@ features = ["vpicc"]
 optional = true
 
 [dev-dependencies]
-yb-core = { path = "../yb-core" }
-p256    = { version = "0.13", features = ["ecdh"] }
-rand    = "0.8"
+yb-core  = { path = "../yb-core", features = ["virtual-piv"] }
+p256     = { version = "0.13", features = ["ecdh"] }
+rand     = "0.8"
+tempfile = "3"
 
 [[test]]
 name              = "hardware_piv_tests"
+required-features = ["integration-tests"]
+
+[[test]]
+name              = "yb_cli_tests"
 required-features = ["integration-tests"]

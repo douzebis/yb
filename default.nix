@@ -86,17 +86,17 @@ let
     # Instead of running tests, install the compiled binary.
     installPhase = ''
       mkdir -p $out/bin
-      # Pick the newest hardware_piv_tests binary (the one built with features).
-      bin=$(find target -name 'hardware_piv_tests-*' -executable -type f \
-              ! -name '*.d' ! -name '*.rmeta' \
-              -printf '%T@ %p\n' | sort -rn | head -1 | cut -d' ' -f2-)
-      if [ -z "$bin" ]; then
-        echo "ERROR: hardware_piv_tests binary not found under target/" >&2
-        find target -name 'hardware_piv_tests*' >&2 || true
-        exit 1
-      fi
-      echo "Installing $bin -> $out/bin/hardware_piv_tests"
-      cp "$bin" $out/bin/hardware_piv_tests
+      for name in hardware_piv_tests yb_cli_tests; do
+        bin=$(find target -name "$name-*" -executable -type f \
+                ! -name '*.d' ! -name '*.rmeta' \
+                -printf '%T@ %p\n' | sort -rn | head -1 | cut -d' ' -f2-)
+        if [ -z "$bin" ]; then
+          echo "ERROR: $name binary not found under target/" >&2
+          exit 1
+        fi
+        echo "Installing $bin -> $out/bin/$name"
+        cp "$bin" $out/bin/$name
+      done
     '';
   });
 
@@ -268,20 +268,30 @@ let
         enable  = true;
         plugins = [ pkgs.ccid pkgs.vsmartcard-vpcd ];
       };
-      environment.systemPackages = [ harnessTestBin ];
+      environment.systemPackages = [ harnessTestBin ybRust ];
     };
 
     testScript = ''
       machine.start()
       machine.wait_for_unit("pcscd.socket")
 
-      # Run the tier-2 tests. with_vsc connects to vpcd in-process (each test
-      # gets a fresh RAM-backed virtual card). RUST_TEST_THREADS=1 serialises
-      # tests to avoid concurrent vpcd connections.
+      # Tier-2: hardware PIV tests. with_vsc connects to vpcd in-process (each
+      # test gets a fresh RAM-backed virtual card). RUST_TEST_THREADS=1
+      # serialises tests to avoid concurrent vpcd connections.
       out = machine.succeed("RUST_TEST_THREADS=1 hardware_piv_tests 2>&1")
       print(out)
       if "test result: ok" not in out:
-        raise Exception("Tier-2 tests did not all pass:\n" + out)
+        raise Exception("Tier-2 hardware_piv_tests failed:\n" + out)
+
+      # Tier-2: CLI subprocess tests. YB_BIN points to the Nix-built binary so
+      # the pre-built yb_cli_tests binary can find it (CARGO_BIN_EXE_yb is
+      # baked at compile time and would point to the wrong store path).
+      out = machine.succeed(
+        "RUST_TEST_THREADS=1 YB_BIN=${ybRust}/bin/yb yb_cli_tests 2>&1"
+      )
+      print(out)
+      if "test result: ok" not in out:
+        raise Exception("Tier-2 yb_cli_tests failed:\n" + out)
     '';
   };
 

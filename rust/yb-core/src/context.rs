@@ -4,6 +4,8 @@
 
 //! Runtime context shared across all CLI commands.
 
+#[cfg(feature = "virtual-piv")]
+use crate::piv::VirtualPiv;
 use crate::{
     auxiliaries,
     piv::{hardware::HardwarePiv, DeviceInfo, PivBackend},
@@ -34,6 +36,13 @@ impl Context {
         quiet: bool,
         allow_defaults: bool,
     ) -> Result<Self> {
+        #[cfg(feature = "virtual-piv")]
+        let piv: Arc<dyn PivBackend> = if let Ok(path) = std::env::var("YB_FIXTURE") {
+            Arc::new(VirtualPiv::from_fixture(std::path::Path::new(&path))?)
+        } else {
+            Arc::new(HardwarePiv::new())
+        };
+        #[cfg(not(feature = "virtual-piv"))]
         let piv: Arc<dyn PivBackend> = Arc::new(HardwarePiv::new());
 
         let devices = piv.list_devices().context("listing YubiKey devices")?;

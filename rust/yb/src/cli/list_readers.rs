@@ -4,15 +4,18 @@
 
 use anyhow::Result;
 use clap::Args;
-use yb_core::{HardwarePiv, PivBackend as _};
+use yb_core::{HardwarePiv, PivBackend as _, VirtualPiv};
 
 #[derive(Args, Debug)]
 pub struct ListReadersArgs {}
 
 /// Run list-readers without constructing a Context (works when no YubiKey is connected).
 pub fn run(_args: &ListReadersArgs) -> Result<()> {
-    let piv = HardwarePiv::new();
-    let readers = piv.list_readers()?;
+    let readers = if let Ok(path) = std::env::var("YB_FIXTURE") {
+        VirtualPiv::from_fixture(std::path::Path::new(&path))?.list_readers()?
+    } else {
+        HardwarePiv::new().list_readers()?
+    };
     if readers.is_empty() {
         eprintln!("No PC/SC readers found.");
     } else {

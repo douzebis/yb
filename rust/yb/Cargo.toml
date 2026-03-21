@@ -23,7 +23,7 @@ name = "yb"
 path = "src/lib.rs"
 
 [dependencies]
-yb-core       = { path = "../yb-core", features = ["chrono"] }
+yb-core       = { path = "../yb-core", features = ["chrono", "virtual-piv"] }
 clap          = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
 crossterm     = "0.27"
