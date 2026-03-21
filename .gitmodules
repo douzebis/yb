@@ -1,0 +1,6 @@
+[submodule "mirror/vpicc-rs"]
+	path = mirror/vpicc-rs
+	url = https://github.com/nitrokey/vpicc-rs
+[submodule "mirror/piv-authenticator"]
+	path = mirror/piv-authenticator
+	url = https://github.com/trussed-dev/piv-authenticator

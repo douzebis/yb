@@ -64,6 +64,10 @@ spki       = "0.7"
 # Self-signed cert generation (replaces yubico-piv-tool selfsign)
 rcgen = "0.13"
 
+# Compression
+brotli  = "6"
+lzma-rust2 = "0.16"
+
 # Progress bars
 indicatif = "0.18"
 

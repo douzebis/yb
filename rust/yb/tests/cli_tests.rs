@@ -80,6 +80,7 @@ fn store_single_file_by_basename() {
         name: None,
         encrypted: true,
         unencrypted: false,
+        no_compress: false,
     };
     store_run(&ctx, &args).unwrap();
 
@@ -105,6 +106,7 @@ fn store_single_file_with_name_override() {
         name: Some("renamed".to_owned()),
         encrypted: false,
         unencrypted: true,
+        no_compress: false,
     };
     store_run(&ctx, &args).unwrap();
 
@@ -131,6 +133,7 @@ fn store_multiple_files() {
         name: None,
         encrypted: false,
         unencrypted: true,
+        no_compress: false,
     };
     store_run(&ctx, &args).unwrap();
 
@@ -157,6 +160,7 @@ fn store_multiple_files_name_flag_rejected() {
         name: Some("clash".to_owned()),
         encrypted: false,
         unencrypted: true,
+        no_compress: false,
     };
     assert!(store_run(&ctx, &args).is_err());
 }
@@ -180,6 +184,7 @@ fn store_duplicate_basename_rejected() {
         name: None,
         encrypted: false,
         unencrypted: true,
+        no_compress: false,
     };
     let err = store_run(&ctx, &args).unwrap_err();
     assert!(err.to_string().contains("duplicate blob name"));
@@ -200,6 +205,7 @@ fn store_plain(ctx: &Context, name: &str, payload: &[u8]) {
         name: Some(name.to_owned()),
         encrypted: false,
         unencrypted: true,
+        no_compress: false,
     };
     store_run(ctx, &args).unwrap();
 }
@@ -520,6 +526,7 @@ fn fsck_detect_duplicate_name_anomaly() {
         blob_size: 1,
         blob_key_slot: 0,
         blob_plain_size: 1,
+        is_compressed: false,
         blob_name: "dup".to_owned(),
         payload: vec![0],
         dirty: true,
@@ -537,6 +544,7 @@ fn fsck_detect_duplicate_name_anomaly() {
         blob_size: 1,
         blob_key_slot: 0,
         blob_plain_size: 1,
+        is_compressed: false,
         blob_name: "dup".to_owned(),
         payload: vec![0],
         dirty: true,
@@ -592,6 +600,7 @@ fn fsck_detect_orphaned_continuation() {
         blob_size: 1,
         blob_key_slot: 0,
         blob_plain_size: 1,
+        is_compressed: false,
         blob_name: "solo".to_owned(),
         payload: vec![0],
         dirty: true,
@@ -610,6 +619,7 @@ fn fsck_detect_orphaned_continuation() {
         blob_size: 0,
         blob_key_slot: 0,
         blob_plain_size: 0,
+        is_compressed: false,
         blob_name: String::new(),
         payload: vec![0],
         dirty: true,

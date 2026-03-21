@@ -1,3 +1,10 @@
+<!--
+SPDX-FileCopyrightText: 2025 - 2026 Frederic Ruget <fred@atlant.is> <fred@s3ns.io> (GitHub: @douzebis)
+SPDX-FileCopyrightText: 2025 - 2026 Thales Cloud Sécurisé
+
+SPDX-License-Identifier: MIT
+-->
+
 +++
 title = "yb docs"
 +++
@@ -9,11 +16,12 @@ Documentation for the `yb` command-line tool.
 ## User documentation
 
 - [README](readme) — Overview, installation, and usage guide
-- [YBLOB format](yblob-format) — Binary format specification for PIV object store
+- [Man pages](man-pages) — Reference manual for all `yb` commands
 
 ## Design documentation
 
 - [Design](design) — Architecture, crate structure, and implementation details
+- [YBLOB format](yblob-format) — Binary wire format for the PIV object store
 - [Test harness](test-harness) — Test taxonomy: tier-1 unit tests and tier-2 NixOS VM tests
 - [Security review](sec-review) — Security analysis and hardening findings
 
@@ -32,7 +40,7 @@ Documentation for the `yb` command-line tool.
 | [0009](specs/0009-cli-subprocess-tests) | CLI subprocess tests | implemented |
 | [0010](specs/0010-dynamic-object-sizing) | Dynamic PIV Object Sizing | draft |
 | [0011](specs/0011-refactor-and-test-coverage) | Refactoring Opportunities and Test Coverage Gaps | implemented |
-| [0012](specs/0012-transparent-compression) | Transparent Compression | draft |
-| [0013](specs/0013-interactive-device-selection) | Interactive Device Selection with LED Feedback | draft |
+| [0012](specs/0012-transparent-compression) | Transparent Compression | implemented |
+| [0013](specs/0013-interactive-device-selection) | Interactive Device Selection with LED Feedback | implemented |
 | [0014](specs/0014-operation-generator) | ToyFilesystem and OperationGenerator Test Primitives | draft |
 | [0015](specs/0015-self-test-command) | `yb self-test` Command | draft |

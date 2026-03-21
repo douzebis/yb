@@ -19,6 +19,33 @@ pub enum Encryption<'a> {
     Encrypted(&'a PublicKey),
 }
 
+/// Compression mode for `store_blob`.
+#[derive(Clone, Copy)]
+pub enum Compression {
+    /// Try brotli level 11 and xz preset 9; store whichever is smaller,
+    /// or uncompressed if compression makes no progress.
+    Auto,
+    /// Never compress.
+    None,
+}
+
+/// Options for `store_blob`.
+pub struct StoreOptions<'a> {
+    pub encryption: Encryption<'a>,
+    pub compression: Compression,
+}
+
+/// Magic prefix prepended to brotli-compressed payloads ("YBr\x01").
+const BROTLI_MAGIC: &[u8; 4] = b"\x59\x42\x72\x01";
+
+/// Standard xz stream magic.
+const XZ_MAGIC: &[u8; 6] = b"\xfd7zXZ\x00";
+
+/// Bit 23 of the u24 `blob_plain_size` / `blob_size` wire fields.
+/// Used as the compression flag (C-bit) in `blob_plain_size`, and as a
+/// mask to verify that a size value fits in the remaining 23 bits.
+pub(crate) const BLOB_SIZE_C_BIT: usize = 0x80_0000;
+
 /// Metadata returned by list_blobs.
 #[derive(Debug, Clone)]
 pub struct BlobInfo {
@@ -71,20 +98,45 @@ pub fn store_blob(
     piv: &dyn PivBackend,
     name: &str,
     payload: &[u8],
-    encryption: Encryption<'_>,
+    options: StoreOptions<'_>,
     management_key: Option<&str>,
     pin: Option<&str>,
 ) -> Result<bool> {
     validate_name(name)?;
 
+    // blob_plain_size is a u24 field whose bit 23 is the C flag;
+    // the size must not touch that bit or any higher bit.
+    if payload.len() & BLOB_SIZE_C_BIT != 0 {
+        anyhow::bail!(
+            "blob '{}': plaintext too large ({} bytes, max 0x7FFFFF)",
+            name,
+            payload.len()
+        );
+    }
+
+    // Compress if requested.
+    let (candidate, is_compressed) = match options.compression {
+        Compression::None => (payload.to_vec(), false),
+        Compression::Auto => compress_payload(name, payload)?,
+    };
+
     // Encrypt if requested.
-    let (data, blob_key_slot) = match encryption {
+    let (data, blob_key_slot) = match options.encryption {
         Encryption::Encrypted(pk) => {
-            let enc = crypto::hybrid_encrypt(payload, pk).context("encrypting blob")?;
+            let enc = crypto::hybrid_encrypt(&candidate, pk).context("encrypting blob")?;
             (enc, store.store_key_slot)
         }
-        Encryption::None => (payload.to_vec(), 0u8),
+        Encryption::None => (candidate, 0u8),
     };
+
+    // blob_size is also a u24 field with the same C-bit constraint.
+    if data.len() & BLOB_SIZE_C_BIT != 0 {
+        anyhow::bail!(
+            "blob '{}': stored size too large ({} bytes, max 0x7FFFFF)",
+            name,
+            data.len()
+        );
+    }
 
     let plain_size = payload.len() as u32;
     let blob_size = data.len() as u32;
@@ -140,6 +192,7 @@ pub fn store_blob(
         blob_size,
         blob_key_slot,
         blob_plain_size: plain_size,
+        is_compressed,
         blob_name: name.to_owned(),
         payload: data[..head_payload_end].to_vec(),
         dirty: true,
@@ -169,6 +222,7 @@ pub fn store_blob(
             blob_size: 0,
             blob_key_slot: 0,
             blob_plain_size: 0,
+            is_compressed: false,
             blob_name: String::new(),
             payload: data[offset..end].to_vec(),
             dirty: true,
@@ -199,6 +253,7 @@ pub fn fetch_blob(
     };
 
     let is_encrypted = head.is_encrypted();
+    let is_compressed = head.is_compressed;
     let key_slot = head.blob_key_slot;
 
     // Concatenate all chunk payloads.
@@ -210,15 +265,21 @@ pub fn fetch_blob(
     // Trim to blob_size (payload region may have trailing zeros).
     data.truncate(head.blob_size as usize);
 
-    if is_encrypted {
+    let payload = if is_encrypted {
         if pin.is_none() {
             bail!("blob '{name}' is encrypted but no PIN was provided");
         }
-        let plaintext = crypto::hybrid_decrypt(piv, reader, key_slot, &data, pin, debug)
-            .with_context(|| format!("decrypting blob '{name}'"))?;
+        crypto::hybrid_decrypt(piv, reader, key_slot, &data, pin, debug)
+            .with_context(|| format!("decrypting blob '{name}'"))?
+    } else {
+        data
+    };
+
+    if is_compressed {
+        let plaintext = decompress_payload(name, &payload)?;
         Ok(Some(plaintext))
     } else {
-        Ok(Some(data))
+        Ok(Some(payload))
     }
 }
 
@@ -272,6 +333,80 @@ pub fn list_blobs(store: &Store) -> Vec<BlobInfo> {
 
     blobs.sort_by(|a, b| a.name.cmp(&b.name));
     blobs
+}
+
+// ---------------------------------------------------------------------------
+// Compression helpers
+// ---------------------------------------------------------------------------
+
+/// Compress `payload` with both brotli and xz; return the better candidate
+/// and whether compression was applied.
+fn compress_payload(name: &str, payload: &[u8]) -> Result<(Vec<u8>, bool)> {
+    use std::io::Write as _;
+
+    // Brotli level 11.
+    let mut brotli_body = Vec::new();
+    {
+        let mut enc = brotli::CompressorWriter::new(&mut brotli_body, 4096, 11, 22);
+        enc.write_all(payload)
+            .with_context(|| format!("brotli compress blob '{name}'"))?;
+    }
+    // Prepend YBr\x01 magic.
+    let mut brotli_out = Vec::with_capacity(BROTLI_MAGIC.len() + brotli_body.len());
+    brotli_out.extend_from_slice(BROTLI_MAGIC);
+    brotli_out.extend_from_slice(&brotli_body);
+
+    // xz preset 9.
+    let mut xz_out = Vec::new();
+    {
+        let mut enc = lzma_rust2::XzWriter::new(&mut xz_out, lzma_rust2::XzOptions::with_preset(9))
+            .with_context(|| format!("xz compress blob '{name}'"))?;
+        enc.write_all(payload)
+            .with_context(|| format!("xz compress blob '{name}'"))?;
+        enc.finish()
+            .with_context(|| format!("xz compress blob '{name}'"))?;
+    }
+
+    if !xz_out.starts_with(XZ_MAGIC) {
+        anyhow::bail!("xz output for blob '{name}' has unexpected magic — library bug");
+    }
+
+    // Pick the smaller candidate.
+    let pick = if brotli_out.len() <= xz_out.len() {
+        brotli_out
+    } else {
+        xz_out
+    };
+
+    if pick.len() < payload.len() {
+        Ok((pick, true))
+    } else {
+        Ok((payload.to_vec(), false))
+    }
+}
+
+/// Decompress a payload whose C-bit was set.  Dispatches on magic bytes.
+fn decompress_payload(name: &str, payload: &[u8]) -> Result<Vec<u8>> {
+    use std::io::Read as _;
+
+    if payload.starts_with(XZ_MAGIC) {
+        let mut out = Vec::new();
+        let mut dec = lzma_rust2::XzReader::new(payload, false);
+        dec.read_to_end(&mut out)
+            .with_context(|| format!("decompressing blob '{name}'"))?;
+        return Ok(out);
+    }
+
+    if payload.starts_with(BROTLI_MAGIC) {
+        let compressed = &payload[BROTLI_MAGIC.len()..];
+        let mut dec = brotli::Decompressor::new(compressed, 4096);
+        let mut out = Vec::new();
+        dec.read_to_end(&mut out)
+            .with_context(|| format!("decompressing blob '{name}'"))?;
+        return Ok(out);
+    }
+
+    anyhow::bail!("unknown compression format in blob '{name}'")
 }
 
 // ---------------------------------------------------------------------------
@@ -348,7 +483,10 @@ mod tests {
             &piv,
             "a",
             b"aaa",
-            Encryption::None,
+            StoreOptions {
+                encryption: Encryption::None,
+                compression: Compression::None,
+            },
             Some(mgmt),
             None,
         )
@@ -359,7 +497,10 @@ mod tests {
             &piv,
             "b",
             b"bbb",
-            Encryption::None,
+            StoreOptions {
+                encryption: Encryption::None,
+                compression: Compression::None,
+            },
             Some(mgmt),
             None,
         )
@@ -374,7 +515,10 @@ mod tests {
             &piv,
             "c",
             b"ccc",
-            Encryption::None,
+            StoreOptions {
+                encryption: Encryption::None,
+                compression: Compression::None,
+            },
             Some(mgmt),
             None,
         );
