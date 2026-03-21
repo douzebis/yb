@@ -9,17 +9,10 @@ SPDX-License-Identifier: MIT
 
 # yb — Secure Blob Storage in Your YubiKey
 
-> **Rust port in progress.**
-> The current implementation is in Python. A full rewrite in Rust is underway
-> (see [`docs/rust-port-plan.md`](docs/rust-port-plan.md)). The crate name `yb`
-> on [crates.io](https://crates.io/crates/yb) is reserved for that release.
-> Once the port is complete, `cargo install yb` will be the recommended
-> installation method and the Python implementation will be retired.
-
 **yb** is a command-line tool for securely storing, retrieving, and managing
-small binary blobs directly within a [YubiKey](https://www.yubico.com/products/)
-using its PIV application. It enables encrypted, name-based storage with hybrid
-cryptography, leveraging the hardware-backed security of your YubiKey.
+binary blobs directly within a [YubiKey](https://www.yubico.com/products/)
+using its PIV application. Blobs are stored under human-friendly names,
+optionally encrypted with hardware-backed hybrid cryptography.
 
 **GitHub**: https://github.com/douzebis/yb
 
@@ -27,68 +20,200 @@ cryptography, leveraging the hardware-backed security of your YubiKey.
 
 ## Features
 
-- **Store** binary blobs under human-friendly names
-- **Encrypt** data using hybrid ECDH + AES-256 encryption with a YubiKey-stored key
-- **List**, **fetch**, and **delete** blobs by name
-- **Inspect** low-level object storage for debugging (`fsck`)
-- Designed for use with custom PIV data objects on the YubiKey
+- **Store** binary blobs under human-friendly names (files or stdin)
+- **Encrypt** data using hybrid ECDH + HKDF-SHA256 + AES-256-GCM, with the
+  private key never leaving the YubiKey
+- **List**, **fetch**, and **remove** blobs by exact name or glob pattern
+- **Multiple YubiKeys** supported via `--serial`
+- **PIN-protected management key** mode for convenience and security
+- **Shell completions** for bash, zsh, and fish (dynamic blob-name completion)
+- **Inspect** low-level store integrity with `fsck`
+- No runtime dependencies beyond PC/SC — a single static binary
 
 ---
 
-## Getting Started
+## Installation
 
-### Installation (Rust — coming soon)
-
-Once the Rust port is complete, the recommended installation will be:
+### cargo install
 
 ```shell
 cargo install yb
 ```
 
-Runtime tools must also be on your `PATH`: `yubico-piv-tool`, `pkcs11-tool`
-(from `opensc`), `openssl`, and `ykman`.
+Runtime requirement: a PC/SC daemon must be running (`pcscd` on Linux).
+No other external tools are needed.
 
-### Installation (NixOS)
+### Nix (NixOS / nix-shell)
 
-Choose one of the following:
+Build and install from the repo:
 
 ```shell
-# Option 1: Enter a dev environment with dependencies installed via nix-shell
-nix-shell
-
-# Option 2: Use nix develop (installs into a .venv for editing)
-nix-shell shell-editable.nix
-
-# Option 3: Build the yb derivation (does not activate environment)
 nix-build
+result/bin/yb --help
 ```
 
-### Installation (Traditional Python)
+Or enter a development shell with `yb` on `PATH` and shell completions
+activated automatically:
 
 ```shell
-# Create and activate a virtual environment
-python3.12 -m venv .venv
-source .venv/bin/activate
+nix-shell
+```
 
-# Install in editable mode
-pip install --editable .
+### Build from source
+
+```shell
+git clone https://github.com/douzebis/yb
+cd yb/rust
+cargo build --release
+# Binary is at target/release/yb
 ```
 
 ---
 
-## Command Overview
+## Shell Completions
+
+yb supports dynamic shell completions — blob names and serial numbers are
+completed live against the connected YubiKey.
+
+### bash
 
 ```shell
-yb format     # Initialize PIV objects and optionally generate key pair
-yb store      # Store a named blob in the YubiKey
-yb fetch      # Retrieve a blob by name
-yb ls         # List stored blobs and metadata
-yb rm         # Delete a blob by name
-yb fsck       # Inspect and verify object integrity
-yb self-test  # Run comprehensive end-to-end tests (destructive)
+source <(YB_COMPLETE=bash yb | sed 's/yb//2;s/yb//2')
 ```
 
-Use `--help` with any command for detailed options.
+Add to `~/.bashrc` for persistence.
+
+### zsh
+
+```shell
+YB_COMPLETE=zsh yb > ~/.zfunc/_yb
+# Ensure ~/.zfunc is in your fpath, then:
+autoload -Uz compinit && compinit
+```
+
+### fish
+
+```shell
+YB_COMPLETE=fish yb > ~/.config/fish/completions/yb.fish
+```
+
+When installed via `nix-build`, completion scripts are installed automatically
+into the system completion directories.  When using `nix-shell`, bash
+completions are activated for the current session automatically.
+
+---
+
+## Quick Start
+
+### 1. Provision the YubiKey store
+
+```shell
+# Generate a new ECDH key pair and initialise the blob store
+yb format --generate
+```
+
+This writes 20 PIV objects (40 KB) to the YubiKey and generates a P-256
+key in slot `0x82`.  Run once per YubiKey.
+
+### 2. Store a blob
+
+```shell
+# Store a file (blob name defaults to the file's basename)
+yb store secret.txt
+
+# Store a file under a specific name
+yb store --name my-key secret.txt
+
+# Read from stdin
+echo "s3cr3t" | yb store --name api-token
+
+# Store unencrypted
+yb store --unencrypted public-cert.pem
+```
+
+### 3. Fetch a blob
+
+```shell
+# Save to a file in the current directory (filename = blob name)
+yb fetch my-key
+
+# Write to stdout
+yb fetch --stdout api-token
+
+# Write to a specific file
+yb fetch --output recovered.txt my-key
+
+# Fetch multiple blobs matching a glob
+yb fetch 'ssh-*'
+```
+
+### 4. List blobs
+
+```shell
+# Names only
+yb list
+
+# Long format (encrypted flag, chunk count, date, size, name)
+yb list --long
+
+# Filter by glob
+yb list 'ssh-*'
+
+# Sort by date, newest first
+yb list --long --sort-time
+```
+
+### 5. Remove blobs
+
+```shell
+yb remove my-key
+
+# Glob pattern
+yb remove 'tmp-*'
+
+# Ignore if not found
+yb remove --ignore-missing old-token
+```
+
+---
+
+## Command Reference
+
+```
+yb [OPTIONS] <COMMAND>
+
+Options:
+  -s, --serial <SERIAL>   YubiKey serial number (required with multiple keys)
+  -r, --reader <READER>   PC/SC reader name (legacy; prefer --serial)
+  -q, --quiet             Suppress informational output
+      --pin-stdin         Read PIN from stdin (one line, for scripting)
+      --allow-defaults    Allow insecure default credentials (not recommended)
+      --debug             Enable debug output
+```
+
+| Command | Alias | Description |
+|---|---|---|
+| `format` | — | Provision PIV objects; optionally generate ECDH key |
+| `store` | — | Store a blob (file or stdin) |
+| `fetch` | — | Retrieve blob(s) by name or glob |
+| `list` | `ls` | List blobs with optional glob filter |
+| `remove` | `rm` | Remove blob(s) by name or glob |
+| `fsck` | — | Check store integrity and print summary |
+| `list-readers` | — | List available PC/SC readers |
+
+Use `yb <command> --help` for full option details.
+
+---
+
+## PIN Handling
+
+yb resolves the PIN in this order:
+
+1. `--pin-stdin` — reads one line from stdin (for scripting and pipelines)
+2. `YB_PIN` environment variable
+3. Interactive TTY prompt — deferred until a PIN is actually needed
+
+Commands that never need a PIN (`list`, `fsck`) never prompt.
 
 ---
 
@@ -96,135 +221,101 @@ Use `--help` with any command for detailed options.
 
 yb uses a **hybrid encryption scheme**:
 
-- An ephemeral EC P-256 key is generated on each `store` or `fetch` call
-- A persistent P-256 key in the YubiKey is used for ECDH
-- The derived shared secret feeds into **HKDF-SHA256**, producing an AES-256 key
-- Blob data is encrypted using **AES-CBC with PKCS7 padding**
-- Encrypted chunks are stored in custom PIV objects
+1. A fresh ephemeral P-256 key pair is generated for each `store` operation.
+2. ECDH between the ephemeral key and the YubiKey's resident P-256 key
+   produces a shared secret — the YubiKey performs this operation on-card
+   via GENERAL AUTHENTICATE; the private key never leaves the device.
+3. The shared secret is fed into **HKDF-SHA256** to derive an AES-256 key.
+4. The blob is encrypted with **AES-256-GCM** (authenticated encryption).
+5. The ephemeral public key, nonce, and ciphertext are stored in the YubiKey
+   PIV objects.
+
+Decryption (`fetch`) reverses steps 2–4, again using the YubiKey for ECDH.
+
+Legacy blobs produced by the Python predecessor (AES-256-CBC) are still
+readable.
 
 ---
 
-## Example Usage
+## Storage Model
 
-```shell
-# Format the store (initialize objects and key)
-yb format --generate
+yb stores blobs in custom PIV data objects (retired key certificate slots
+`0x5F_0000`–`0x5F_0013`).  Large blobs are split across multiple objects
+using a linked-chunk format.  Default store configuration:
 
-# Store a file as a secure blob
-yb store --input my-secret.txt my-blob
-
-# Fetch it back
-yb fetch --output recovered.txt my-blob
-# Please enter User PIN:
-
-# List blobs
-yb ls
-
-# Delete a blob
-yb rm my-blob
-```
+| Parameter | Default | Notes |
+|---|---|---|
+| Object count | 20 | Tunable at format time (`--object-count`) |
+| Object size | 2,048 bytes | Tunable at format time (`--object-size`, max 3,052) |
+| Gross capacity | ~40 KB | Fits within YubiKey 5's 51,200-byte NVM pool |
+| ECDH key slot | `0x82` | Tunable at format time (`--key-slot`) |
 
 ---
 
-## Working with Multiple YubiKeys
-
-If you have multiple YubiKeys, use the `--serial` option to select which one to use:
+## Multiple YubiKeys
 
 ```shell
-# Select YubiKey by serial number (printed on device case)
-yb --serial 12345678 ls
+# List connected readers
+yb list-readers
 
-# Store a blob on a specific YubiKey
-yb --serial 12345678 store --input data.txt my-blob
+# Use a specific YubiKey by serial number
+yb --serial 12345678 list
+yb --serial 12345678 store secret.txt
 ```
 
-**Finding Your Serial Number:**
-- Look at your YubiKey case - the serial number is printed on it
-- Or let yb tell you when multiple devices are connected
-
-When multiple YubiKeys are connected and you don't specify `--serial`, yb will show you the available serial numbers:
-
-```
-Error: Multiple YubiKeys are connected:
-  - Serial 12345678 (YubiKey 5.7.1)
-  - Serial 87654321 (YubiKey 5.4.3)
-
-Use --serial to select one, for example:
-  yb --serial 12345678 <command>
-```
-
-**Legacy Option:** The `--reader` option is still supported for PC/SC reader names, but `--serial` is recommended.
+When multiple YubiKeys are connected and `--serial` is omitted, yb prints
+the available serials and exits.
 
 ---
 
 ## Security: Default Credential Detection
 
-For security, yb automatically checks if your YubiKey uses default credentials and refuses to operate if detected:
-
-- **Default PIN**: 123456
-- **Default PUK**: 12345678
-- **Default Management Key**: 010203040506070801020304050607080102030405060708
-
-If your YubiKey uses any default credentials, yb will display an error like:
-
-```
-Error: YubiKey is using default credentials (INSECURE):
-  - PIN (default: 123456, 3 attempts remaining)
-  - Management Key (default: 010203...)
-
-This is a security risk. Please change your YubiKey credentials:
-  - Change PIN: ykman piv access change-pin
-  - Change PUK: ykman piv access change-puk
-  - Change Management Key (recommended with PIN-protected mode):
-    ykman piv access change-management-key --generate --protect
-
-To proceed anyway (NOT RECOMMENDED), use --allow-defaults flag.
-```
-
-**Changing Your Credentials:**
+yb checks for factory-default credentials (PIN `123456`, PUK `12345678`,
+management key `010203...`) and refuses to operate if any are detected.
+Change them with:
 
 ```shell
-# Change PIN
 ykman piv access change-pin
-
-# Change PUK
 ykman piv access change-puk
-
-# Change Management Key (recommended with PIN-protected mode)
 ykman piv access change-management-key --generate --protect
 ```
 
-**Note**: This check requires YubiKey firmware 5.3 or later. On older firmware, yb will display a warning but continue.
+The last command enables **PIN-protected management key mode**: the
+management key is stored on the YubiKey itself, encrypted by your PIN.
+yb detects this automatically — no `--key` flag is needed for write
+operations.
 
-**For Testing/Development:**
-- Use `--allow-defaults` flag to bypass the check (insecure)
-- Set `YB_SKIP_DEFAULT_CHECK=1` environment variable to skip the check entirely
+To bypass the check (testing only): `--allow-defaults` or
+`YB_SKIP_DEFAULT_CHECK=1`.
+
+Requires YubiKey firmware 5.3 or later for credential detection.
 
 ---
 
-## PIN-Protected Management Key Mode
+## Format Specification
 
-For enhanced security and convenience, yb supports **PIN-protected management key mode**. This allows YubiKeys to store the management key on-device, encrypted and protected by your PIN.
+The yblob binary format is fully documented in
+[`doc/YBLOB_FORMAT.md`](doc/YBLOB_FORMAT.md).  It is designed to be
+implementation-independent: any tool that can read and write YubiKey PIV data
+objects can interoperate with a yblob store without using `yb` itself.
 
-**Why use PIN-protected mode?**
-- ✓ More secure than default management key
-- ✓ More convenient - no need to provide 48-char hex key
-- ✓ You only need to remember your PIN
-- ✓ Management key never leaves the YubiKey
+---
 
-**One-time setup:**
+## File Format Recognition
+
+The yblob binary format is registered in the
+[`file` magic database](https://github.com/file/file) (merged June 2025,
+[bug #666](https://bugs.astron.com/view.php?id=666)).  On any system with an
+up-to-date `file` installation, raw PIV object dumps are identified
+automatically:
+
 ```shell
-ykman piv access change-management-key --generate --protect
+$ file yubikey_object_dump.bin
+yubikey_object_dump.bin: yblob object store image data
 ```
 
-**Usage:**
-yb automatically detects PIN-protected mode - no `--key` flag needed:
-```shell
-yb store myfile           # Prompts for PIN if needed
-yb --pin 123456 store     # Non-interactive
-```
-
-See the [User Guide](USER_GUIDE.md) for more details.
+The magic number is `0xF2ED5F0B` (little-endian u32 at offset 0), present in
+every PIV object written by yb.
 
 ---
 

@@ -701,3 +701,36 @@ DER is automatically zeroed on drop via `Zeroizing<>` wrappers in the
 Default key slot for ECDH encryption: **0x82** (first retired key slot).
 The corresponding certificate is written to the slot's certificate object
 by `yb format --generate`.
+
+---
+
+## 14. Future Opportunities
+
+### Dynamic PIV object sizing
+
+See **[spec 0010](../docs/specs/0010-dynamic-object-sizing.md)** for the full
+specification.
+
+The current store writes every PIV object at a fixed `object_size`, padding
+the last chunk of every blob with zeros.  Average waste: `object_size / 2`
+bytes per blob.
+
+The proposed solution writes each object at **exactly the size its content
+requires** — no padding.  Empty reserved slots become 9-byte sentinels.
+`MAX_OBJECT_SIZE = 3052` (the PIV slot maximum) replaces `object_size` as a
+build-time constant; `--object-size` is removed from `yb format`.
+
+**Backward compatibility** is inherent in the existing design: `from_device`
+already infers each object's size from the `GET DATA` response length.  A
+uniform-size store is just a special case where all responses happen to be
+the same length.  No header changes are needed.
+
+**Capacity reporting** splits into two independent resources:
+
+- *Slot count* — fixed at format time; limits how many distinct blob chunks
+  can coexist.
+- *NVM bytes* — dynamic and shared with other PIV users (certificates, etc.).
+
+`fsck` reports free capacity conservatively as
+`min(free_slots × MAX_OBJECT_SIZE, nvm_remaining)`, where `nvm_remaining` is
+derived by summing the sizes of all objects currently written to the device.
