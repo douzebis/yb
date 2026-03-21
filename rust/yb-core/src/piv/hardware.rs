@@ -221,7 +221,7 @@ impl PivBackend for HardwarePiv {
         Ok(cert_der)
     }
 
-    fn start_flash(&self, reader: &str, interval_ms: u64) -> Box<dyn FlashHandle> {
+    fn start_flash(&self, reader: &str, on_ms: u64, off_ms: u64) -> Box<dyn FlashHandle> {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_clone = Arc::clone(&stop);
         let reader_owned = reader.to_owned();
@@ -229,7 +229,7 @@ impl PivBackend for HardwarePiv {
         let _ = std::thread::Builder::new()
             .name("yb-flash".to_owned())
             .spawn(move || {
-                flash_loop(&reader_owned, interval_ms, &stop_clone);
+                flash_loop(&reader_owned, on_ms, off_ms, &stop_clone);
             });
 
         Box::new(HardwareFlash { stop })
@@ -252,13 +252,47 @@ impl Drop for HardwareFlash {
     }
 }
 
-/// Background loop: send SELECT_PIV every `interval_ms` until `stop` is set.
+/// Background loop: blink the LED on the YubiKey.
 ///
-/// Each SELECT_PIV causes one brief LED flash (~1–3 ms round-trip).
+/// ## How the LED is controlled
+///
+/// The YubiKey has no dedicated "blink" command.  The LED lights when the card
+/// processes an APDU and goes dark when power is removed.  Specifically:
+///
+/// - `SCardConnect` powers the card up (brief transient flash).
+/// - `SELECT PIV` (00 A4 04 00 05 A0 00 00 03 08) lights the LED while the
+///   card is processing — the LED stays on as long as the connection is open.
+/// - `SCardDisconnect(SCARD_UNPOWER_CARD)` cuts power immediately → LED off.
+/// - Keeping the connection open indefinitely leaves the LED continuously lit.
+///
+/// ## Cycle structure
+///
+/// To produce a clean blink the loop reconnects on every cycle:
+///
+/// ```text
+/// connect (power-up transient)
+/// loop:
+///   SELECT_PIV → LED on
+///   sleep on_ms
+///   disconnect(UnpowerCard) → LED off
+///   sleep off_ms
+///   connect (power-up transient, absorbed into next on-period)
+/// ```
+///
+/// The power-up transient on `connect` is brief and indistinguishable from the
+/// intentional flash because it is immediately followed by SELECT_PIV.
+///
+/// ## Known residual noise
+///
+/// A faint off/on dip (~50 ms) occurs every ~3 seconds regardless of timing.
+/// This is intrinsic YubiKey firmware behavior (observed on YubiKey 5 series):
+/// the device performs a periodic internal housekeeping operation that briefly
+/// interrupts LED state.  It cannot be suppressed from the host side; we accept
+/// it as an unavoidable artifact.
+///
 /// Any PC/SC error (card removed, USB glitch) silently terminates the loop.
 /// The thread never panics the process.
-fn flash_loop(reader: &str, interval_ms: u64, stop: &AtomicBool) {
-    // Open a dedicated shared connection for flashing.
+fn flash_loop(reader: &str, on_ms: u64, off_ms: u64, stop: &AtomicBool) {
     let ctx = match pcsc::Context::establish(pcsc::Scope::User) {
         Ok(c) => c,
         Err(_) => return,
@@ -267,28 +301,49 @@ fn flash_loop(reader: &str, interval_ms: u64, stop: &AtomicBool) {
         Ok(s) => s,
         Err(_) => return,
     };
-    let card = match ctx.connect(&reader_cstr, pcsc::ShareMode::Shared, pcsc::Protocols::ANY) {
+    let mut buf = vec![0u8; pcsc::MAX_BUFFER_SIZE_EXTENDED];
+
+    // Sleep helpers: check stop flag every 10 ms for responsiveness.
+    let on_ticks = (on_ms / 10).max(1);
+    let off_ticks = (off_ms / 10).max(1);
+
+    // Initial connect before the loop.
+    let mut card = match ctx.connect(&reader_cstr, pcsc::ShareMode::Shared, pcsc::Protocols::ANY) {
         Ok(c) => c,
         Err(_) => return,
     };
 
-    let mut buf = vec![0u8; pcsc::MAX_BUFFER_SIZE_EXTENDED];
-    // Sleep in 10 ms increments for responsive stop detection.
-    let ticks = (interval_ms / 10).max(1);
-
-    'outer: loop {
+    loop {
         if stop.load(Ordering::Relaxed) {
             break;
         }
+        // SELECT PIV → LED on.
         if card.transmit(SELECT_PIV, &mut buf).is_err() {
             break;
         }
-        for _ in 0..ticks {
+        // Hold on-period.
+        for _ in 0..on_ticks {
             if stop.load(Ordering::Relaxed) {
-                break 'outer;
+                return;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
+        // UnpowerCard → LED off immediately.
+        if card.disconnect(pcsc::Disposition::UnpowerCard).is_err() {
+            break;
+        }
+        // Off-period.
+        for _ in 0..off_ticks {
+            if stop.load(Ordering::Relaxed) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        // Reconnect — power-up transient is absorbed into the next on-period.
+        card = match ctx.connect(&reader_cstr, pcsc::ShareMode::Shared, pcsc::Protocols::ANY) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
     }
 }
 

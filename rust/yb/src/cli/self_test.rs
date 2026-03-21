@@ -185,7 +185,7 @@ pub fn run(ctx: &Context, args: &SelfTestArgs) -> Result<()> {
             .find(|d| d.serial == serial)
             .map(|d| d.reader)
             .unwrap_or_default();
-        Some(ctx.piv.start_flash(&reader, 200))
+        Some(ctx.piv.start_flash(&reader, 200, 400))
     } else {
         None
     };
