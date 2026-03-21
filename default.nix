@@ -208,7 +208,7 @@ let
   # ---------------------------------------------------------------------------
   # NIXOS VM INTEGRATION TEST (tier-1 + tier-2)
   # ---------------------------------------------------------------------------
-  integrationTests = pkgs.nixosTest {
+  integrationTests = pkgs.testers.nixosTest {
     name = "yb-integration-tests";
 
     nodes.machine = { config, pkgs, ... }: {
