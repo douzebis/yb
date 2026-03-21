@@ -13,4 +13,5 @@
 /result*
 /rust/result*
 /rust/target/
+/website/public/
 
