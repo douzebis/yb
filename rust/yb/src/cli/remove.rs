@@ -4,33 +4,87 @@
 
 use anyhow::{bail, Result};
 use clap::Args;
-use yb_core::orchestrator;
-use yb_core::{store::Store, Context};
+use globset::GlobBuilder;
+use yb_core::{list_blobs, store::Store, Context};
 
 #[derive(Args, Debug)]
 pub struct RemoveArgs {
-    /// Name of the blob to remove.
-    pub name: String,
+    /// Blob name(s) or glob patterns to remove.
+    #[arg(required = true)]
+    pub patterns: Vec<String>,
+
+    /// Silently skip patterns that match nothing; exit 0 even if nothing was removed.
+    #[arg(short = 'f', long = "ignore-missing")]
+    pub ignore_missing: bool,
 }
 
 pub fn run(ctx: &Context, args: &RemoveArgs) -> Result<()> {
     let mut store = Store::from_device(&ctx.reader, ctx.piv.as_ref())?;
     store.sanitize();
 
-    let mgmt_key = ctx.management_key_for_write()?;
+    let all_blobs: Vec<String> = list_blobs(&store).into_iter().map(|b| b.name).collect();
 
-    let removed = orchestrator::remove_blob(
-        &mut store,
-        ctx.piv.as_ref(),
-        &args.name,
-        mgmt_key.as_deref(),
-        ctx.pin.as_deref(),
-    )?;
-
-    if !removed {
-        bail!("blob '{}' not found", args.name);
+    // Resolve all patterns to a deduplicated list of blob names to remove.
+    let mut to_remove: Vec<String> = Vec::new();
+    for pattern in &args.patterns {
+        let is_glob = pattern.chars().any(|c| matches!(c, '*' | '?' | '['));
+        if is_glob {
+            let glob = GlobBuilder::new(pattern)
+                .case_insensitive(false)
+                .build()?
+                .compile_matcher();
+            let hits: Vec<&str> = all_blobs
+                .iter()
+                .filter(|n| glob.is_match(n.as_str()))
+                .map(|n| n.as_str())
+                .collect();
+            if hits.is_empty() {
+                if args.ignore_missing {
+                    continue;
+                }
+                bail!("pattern '{}' matched no blobs", pattern);
+            }
+            for name in hits {
+                if !to_remove.iter().any(|n| n == name) {
+                    to_remove.push(name.to_owned());
+                }
+            }
+        } else {
+            // Plain name: exact match.
+            if !all_blobs.iter().any(|n| n == pattern) {
+                if args.ignore_missing {
+                    continue;
+                }
+                bail!("blob '{}' not found", pattern);
+            }
+            if !to_remove.iter().any(|n| n == pattern) {
+                to_remove.push(pattern.clone());
+            }
+        }
     }
 
-    eprintln!("Removed '{}'", args.name);
+    if to_remove.is_empty() {
+        return Ok(());
+    }
+
+    // Mark all blobs for removal, then sync once (single write pass).
+    let mgmt_key = ctx.management_key_for_write()?;
+    for name in &to_remove {
+        let chain = store
+            .find_head(name)
+            .map(|h| store.chunk_chain(h.index))
+            .unwrap_or_default();
+        for idx in chain {
+            store.objects[idx as usize].reset();
+        }
+    }
+    store.sync(ctx.piv.as_ref(), mgmt_key.as_deref(), ctx.pin.as_deref())?;
+
+    if !ctx.quiet {
+        for name in &to_remove {
+            eprintln!("Removed '{name}'");
+        }
+    }
+
     Ok(())
 }

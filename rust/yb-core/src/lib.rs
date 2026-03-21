@@ -9,7 +9,7 @@
 //! ```no_run
 //! use yb_core::{store::Store, orchestrator, Context};
 //!
-//! let ctx = Context::new(None, None, None, Some("123456".into()), false, false)?;
+//! let ctx = Context::new(None, None, None, Some("123456".into()), false, false, false)?;
 //! let store = Store::from_device(&ctx.reader, ctx.piv.as_ref())?;
 //! for blob in orchestrator::list_blobs(&store) {
 //!     println!("{} ({} bytes)", blob.name, blob.plain_size);

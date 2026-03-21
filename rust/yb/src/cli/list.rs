@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 use anyhow::Result;
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Duration, Local, Utc};
 use clap::Args;
 use globset::GlobBuilder;
 use yb_core::orchestrator;
@@ -13,6 +13,22 @@ use yb_core::{store::Store, Context};
 pub struct ListArgs {
     /// Glob pattern to filter blob names (default: all).
     pub pattern: Option<String>,
+
+    /// Long format: flag, chunks, date, size, name.
+    #[arg(short = 'l', long = "long")]
+    pub long: bool,
+
+    /// One name per line (default; explicit flag for scripting).
+    #[arg(short = '1')]
+    pub one_per_line: bool,
+
+    /// Sort by modification time, newest first.
+    #[arg(short = 't', long = "sort-time")]
+    pub sort_time: bool,
+
+    /// Reverse the sort order.
+    #[arg(short = 'r', long = "reverse")]
+    pub reverse: bool,
 }
 
 pub fn run(ctx: &Context, args: &ListArgs) -> Result<()> {
@@ -28,25 +44,34 @@ pub fn run(ctx: &Context, args: &ListArgs) -> Result<()> {
     };
 
     let store = Store::from_device(&ctx.reader, ctx.piv.as_ref())?;
-    let blobs = orchestrator::list_blobs(&store);
+    let mut blobs = orchestrator::list_blobs(&store);
 
-    let blobs: Vec<_> = blobs
-        .iter()
-        .filter(|b| {
-            matcher
-                .as_ref()
-                .map(|m| m.is_match(&b.name))
-                .unwrap_or(true)
-        })
-        .collect();
+    // Filter.
+    if let Some(ref m) = matcher {
+        blobs.retain(|b| m.is_match(&b.name));
+    }
 
-    for b in blobs {
-        let enc_flag = if b.is_encrypted { '-' } else { 'U' };
-        let date = format_mtime(b.mtime);
-        println!(
-            "{enc_flag} {:02}  {:>8}  {}  {}",
-            b.chunk_count, b.plain_size, date, b.name
-        );
+    // Sort.
+    if args.sort_time {
+        blobs.sort_by(|a, b| b.mtime.cmp(&a.mtime)); // newest first
+    }
+    // Default sort (by name ascending) is already applied by list_blobs.
+
+    if args.reverse {
+        blobs.reverse();
+    }
+
+    for b in &blobs {
+        if args.long {
+            let enc_flag = if b.is_encrypted { '-' } else { 'P' };
+            let date = format_mtime(b.mtime);
+            println!(
+                "{enc_flag} {:2}  {}  {:6}  {}",
+                b.chunk_count, date, b.plain_size, b.name
+            );
+        } else {
+            println!("{}", b.name);
+        }
     }
 
     Ok(())
@@ -58,5 +83,10 @@ fn format_mtime(unix: u32) -> String {
     }
     let dt: DateTime<Local> =
         DateTime::from(DateTime::<Utc>::from_timestamp(unix as i64, 0).unwrap());
-    dt.format("%b %e %H:%M").to_string()
+    let now = Local::now();
+    if now.signed_duration_since(dt) < Duration::days(180) {
+        dt.format("%b %e %H:%M").to_string()
+    } else {
+        dt.format("%b %e  %Y").to_string()
+    }
 }
