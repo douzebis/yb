@@ -6,11 +6,27 @@
 
 use clap_complete::engine::CompletionCandidate;
 use std::ffi::OsStr;
-use yb_core::{orchestrator, piv::hardware::HardwarePiv, store::Store, PivBackend};
+use std::sync::Arc;
+use yb_core::{
+    orchestrator,
+    piv::{hardware::HardwarePiv, VirtualPiv},
+    store::Store,
+    PivBackend,
+};
+
+/// Build a PIV backend: VirtualPiv when YB_FIXTURE is set, HardwarePiv otherwise.
+fn make_piv() -> Arc<dyn PivBackend> {
+    if let Ok(path) = std::env::var("YB_FIXTURE") {
+        if let Ok(vpiv) = VirtualPiv::from_fixture(std::path::Path::new(&path)) {
+            return Arc::new(vpiv);
+        }
+    }
+    Arc::new(HardwarePiv::new())
+}
 
 /// Complete YubiKey serial numbers from connected devices.
 pub fn complete_serials(incomplete: &OsStr) -> Vec<CompletionCandidate> {
-    let piv = HardwarePiv::new();
+    let piv = make_piv();
     let Ok(devices) = piv.list_devices() else {
         return vec![];
     };
@@ -28,14 +44,14 @@ pub fn complete_serials(incomplete: &OsStr) -> Vec<CompletionCandidate> {
 /// Uses the first connected device.  All errors are silently swallowed —
 /// a failed completion is better than an error message interrupting the shell.
 pub fn complete_blob_names(incomplete: &OsStr) -> Vec<CompletionCandidate> {
-    let piv = HardwarePiv::new();
+    let piv = make_piv();
     let Ok(devices) = piv.list_devices() else {
         return vec![];
     };
     let Some(device) = devices.into_iter().next() else {
         return vec![];
     };
-    let Ok(store) = Store::from_device(&device.reader, &piv) else {
+    let Ok(store) = Store::from_device(&device.reader, piv.as_ref()) else {
         return vec![];
     };
     let prefix = incomplete.to_string_lossy();

@@ -539,6 +539,164 @@ fn store_duplicate_basename_exits_1() {
 }
 
 // ---------------------------------------------------------------------------
+// shell completions
+// ---------------------------------------------------------------------------
+
+/// Run `yb` in dynamic-completion mode and return the completion candidates.
+///
+/// The clap_complete dynamic protocol re-invokes the binary with
+/// `YB_COMPLETE=<shell>`, `_CLAP_COMPLETE_INDEX=<cursor_pos>`, and the full
+/// command line (including argv[0]) appended after `--`.
+///
+/// Example: completing `yb fetch ho` maps to:
+///   args_after_dashdash = ["yb", "fetch", "ho"]
+///   cursor_index        = 2   (0-based index of "ho" in that list)
+fn complete(
+    fixture: &Fixture,
+    shell: &str,
+    cursor_index: usize,
+    args_after_dashdash: &[&str],
+) -> String {
+    let out = Command::new(yb_bin())
+        .env("YB_FIXTURE", fixture.path())
+        .env("YB_SKIP_DEFAULT_CHECK", "1")
+        .env("YB_MANAGEMENT_KEY", MGMT)
+        .env("YB_PIN", PIN)
+        .env("YB_COMPLETE", shell)
+        .env("_CLAP_COMPLETE_INDEX", cursor_index.to_string())
+        .env("_CLAP_COMPLETE_SPACE", "false")
+        .arg("--")
+        .args(args_after_dashdash)
+        .output()
+        .expect("failed to run yb for completion");
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+#[test]
+fn completion_script_bash_exits_0() {
+    let f = Fixture::new();
+    let out = Command::new(yb_bin())
+        .env("YB_FIXTURE", f.path())
+        .env("YB_COMPLETE", "bash")
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("_clap_complete_yb"),
+        "expected bash completion function, got: {stdout}"
+    );
+}
+
+#[test]
+fn completion_script_zsh_exits_0() {
+    let f = Fixture::new();
+    let out = Command::new(yb_bin())
+        .env("YB_FIXTURE", f.path())
+        .env("YB_COMPLETE", "zsh")
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("#compdef yb"),
+        "expected zsh completion script, got: {stdout}"
+    );
+}
+
+#[test]
+fn completion_script_fish_exits_0() {
+    let f = Fixture::new();
+    let out = Command::new(yb_bin())
+        .env("YB_FIXTURE", f.path())
+        .env("YB_COMPLETE", "fish")
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("YB_COMPLETE=fish"),
+        "expected fish completion script, got: {stdout}"
+    );
+}
+
+#[test]
+fn completion_subcommands_listed() {
+    // Completing "yb <Tab>" should return subcommand names.
+    let f = Fixture::new();
+    let candidates = complete(&f, "bash", 1, &["yb", ""]);
+    assert!(candidates.contains("store"), "subcommands: {candidates}");
+    assert!(candidates.contains("fetch"), "subcommands: {candidates}");
+    assert!(candidates.contains("list"), "subcommands: {candidates}");
+    assert!(candidates.contains("remove"), "subcommands: {candidates}");
+    assert!(candidates.contains("format"), "subcommands: {candidates}");
+    assert!(candidates.contains("fsck"), "subcommands: {candidates}");
+}
+
+#[test]
+fn completion_blob_names_fetch() {
+    // After storing a blob, completing "yb fetch <Tab>" should return its name.
+    let f = Fixture::new();
+    f.format();
+    f.store_file("alpha.txt", b"a");
+    f.store_file("beta.txt", b"b");
+
+    let candidates = complete(&f, "bash", 2, &["yb", "fetch", ""]);
+    assert!(candidates.contains("alpha.txt"), "candidates: {candidates}");
+    assert!(candidates.contains("beta.txt"), "candidates: {candidates}");
+}
+
+#[test]
+fn completion_blob_names_prefix_filtered() {
+    // Completing "yb fetch al<Tab>" should return only matching blobs.
+    let f = Fixture::new();
+    f.format();
+    f.store_file("alpha.txt", b"a");
+    f.store_file("beta.txt", b"b");
+
+    let candidates = complete(&f, "bash", 2, &["yb", "fetch", "al"]);
+    assert!(candidates.contains("alpha.txt"), "candidates: {candidates}");
+    assert!(
+        !candidates.contains("beta.txt"),
+        "unexpected match: {candidates}"
+    );
+}
+
+#[test]
+fn completion_blob_names_list() {
+    let f = Fixture::new();
+    f.format();
+    f.store_file("myblob", b"data");
+
+    let candidates = complete(&f, "bash", 2, &["yb", "list", ""]);
+    assert!(candidates.contains("myblob"), "candidates: {candidates}");
+}
+
+#[test]
+fn completion_blob_names_remove() {
+    let f = Fixture::new();
+    f.format();
+    f.store_file("removeme", b"x");
+
+    let candidates = complete(&f, "bash", 2, &["yb", "remove", ""]);
+    assert!(candidates.contains("removeme"), "candidates: {candidates}");
+}
+
+#[test]
+fn completion_no_blobs_returns_empty() {
+    // A formatted but empty store should return no blob-name candidates.
+    let f = Fixture::new();
+    f.format();
+
+    let candidates = complete(&f, "bash", 2, &["yb", "fetch", ""]);
+    // Only flags should appear, not blob names.
+    assert!(
+        !candidates.lines().any(|l| !l.starts_with('-')),
+        "expected only flags, got: {candidates}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // list-readers
 // ---------------------------------------------------------------------------
 
