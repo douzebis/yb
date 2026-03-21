@@ -14,6 +14,7 @@ use yb_core::{
     orchestrator::{fetch_blob, list_blobs, remove_blob, store_blob, Encryption},
     piv::PivBackend,
     store::Store,
+    test_utils::{OpType, OperationGenerator, ToyFilesystem},
     Context, VirtualPiv,
 };
 
@@ -453,4 +454,57 @@ fn test_remove_nonexistent() {
 
     let removed = remove_blob(&mut store, &piv, "ghost", Some(mgmt), None).unwrap();
     assert!(!removed);
+}
+
+/// T15: Seeded random store/fetch/remove/list operations against VirtualPiv.
+/// Verifies every fetch/remove/list result against ToyFilesystem ground truth.
+#[test]
+fn test_random_operations() {
+    let piv = with_key_piv();
+    let mgmt = "010203040506070801020304050607080102030405060708";
+    let mut store = formatted_store(&piv);
+
+    let mut toy = ToyFilesystem::new();
+    let mut gen = OperationGenerator::new(42, 7);
+    let ops = gen.generate(300, 0.0);
+
+    let reader = piv.reader_name();
+
+    for op in &ops {
+        match op.op_type {
+            OpType::Store => {
+                let ok = store_blob(
+                    &mut store,
+                    &piv,
+                    &op.name,
+                    &op.payload,
+                    Encryption::None,
+                    Some(mgmt),
+                    None,
+                )
+                .unwrap();
+                if ok {
+                    toy.store(&op.name, op.payload.clone(), 0);
+                }
+            }
+            OpType::Fetch => {
+                let result = fetch_blob(&store, &piv, &reader, &op.name, None, false).unwrap();
+                let expected = toy.fetch(&op.name).map(|(p, _)| p.as_slice());
+                assert_eq!(result.as_deref(), expected, "fetch '{}' mismatch", op.name);
+            }
+            OpType::Remove => {
+                let removed = remove_blob(&mut store, &piv, &op.name, Some(mgmt), None).unwrap();
+                let expected = toy.remove(&op.name);
+                assert_eq!(
+                    removed, expected,
+                    "remove '{}' return value mismatch",
+                    op.name
+                );
+            }
+            OpType::List => {
+                let blobs: Vec<String> = list_blobs(&store).into_iter().map(|b| b.name).collect();
+                assert_eq!(blobs, toy.list(), "list mismatch");
+            }
+        }
+    }
 }

@@ -10,3 +10,6 @@ pub mod list_readers;
 pub mod remove;
 pub mod store;
 pub mod util;
+
+#[cfg(feature = "self-test")]
+pub mod self_test;

@@ -3,15 +3,16 @@
 ## Overview
 
 The yb test suite is organized in three tiers, each trading execution speed and
-hardware access for broader coverage.  All tiers run via a single command:
+hardware access for broader coverage.
 
 ```
-nix-build -A integration-tests
+nix-build -A integration-tests   # Tier-1 + Tier-2
 ```
 
 Tier-1 runs during the nix build phase (fast, no hardware); Tier-2 runs inside a
 NixOS VM that brings up a virtual PC/SC stack.  Local development uses
-`cargo test --features virtual-piv`.
+`cargo test --features virtual-piv`.  Tier-3 requires a real YubiKey and is run
+manually via `yb self-test`.
 
 ---
 
@@ -171,6 +172,7 @@ exist at VM runtime).
 | `test_remove_nonexistent` | 1 | `remove_blob` returns `false` for a non-existent blob |
 | `test_from_device_missing_objects` | 1 | T8: `from_device` errors when claimed object count exceeds written objects |
 | `test_with_backend_multiple_devices_errors` | 1 | T11: `Context::with_backend` errors on a multi-device backend |
+| `test_random_operations` | 1 | 300 pseudo-random store/fetch/remove/list ops (seed=42) via `OperationGenerator`; every result verified against `ToyFilesystem` ground truth |
 
 ### CLI direct-call tests (`rust/yb/tests/cli_tests.rs`)
 
@@ -243,6 +245,38 @@ exist at VM runtime).
 | `completion_blob_names_prefix_filtered` | Completion filters by typed prefix |
 | `completion_no_blobs_returns_empty` | Completion returns empty on empty store |
 
+---
+
+## Tier-3 — Real Hardware, Destructive Tests
+
+### Mechanism
+
+Tier-3 consists of a single interactive command, `yb self-test`, that runs on a
+real YubiKey.  It is **never run in CI**.  It exercises the full PC/SC stack,
+real NVM writes, and real management-key/PIN authentication paths that neither
+Tier-1 (VirtualPiv) nor Tier-2 (vsmartcard-vpcd) can reproduce.
+
+```bash
+yb --serial <S> self-test [--count N] [--seed S] [--no-cleanup] [--no-flash]
+```
+
+### Flow
+
+1. Print a destructive-operation warning and prompt for `yes`.
+2. Resolve PIN and management key.
+3. Format the YubiKey (`yb format --generate --object-count 16`).
+4. Run N pseudo-random store/fetch/remove/list operations via `SubprocessExecutor`
+   (each operation invokes the `yb` binary as a child process).
+5. Verify every result against a `ToyFilesystem` ground truth.
+6. Stop on the first failure, preserving YubiKey state for inspection.
+7. On full pass, remove all blobs and print a final report.
+
+### Test infrastructure reuse
+
+The command reuses the `ToyFilesystem` and `OperationGenerator` primitives from
+`yb-core/src/test_utils.rs` (compiled in when the `self-test` feature is enabled
+on the `yb` binary crate, which transitively enables `yb-core/test-utils`).
+
 ### Hardware PIV tests — `hardware_piv_tests` (Tier-2, NixOS VM only)
 
 These tests use `piv-authenticator` over a live `vpcd` connection and exercise the
@@ -262,20 +296,22 @@ actual APDU chaining logic in `HardwarePiv`:
 
 ## Coverage Map
 
-| Subsystem | Tier-1 | Tier-2 |
-|---|---|---|
-| Object serialization (YBLOB format) | Full | Via hardware_piv_tests writes |
-| Store operations (format, sanitize, alloc) | Full | Via yb_cli_tests |
-| Crypto (GCM, CBC legacy, ECDH+HKDF) | Full (mock ECDH) | Real ECDH in hardware_piv_tests |
-| Orchestrator (store/fetch/remove/list) | Full | Via yb_cli_tests |
-| PivBackend trait (VirtualPiv) | Full | N/A |
-| PivBackend trait (HardwarePiv) | Not tested | Full via hardware_piv_tests |
-| APDU chaining (CLA=0x10) | Not tested (VirtualPiv stores directly) | Covered by hardware_piv_tests large-object writes |
-| CLI argument parsing | Partial (direct-call skips clap) | Full via yb_cli_tests |
-| Exit codes | Not covered (run() returns Result) | Full via yb_cli_tests |
-| Env var resolution (YB_PIN, YB_MANAGEMENT_KEY) | Not covered | Full via yb_cli_tests |
-| Shell completion | Not covered | Full via yb_cli_tests |
-| PIN-protected management key mode | Not covered (VirtualPiv stub) | Could be added to hardware_piv_tests |
+| Subsystem | Tier-1 | Tier-2 | Tier-3 |
+|---|---|---|---|
+| Object serialization (YBLOB format) | Full | Via hardware_piv_tests writes | Via self-test store ops |
+| Store operations (format, sanitize, alloc) | Full | Via yb_cli_tests | format at start of self-test |
+| Crypto (GCM, CBC legacy, ECDH+HKDF) | Full (mock ECDH) | Real ECDH in hardware_piv_tests | Real encrypt/decrypt via self-test |
+| Orchestrator (store/fetch/remove/list) | Full | Via yb_cli_tests | Full via subprocess |
+| PivBackend trait (VirtualPiv) | Full | N/A | N/A |
+| PivBackend trait (HardwarePiv) | Not tested | Full via hardware_piv_tests | Full via self-test |
+| APDU chaining (CLA=0x10) | Not tested (VirtualPiv stores directly) | Covered by hardware_piv_tests large-object writes | Exercised by self-test large payloads |
+| CLI argument parsing | Partial (direct-call skips clap) | Full via yb_cli_tests | Full via subprocess |
+| Exit codes | Not covered (run() returns Result) | Full via yb_cli_tests | N/A |
+| Env var resolution (YB_PIN, YB_MANAGEMENT_KEY) | Not covered | Full via yb_cli_tests | Full via self-test subprocesses |
+| Shell completion | Not covered | Full via yb_cli_tests | N/A |
+| PIN-protected management key mode | Not covered (VirtualPiv stub) | Could be added to hardware_piv_tests | N/A |
+| Real NVM wear / PC/SC latency | Not tested | Not tested (vsmartcard is in-process) | Covered by self-test |
+| ToyFilesystem / OperationGenerator | `test_random_operations` (300 ops) | N/A | Core of self-test |
 
 ---
 
@@ -290,4 +326,7 @@ nix-build -A integration-tests
 
 # Tier-1 only via nix (skips VM):
 nix-build -A rust-tests
+
+# Tier-3 (real YubiKey, destructive — manual only):
+yb --serial <SERIAL> self-test [--count 200] [--seed 42]
 ```
