@@ -135,6 +135,7 @@ pub fn run(ctx: &Context, args: &StoreArgs) -> Result<()> {
         }
     }
 
+    let pin = ctx.require_pin()?;
     for (name, payload) in &entries {
         let ok = orchestrator::store_blob(
             &mut store,
@@ -144,7 +145,7 @@ pub fn run(ctx: &Context, args: &StoreArgs) -> Result<()> {
             encrypted,
             peer_pk.as_ref(),
             mgmt_key.as_deref(),
-            ctx.pin.as_deref(),
+            pin.as_deref(),
         )?;
         if !ok {
             bail!(

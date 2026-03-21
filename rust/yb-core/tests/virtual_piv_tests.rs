@@ -328,7 +328,7 @@ fn test_context_with_backend() {
     let piv = Arc::new(with_key_piv());
     let ctx = Context::with_backend(piv, Some("123456".to_owned()), false).unwrap();
     assert_eq!(ctx.serial, 88_888_888);
-    assert_eq!(ctx.pin.as_deref(), Some("123456"));
+    assert_eq!(ctx.require_pin().unwrap().as_deref(), Some("123456"));
 }
 
 /// remove_blob returns false for a blob that does not exist.

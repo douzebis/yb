@@ -96,12 +96,17 @@ pub fn run(ctx: &Context, args: &FetchArgs) -> Result<()> {
         );
     }
 
-    let pin = ctx.pin.as_deref();
-
     for name in &matched {
-        let data =
-            orchestrator::fetch_blob(&store, ctx.piv.as_ref(), &ctx.reader, name, pin, ctx.debug)?
-                .ok_or_else(|| anyhow::anyhow!("blob '{}' not found", name))?;
+        let pin = ctx.require_pin()?;
+        let data = orchestrator::fetch_blob(
+            &store,
+            ctx.piv.as_ref(),
+            &ctx.reader,
+            name,
+            pin.as_deref(),
+            ctx.debug,
+        )?
+        .ok_or_else(|| anyhow::anyhow!("blob '{}' not found", name))?;
 
         if args.stdout {
             std::io::stdout().write_all(&data)?;
