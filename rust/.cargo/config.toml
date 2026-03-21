@@ -1,0 +1,12 @@
+# Workspace-level cargo configuration.
+#
+# BINDGEN_EXTRA_CLANG_ARGS is required by littlefs2-sys (pulled in by
+# piv-authenticator via the integration-tests feature).  The littlefs2-sys
+# build script calls bindgen without propagating this variable, so bindgen
+# cannot find clang's built-in stdint.h unless the path is injected here.
+#
+# The value below is the absolute Nix store path for the clang 19.1.7
+# built-in headers present in the project's dev-shell.  force = false means
+# the shell's own BINDGEN_EXTRA_CLANG_ARGS takes precedence when set.
+[env]
+BINDGEN_EXTRA_CLANG_ARGS = { value = "-I/nix/store/044jyaz6q8jc4bznnp8gxw653kw1k5sg-clang-19.1.7-lib/lib/clang/19/include", force = false }
