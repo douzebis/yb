@@ -172,21 +172,30 @@ pub fn run(ctx: &Context, args: &SelfTestArgs) -> Result<()> {
             .unwrap_or_else(|| "unknown".to_owned())
     };
 
-    // Confirmation prompt (with optional LED flash).
+    // Confirmation prompt — flash the LED at 5 Hz while waiting for 'yes'.
     print_warning(serial, &version, args.count);
 
-    if !args.no_flash {
-        eprintln!("YubiKey LED is flashing to help you identify the correct device...");
+    let _flash = if !args.no_flash {
+        eprintln!("YubiKey LED is flashing to help you identify the correct device.");
         eprintln!();
-    }
-    // Note: actual LED flash requires spec 0013 (PivBackend::start_flash).
-    // For now the prompt is shown without flashing; flash will be wired up
-    // when spec 0013 is implemented.
+        // 5 Hz (200 ms) — conveys urgency during destructive operation prompt.
+        let reader = ctx
+            .piv
+            .list_devices()?
+            .into_iter()
+            .find(|d| d.serial == serial)
+            .map(|d| d.reader)
+            .unwrap_or_default();
+        Some(ctx.piv.start_flash(&reader, 200))
+    } else {
+        None
+    };
 
     eprint!("Type 'yes' to proceed: ");
     std::io::stderr().flush()?;
     let mut line = String::new();
     std::io::stdin().lock().read_line(&mut line)?;
+    drop(_flash); // stop flashing once user responds
     if line.trim() != "yes" {
         eprintln!("Self-test cancelled.");
         std::process::exit(1);

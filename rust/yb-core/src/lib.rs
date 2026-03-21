@@ -10,7 +10,7 @@
 //! ```no_run
 //! use yb_core::{store::Store, orchestrator, Context, OutputOptions};
 //!
-//! let ctx = Context::new(None, None, None, Some("123456".into()), Box::new(|| Ok(None)), OutputOptions::default(), false)?;
+//! let ctx = Context::new(None, None, None, Some("123456".into()), Box::new(|| Ok(None)), Box::new(|_, _| Ok(None)), OutputOptions::default(), false)?;
 //! let store = Store::from_device(&ctx.reader, ctx.piv.as_ref())?;
 //! for blob in orchestrator::list_blobs(&store) {
 //!     println!("{} ({} bytes)", blob.name, blob.plain_size);
@@ -48,7 +48,7 @@ pub use orchestrator::{
     chunks_needed, fetch_blob, list_blobs, remove_blob, store_blob, BlobInfo, Encryption,
 };
 pub use piv::hardware::HardwarePiv;
-pub use piv::{DeviceInfo, PivBackend, VirtualPiv};
+pub use piv::{DeviceInfo, FlashHandle, PivBackend, VirtualPiv};
 
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;

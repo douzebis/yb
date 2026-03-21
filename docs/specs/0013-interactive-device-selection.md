@@ -7,9 +7,9 @@ SPDX-License-Identifier: MIT
 
 # 0013 — Interactive Device Selection with LED Feedback
 
-**Status:** draft
+**Status:** implemented
 **App:** yb (Rust)
-**Implemented in:** <!-- YYYY-MM-DD, fill after implementation -->
+**Implemented in:** 2026-03-21
 
 ## Problem
 
