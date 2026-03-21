@@ -248,32 +248,18 @@ issues. Both are resolved in the current Rust implementation:
 
 ## 10. Findings Summary
 
-| ID | Location | Severity | Title |
+| ID | Location | Severity | Status |
 |---|---|---|---|
-| S-01 | `piv/session.rs:229` | Low | Non-constant-time management key comparison |
-| S-02 | `store/mod.rs` (`read_u32_le`) | Low | `unwrap()` on slice conversion (safe but implicit precondition) |
-| S-03 | `yb/src/cli/` | Low | PIN exposed via `--pin` flag / `YB_PIN` env var |
-| I-01 | `piv/virtual_piv.rs`, fixtures | Informational | Hardcoded test credentials (by design) |
-| I-02 | `yb-core/src/context.rs` | Informational | PIN not zeroed on drop |
+| S-01 | `piv/session.rs` | Low | **Fixed** — `subtle::ConstantTimeEq` |
+| S-02 | `store/mod.rs` (`read_u32_le`) | Low | **Fixed** — returns `Result<T>` |
+| S-03 | `yb/src/cli/` | Low | **Fixed** — documented in README PIN Handling section |
+| I-01 | `piv/virtual_piv.rs`, fixtures | Informational | Accepted by design |
+| I-02 | `yb-core/src/context.rs` | Informational | **Fixed** — `Zeroizing<String>` |
 
-**No Critical or High findings.**
+**No Critical or High findings. All Low and Informational items resolved.**
 
 ---
 
-## 11. Recommendations (priority order)
+## 11. Remaining actions
 
-1. **S-02** — Change `read_u32_le` / `read_u24_le` to return
-   `anyhow::Result<T>` and propagate bounds errors instead of panicking.
-   Low effort; prevents a future refactoring-induced panic.
-
-2. **S-03** — Add a note to the README security section documenting the
-   `--pin` / `YB_PIN` OS-level exposure. No code change required.
-
-3. **S-01** — Replace `!=` with `subtle::ConstantTimeEq` for the management
-   key comparison. One-line change; not practically exploitable today but
-   good defence-in-depth hygiene.
-
-4. **I-02** — Consider adding the `zeroize` crate for explicit PIN zeroing.
-   Low value for a short-lived CLI process, but straightforward to adopt.
-
-5. **Ongoing** — Run `cargo audit` in CI and before each release.
+- **Ongoing** — Run `cargo audit` in CI and before each release.
