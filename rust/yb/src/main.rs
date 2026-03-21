@@ -70,6 +70,9 @@ enum Commands {
     Fsck(cli::fsck::FsckArgs),
     /// List PC/SC readers.
     ListReaders(cli::list_readers::ListReadersArgs),
+    /// Run a destructive end-to-end self-test on real hardware.
+    #[cfg(feature = "self-test")]
+    SelfTest(cli::self_test::SelfTestArgs),
 }
 
 // ---------------------------------------------------------------------------
@@ -132,6 +135,8 @@ fn run(cli: Cli) -> Result<()> {
         Commands::Remove(args) => cli::remove::run(&ctx, &args),
         Commands::Fsck(args) => cli::fsck::run(&ctx, &args),
         Commands::ListReaders(_) => unreachable!("handled above"),
+        #[cfg(feature = "self-test")]
+        Commands::SelfTest(args) => cli::self_test::run(&ctx, &args),
     };
 
     // When running under YB_FIXTURE (subprocess tests), persist any mutations

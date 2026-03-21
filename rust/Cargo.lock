@@ -3142,6 +3142,7 @@ dependencies = [
  "spki",
  "thiserror",
  "x509-cert",
+ "yb-core",
 ]
 
 [[package]]

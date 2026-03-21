@@ -24,6 +24,7 @@ chrono           = ["dep:chrono"]
 virtual-piv      = []          # phase 3: VirtualPiv in-memory backend
 integration-tests = []         # phase 5: vsmartcard + piv-authenticator
 hardware-tests   = []          # manual only: real YubiKey destructive tests
+test-utils       = []          # ToyFilesystem + OperationGenerator for self-test
 
 [dependencies]
 # Cryptography (RustCrypto)
@@ -34,7 +35,7 @@ aes     = "0.8"
 aes-gcm = "0.10"
 cbc     = { version = "0.1", features = ["alloc"] }  # kept for legacy CBC decrypt
 cipher  = { version = "0.4", features = ["block-padding"] }
-rand    = "0.8"
+rand    = { version = "0.8", features = ["small_rng"] }
 des     = "0.8"
 
 # Encoding / serialization
@@ -67,3 +68,4 @@ indicatif = "0.18"
 chrono = { version = "0.4", optional = true }
 
 [dev-dependencies]
+yb-core = { path = ".", features = ["test-utils"] }  # enable test-utils for integration tests

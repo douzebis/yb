@@ -22,6 +22,9 @@ path = "src/main.rs"
 name = "yb"
 path = "src/lib.rs"
 
+[features]
+self-test = ["yb-core/test-utils"]
+
 [dependencies]
 yb-core       = { path = "../yb-core", features = ["chrono", "virtual-piv"] }
 clap          = { version = "4", features = ["derive", "env"] }
