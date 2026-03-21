@@ -4,6 +4,7 @@
 
 mod cli;
 
+use anyhow::Result;
 use clap::{Parser, Subcommand};
 use yb_core::Context;
 
@@ -22,13 +23,13 @@ struct Cli {
     #[arg(short = 'r', long = "reader")]
     reader: Option<String>,
 
-    /// Management key (48 hex chars).
-    #[arg(short = 'k', long = "key")]
-    management_key: Option<String>,
+    /// Suppress informational output.
+    #[arg(short = 'q', long = "quiet")]
+    quiet: bool,
 
-    /// YubiKey PIN.
-    #[arg(long = "pin")]
-    pin: Option<String>,
+    /// Read PIN from stdin (one line).
+    #[arg(long = "pin-stdin")]
+    pin_stdin: bool,
 
     /// Enable debug output.
     #[arg(long = "debug")]
@@ -37,6 +38,14 @@ struct Cli {
     /// Allow insecure default credentials (not recommended).
     #[arg(long = "allow-defaults")]
     allow_defaults: bool,
+
+    /// YubiKey PIN [deprecated: use YB_PIN, --pin-stdin, or interactive prompt].
+    #[arg(long = "pin", hide = true)]
+    pin_deprecated: Option<String>,
+
+    /// Management key [deprecated: use YB_MANAGEMENT_KEY].
+    #[arg(short = 'k', long = "key", hide = true)]
+    key_deprecated: Option<String>,
 
     #[command(subcommand)]
     command: Commands,
@@ -76,13 +85,33 @@ fn main() {
     }
 }
 
-fn run(cli: Cli) -> anyhow::Result<()> {
+fn run(cli: Cli) -> Result<()> {
+    // S7: list-readers bypasses Context construction (works without a YubiKey).
+    if let Commands::ListReaders(args) = cli.command {
+        return cli::list_readers::run(&args);
+    }
+
+    // S1: Emit deprecation warnings for legacy flags.
+    if cli.pin_deprecated.is_some() {
+        eprintln!("Warning: --pin is deprecated; use YB_PIN, --pin-stdin, or interactive prompt");
+    }
+    if cli.key_deprecated.is_some() {
+        eprintln!("Warning: --key is deprecated; use YB_MANAGEMENT_KEY");
+    }
+
+    // S1: Resolve PIN — priority: --pin-stdin > --pin (deprecated) > YB_PIN > TTY prompt > None.
+    let pin = resolve_pin(cli.pin_stdin, cli.pin_deprecated)?;
+
+    // S1: Resolve management key — priority: --key (deprecated) > YB_MANAGEMENT_KEY > None.
+    let management_key = resolve_management_key(cli.key_deprecated);
+
     let ctx = Context::new(
         cli.serial,
         cli.reader,
-        cli.management_key,
-        cli.pin,
+        management_key,
+        pin,
         cli.debug,
+        cli.quiet,
         cli.allow_defaults,
     )?;
 
@@ -93,6 +122,62 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         Commands::List(args) => cli::list::run(&ctx, &args),
         Commands::Remove(args) => cli::remove::run(&ctx, &args),
         Commands::Fsck(args) => cli::fsck::run(&ctx, &args),
-        Commands::ListReaders(args) => cli::list_readers::run(&ctx, &args),
+        Commands::ListReaders(_) => unreachable!("handled above"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// PIN / key resolution (S1)
+// ---------------------------------------------------------------------------
+
+/// Resolve the PIN from explicit flags, env var, or TTY prompt.
+fn resolve_pin(pin_stdin: bool, pin_deprecated: Option<String>) -> Result<Option<String>> {
+    // 1. --pin-stdin: read one line from stdin.
+    if pin_stdin {
+        use std::io::BufRead as _;
+        let mut line = String::new();
+        std::io::stdin().lock().read_line(&mut line)?;
+        let pin = line
+            .trim_end_matches('\n')
+            .trim_end_matches('\r')
+            .to_owned();
+        return Ok(Some(pin));
+    }
+
+    // 2. --pin (deprecated).
+    if let Some(p) = pin_deprecated {
+        return Ok(Some(p));
+    }
+
+    // 3. YB_PIN environment variable.
+    if let Ok(v) = std::env::var("YB_PIN") {
+        if !v.is_empty() {
+            return Ok(Some(v));
+        }
+    }
+
+    // 4. Interactive TTY prompt (only when stderr is a TTY).
+    if atty::is(atty::Stream::Stderr) {
+        match rpassword::prompt_password("Enter YubiKey PIN: ") {
+            Ok(pin) if !pin.is_empty() => return Ok(Some(pin)),
+            Ok(_) => {}  // empty → treat as not provided
+            Err(_) => {} // no TTY available or other error → skip
+        }
+    }
+
+    // 5. No PIN available — operations that need it will fail with a clear message.
+    Ok(None)
+}
+
+/// Resolve the management key from deprecated flag or env var.
+fn resolve_management_key(key_deprecated: Option<String>) -> Option<String> {
+    if let Some(k) = key_deprecated {
+        return Some(k);
+    }
+    if let Ok(v) = std::env::var("YB_MANAGEMENT_KEY") {
+        if !v.is_empty() {
+            return Some(v);
+        }
+    }
+    None
 }

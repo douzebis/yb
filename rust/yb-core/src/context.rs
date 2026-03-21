@@ -19,6 +19,7 @@ pub struct Context {
     pub pin: Option<String>,
     pub piv: Arc<dyn PivBackend>,
     pub debug: bool,
+    pub quiet: bool,
     pub pin_protected: bool,
 }
 
@@ -30,6 +31,7 @@ impl Context {
         management_key: Option<String>,
         pin: Option<String>,
         debug: bool,
+        quiet: bool,
         allow_defaults: bool,
     ) -> Result<Self> {
         let piv: Arc<dyn PivBackend> = Arc::new(HardwarePiv::new());
@@ -61,6 +63,7 @@ impl Context {
             pin,
             piv,
             debug,
+            quiet,
             pin_protected,
         })
     }
@@ -101,6 +104,7 @@ impl Context {
             pin,
             piv: backend,
             debug,
+            quiet: false,
             pin_protected,
         })
     }

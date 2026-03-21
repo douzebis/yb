@@ -361,15 +361,32 @@ impl Store {
         management_key: Option<&str>,
         pin: Option<&str>,
     ) -> Result<()> {
-        for obj in self.objects.iter_mut().filter(|o| o.dirty) {
+        use indicatif::{ProgressBar, ProgressStyle};
+
+        let dirty: Vec<u8> = self
+            .objects
+            .iter()
+            .filter(|o| o.dirty)
+            .map(|o| o.index)
+            .collect();
+
+        let pb = ProgressBar::new(dirty.len() as u64);
+        pb.set_style(
+            ProgressStyle::with_template("Writing objects: [{bar:30}] {pos}/{len}")
+                .unwrap()
+                .progress_chars("=>-"),
+        );
+
+        for idx in &dirty {
+            let obj = &mut self.objects[*idx as usize];
             let id = OBJECT_ID_ZERO + obj.index as u32;
             let data = obj.to_bytes();
             piv.write_object(&self.reader, id, &data, management_key, pin)
                 .with_context(|| format!("writing object 0x{id:06x}"))?;
             obj.dirty = false;
-            eprint!(".");
+            pb.inc(1);
         }
-        eprintln!();
+        pb.finish_and_clear();
         Ok(())
     }
 

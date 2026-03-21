@@ -4,13 +4,15 @@
 
 use anyhow::Result;
 use clap::Args;
-use yb_core::Context;
+use yb_core::{HardwarePiv, PivBackend as _};
 
 #[derive(Args, Debug)]
 pub struct ListReadersArgs {}
 
-pub fn run(ctx: &Context, _args: &ListReadersArgs) -> Result<()> {
-    let readers = ctx.piv.list_readers()?;
+/// Run list-readers without constructing a Context (works when no YubiKey is connected).
+pub fn run(_args: &ListReadersArgs) -> Result<()> {
+    let piv = HardwarePiv::new();
+    let readers = piv.list_readers()?;
     if readers.is_empty() {
         eprintln!("No PC/SC readers found.");
     } else {

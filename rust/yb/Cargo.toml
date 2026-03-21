@@ -27,5 +27,7 @@ anyhow        = "1"
 chrono        = "0.4"
 globset       = "0.4"
 tempfile      = "3"
+rpassword     = "7"
+atty          = "0.2"
 
 [dev-dependencies]

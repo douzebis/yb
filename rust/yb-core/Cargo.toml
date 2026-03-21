@@ -60,6 +60,9 @@ spki       = "0.7"
 # Self-signed cert generation (replaces yubico-piv-tool selfsign)
 rcgen = "0.13"
 
+# Progress bars
+indicatif = "0.18"
+
 # Optional
 chrono = { version = "0.4", optional = true }
 
