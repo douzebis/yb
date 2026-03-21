@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 use super::constants::*;
-use super::{read_u24_le as _, read_u32_le as _, write_u24_le, write_u32_le, Object, Store};
+use super::{write_u24_le, write_u32_le, Object, Store};
 
 // ---------------------------------------------------------------------------
 // Object helpers
