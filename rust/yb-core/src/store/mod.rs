@@ -174,17 +174,32 @@ impl Object {
     }
 
     /// Mark this object as empty (age = 0) and dirty.
+    ///
+    /// Uses an explicit full struct literal so that adding a new field causes a
+    /// compile error here, forcing the author to decide whether it should be
+    /// preserved or zeroed on reset.
     pub fn reset(&mut self) {
-        self.age = 0;
-        self.chunk_pos = 0;
-        self.next_chunk = 0;
-        self.blob_mtime = 0;
-        self.blob_size = 0;
-        self.blob_key_slot = 0;
-        self.blob_plain_size = 0;
-        self.blob_name.clear();
-        self.payload.clear();
-        self.dirty = true;
+        let index = self.index;
+        let object_size = self.object_size;
+        let object_count = self.object_count;
+        let store_key_slot = self.store_key_slot;
+        *self = Self {
+            index,
+            object_size,
+            yblob_magic: crate::store::constants::YBLOB_MAGIC,
+            object_count,
+            store_key_slot,
+            age: 0,
+            chunk_pos: 0,
+            next_chunk: 0,
+            blob_mtime: 0,
+            blob_size: 0,
+            blob_key_slot: 0,
+            blob_plain_size: 0,
+            blob_name: String::new(),
+            payload: Vec::new(),
+            dirty: true,
+        };
     }
 
     /// Capacity of the payload region in a head chunk.
@@ -330,7 +345,7 @@ impl Store {
 
         // Collect all reachable chunk indices.
         let mut reachable: HashSet<u8> = HashSet::new();
-        for (_, (head_idx, _)) in &seen {
+        for (head_idx, _) in seen.values() {
             let mut idx = *head_idx;
             loop {
                 reachable.insert(idx);

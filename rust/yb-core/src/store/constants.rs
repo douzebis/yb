@@ -8,7 +8,7 @@
 //! Every PIV object is exactly `object_size` bytes (512–3052).
 
 /// Magic marker at offset 0x00 (little-endian u32).
-pub const YBLOB_MAGIC: u32 = 0xF2ed5F0b;
+pub const YBLOB_MAGIC: u32 = 0xF2ED5F0B;
 
 /// Minimum / maximum PIV object size in bytes.
 pub const OBJECT_MIN_SIZE: usize = 512;

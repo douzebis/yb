@@ -24,10 +24,23 @@ use tempfile::TempDir;
 
 const MGMT: &str = "010203040506070801020304050607080102030405060708";
 const PIN: &str = "123456";
-const FIXTURE_SRC: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../yb-core/tests/fixtures/with_key.yaml"
-);
+
+/// Path to the `with_key.yaml` fixture file.
+///
+/// Resolution order:
+/// 1. `YB_FIXTURE_DIR` env var (set by NixOS VM, points to fixtures in the
+///    nix store since the cargo build sandbox path is gone at VM runtime).
+/// 2. Compile-time path relative to `CARGO_MANIFEST_DIR` (works in a normal
+///    `cargo test` run where the source tree is intact).
+fn fixture_src() -> std::path::PathBuf {
+    if let Ok(dir) = std::env::var("YB_FIXTURE_DIR") {
+        return std::path::PathBuf::from(dir).join("with_key.yaml");
+    }
+    std::path::PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../yb-core/tests/fixtures/with_key.yaml"
+    ))
+}
 
 // ---------------------------------------------------------------------------
 // Binary path
@@ -65,7 +78,7 @@ impl Fixture {
     /// Copy with_key.yaml into a fresh TempDir.
     fn new() -> Self {
         let dir = TempDir::new().unwrap();
-        std::fs::copy(FIXTURE_SRC, dir.path().join("fixture.yaml")).unwrap();
+        std::fs::copy(fixture_src(), dir.path().join("fixture.yaml")).unwrap();
         Self { dir }
     }
 

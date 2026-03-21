@@ -161,4 +161,17 @@ impl PivBackend for EmulatedPiv {
         }
         bail!("emulated: generate_certificate not implemented (use VirtualPiv for crypto tests)")
     }
+
+    fn read_printed_object_with_pin(&self, reader: &str, _pin: &str) -> Result<Vec<u8>> {
+        use crate::auxiliaries::OBJ_PRINTED;
+        if reader != self.reader {
+            bail!("emulated: unknown reader '{reader}'");
+        }
+        let state = self.state.lock().unwrap();
+        state
+            .objects
+            .get(&OBJ_PRINTED)
+            .cloned()
+            .ok_or_else(|| anyhow!("emulated: no PRINTED object stored"))
+    }
 }

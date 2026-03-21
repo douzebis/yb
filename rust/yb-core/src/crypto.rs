@@ -50,6 +50,9 @@ const NONCE_LEN: usize = 12;
 const GCM_TAG_LEN: usize = 16;
 const GCM_HEADER_LEN: usize = VERSION_LEN + EPHEMERAL_PK_LEN + NONCE_LEN; // 78
 
+/// Total overhead added by `hybrid_encrypt`: version(1) + EPK(65) + nonce(12) + GCM tag(16).
+pub const GCM_OVERHEAD: usize = GCM_HEADER_LEN + GCM_TAG_LEN; // = 94
+
 // Legacy CBC format constants (decryption only)
 const LEGACY_VERSION: u8 = 0x04; // X9.62 uncompressed-point prefix byte
 const IV_LEN: usize = 16;
@@ -349,6 +352,9 @@ mod tests {
                 _mk: Option<&str>,
                 _pin: Option<&str>,
             ) -> Result<Vec<u8>> {
+                bail!("mock")
+            }
+            fn read_printed_object_with_pin(&self, _r: &str, _pin: &str) -> Result<Vec<u8>> {
                 bail!("mock")
             }
         }

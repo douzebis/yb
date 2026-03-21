@@ -246,7 +246,7 @@ impl VirtualPiv {
     ///
     /// This lets subprocess tests persist state written by one `yb` invocation
     /// (e.g. `format`) so that subsequent invocations start from that state.
-    pub fn save_fixture(&self, path: &Path) -> Result<()> {
+    fn do_save_fixture(&self, path: &Path) -> Result<()> {
         let s = self.state.lock().unwrap();
         let mut slots = HashMap::new();
         for (slot_byte, key) in &s.key_slots {
@@ -449,8 +449,19 @@ impl PivBackend for VirtualPiv {
         Ok(cert_der)
     }
 
+    fn read_printed_object_with_pin(&self, reader: &str, pin: &str) -> Result<Vec<u8>> {
+        use crate::auxiliaries::OBJ_PRINTED;
+        let mut s = self.state.lock().unwrap();
+        check_reader(&s, reader)?;
+        do_verify_pin(&mut s, pin)?;
+        s.objects
+            .get(&OBJ_PRINTED)
+            .cloned()
+            .ok_or_else(|| anyhow!("virtual: no PRINTED object stored"))
+    }
+
     fn save_fixture(&self, path: &std::path::Path) -> Result<()> {
-        VirtualPiv::save_fixture(self, path)
+        self.do_save_fixture(path)
     }
 }
 

@@ -77,6 +77,12 @@ pub trait PivBackend: Send + Sync {
         pin: Option<&str>,
     ) -> Result<Vec<u8>>;
 
+    /// Read the raw content of the PRINTED object (0x5FC109) after verifying PIN.
+    ///
+    /// Implementations must perform PIN verification and object read in the same
+    /// session to prevent the card from resetting PIN-verified state between calls.
+    fn read_printed_object_with_pin(&self, reader: &str, pin: &str) -> Result<Vec<u8>>;
+
     /// Persist state to a fixture file (no-op for hardware backends).
     ///
     /// `VirtualPiv` overrides this to serialize its in-memory state back to

@@ -8,8 +8,8 @@ use clap_complete::engine::{ArgValueCompleter, PathCompleter};
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::PathBuf;
-use yb_core::orchestrator;
-use yb_core::store::{constants::MAX_NAME_LEN, Object, Store};
+use yb_core::orchestrator::{self, Encryption};
+use yb_core::store::{constants::MAX_NAME_LEN, Store};
 use yb_core::Context;
 
 #[derive(Args, Debug)]
@@ -102,23 +102,25 @@ pub fn run(ctx: &Context, args: &StoreArgs) -> Result<()> {
         .iter()
         .map(|(name, payload)| {
             let enc_len = if encrypted {
-                // Approximate: actual encrypted size = payload + 94 (GCM overhead).
-                payload.len() + 94
+                // Approximate: actual encrypted size = payload + GCM overhead.
+                payload.len() + yb_core::crypto::GCM_OVERHEAD
             } else {
                 payload.len()
             };
             let name_len = name.len().min(MAX_NAME_LEN);
-            let head_cap = Object::head_payload_capacity(store.object_size, name_len);
-            let cont_cap = Object::continuation_payload_capacity(store.object_size);
-            if enc_len <= head_cap {
-                1
-            } else {
-                1 + (enc_len - head_cap).div_ceil(cont_cap)
-            }
+            yb_core::orchestrator::chunks_needed(enc_len, name_len, store.object_size)
         })
         .sum();
 
-    if store.free_count() < total_chunks {
+    // Blobs that already exist with the same name will have their chunks freed
+    // before new ones are allocated, so don't count them against free capacity.
+    let freed_chunks: usize = entries
+        .iter()
+        .filter_map(|(name, _)| store.find_head(name))
+        .map(|head| store.chunk_chain(head.index).len())
+        .sum();
+
+    if store.free_count() + freed_chunks < total_chunks {
         if entries.len() == 1 {
             bail!(
                 "store is full — remove some blobs first (need {} slot(s), {} free)",
@@ -137,13 +139,16 @@ pub fn run(ctx: &Context, args: &StoreArgs) -> Result<()> {
 
     let pin = ctx.require_pin()?;
     for (name, payload) in &entries {
+        let encryption = match peer_pk.as_ref() {
+            Some(pk) => Encryption::Encrypted(pk),
+            None => Encryption::None,
+        };
         let ok = orchestrator::store_blob(
             &mut store,
             ctx.piv.as_ref(),
             name,
             payload,
-            encrypted,
-            peer_pk.as_ref(),
+            encryption,
             mgmt_key.as_deref(),
             pin.as_deref(),
         )?;
