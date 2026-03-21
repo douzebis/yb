@@ -17,7 +17,7 @@ use yb_core::{
 
 #[derive(Args, Debug)]
 pub struct FormatArgs {
-    /// Number of PIV objects to allocate (1–16).
+    /// Number of PIV objects to allocate (1–20).
     #[arg(short = 'c', long = "object-count", default_value_t = DEFAULT_OBJECT_COUNT)]
     pub object_count: u8,
 
