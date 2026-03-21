@@ -7,7 +7,7 @@ SPDX-License-Identifier: MIT
 
 # yb — Rust Implementation Design
 
-**Version:** 2026-03 (post CLI-improvements + subprocess test suite)
+**Version:** 2026-03 (post security hardening + Python removal)
 **Crates:** `yb-core` (library), `yb` (CLI binary), `yb-piv-harness` (tier-2 test harness)
 
 ---
@@ -19,11 +19,11 @@ key-value store.  Blobs can be stored in plaintext or encrypted with
 hybrid encryption (ECDH + HKDF + AES-256-GCM) using an EC P-256 key
 that lives in a PIV slot — the private key never leaves the card.
 
-The Rust implementation is a clean-room port of the Python version.
-It retains full binary compatibility with blobs written by the Python
-version (including backward-compatible decryption of the legacy AES-CBC
-format).  All PIV operations are performed via native PC/SC APDUs; no
-subprocesses are spawned.
+The Rust implementation supersedes the original Python version.  It
+retains full binary compatibility with blobs written by that version
+(including backward-compatible decryption of the legacy AES-CBC format).
+All PIV operations are performed via native PC/SC APDUs; no subprocesses
+are spawned.
 
 ---
 
@@ -85,7 +85,8 @@ pub struct Context {
     pub reader: String,           // PC/SC reader name
     pub serial: u32,              // YubiKey serial
     pub management_key: Option<String>, // explicit --key (48 hex chars)
-    pub pin: Option<String>,
+    pin: RefCell<Option<Zeroizing<String>>>, // zeroed on drop; private
+    pin_fn: Box<dyn Fn() -> Result<Option<String>>>, // lazy TTY prompt
     pub piv: Arc<dyn PivBackend>,
     pub debug: bool,
     pub quiet: bool,              // suppress informational stderr
@@ -123,6 +124,12 @@ pub struct Context {
 - Otherwise return `None` (YubiKey uses its own default key — only
   safe when `--allow-defaults` is in use or the store is being formatted
   for the first time).
+
+**`require_pin`** is the only accessor for the cached PIN.  On first
+call it invokes `pin_fn` (usually a TTY prompt closure) if the PIN was
+not supplied by a non-interactive source.  The result is stored as
+`Zeroizing<String>` so the bytes are overwritten when the `Context` is
+dropped.  Callers receive a plain `Option<String>` clone.
 
 **`Context::with_backend`** is the test/library constructor: takes any
 `Arc<dyn PivBackend>` (typically a `VirtualPiv`), skips the default-
@@ -186,7 +193,8 @@ Uses 3DES-ECB challenge-response (NIST SP 800-73-4 mutual auth):
 1. Issue GENERAL AUTHENTICATE with an empty witness (get card challenge).
 2. Decrypt card challenge with management key via `crypto_ecb_op`.
 3. Generate a host challenge; send both to the card.
-4. Verify the card response by encrypting host challenge and comparing.
+4. Verify the card response by encrypting host challenge and comparing
+   with `subtle::ConstantTimeEq` to prevent timing side-channels.
 
 The raw 3DES key is accepted as 48 hex chars (24 raw bytes); the default
 factory key is `010203040506070801020304050607080102030405060708`.
@@ -323,6 +331,14 @@ across all objects.
 When two head objects have the same blob name (which can occur after an
 interrupted write), `Store::sanitize` keeps the one with the higher age
 and resets the other, then removes any orphaned continuation chunks.
+
+### Helper functions
+
+`read_u32_le(buf, offset) -> Result<u32>` and
+`read_u24_le(buf, offset) -> Result<u32>` perform bounds-checked reads
+of little-endian integers from byte slices.  Both return `Err` with an
+explanatory message if `offset + width > buf.len()`, rather than
+panicking.
 
 ### Sync
 
@@ -570,16 +586,14 @@ which enforces ASN.1 UTF8String encoding rules internally.
 
 ### Tier 1 — Unit tests (`cargo test`)
 
-No feature flags required.  52 tests, ~0.1 s.
+Feature flag: `virtual-piv`.  69 tests, ~0.1 s.
 
-| File | What it tests |
-|---|---|
-| `yb-core/src/store/mod.rs` | `Object` serialization round-trips; Python binary-compatibility vector |
-| `yb-core/src/crypto.rs` | GCM round-trip; legacy CBC backward-compatibility via a `MockPiv` |
-| `yb-core/src/orchestrator.rs` | `validate_name` accepts/rejects inputs |
-| `yb-core/tests/virtual_piv_tests.rs` | `VirtualPiv`: store/fetch/remove, ECDH, key/cert generation, fixture round-trip |
-| `yb-core/src/lib.rs` | Doc-test for `Context::new` signature |
-| `yb/tests/cli_tests.rs` | **Direct-call CLI tests** (spec 0008): calls command handler functions via `Context::with_backend(VirtualPiv)` — 22 tests covering all 6 commands |
+| File | Tests | What it tests |
+|---|---|---|
+| `yb/tests/cli_tests.rs` | 25 | **Direct-call CLI tests** (spec 0008): calls command handler functions via `Context::with_backend(VirtualPiv)` — covers all 6 commands |
+| `yb-core/src/lib.rs` (unit tests) | 21 | `Object` serialization round-trips; Python binary-compatibility vector; GCM/CBC crypto round-trips; `validate_name` |
+| `yb-core/tests/virtual_piv_tests.rs` | 22 | `VirtualPiv`: store/fetch/remove, ECDH, key/cert generation, fixture round-trip |
+| `yb-core/src/lib.rs` (doc-test) | 1 | Compile check for `Context::new` signature |
 
 **Direct-call CLI tests** (spec 0008) verify command logic without
 spawning a subprocess.  They use `Context::with_backend` so clap
@@ -596,7 +610,7 @@ BINDGEN_EXTRA_CLANG_ARGS="-I${LIBCLANG_PATH}/clang/19/include" \
   cargo test -p yb-piv-harness --features integration-tests
 ```
 
-#### `hardware_piv_tests` (10 tests)
+#### `hardware_piv_tests` (10 tests, serialized)
 
 A NixOS VM test (`pkgs.nixosTest`) spins up a guest with:
 - `pcscd` (PC/SC daemon)
@@ -611,7 +625,7 @@ The harness crate provides `with_vsc(f)`:
 
 Tests are serialized (`RUST_TEST_THREADS=1`) — shared virtual card state.
 
-#### `yb_cli_tests` (27 tests) — spec 0009
+#### `yb_cli_tests` (36 tests) — spec 0009
 
 Subprocess tests: invoke the compiled `yb` binary via
 `std::process::Command`.  Tests cover clap argument parsing, env vars,
@@ -680,7 +694,13 @@ filename semantics.
 
 **`zeroize`.** Private key material held in `p256::SecretKey` and PKCS8
 DER is automatically zeroed on drop via `Zeroizing<>` wrappers in the
-`p256` crate.
+`p256` crate.  The cached PIN in `Context` is stored as
+`Zeroizing<String>`, ensuring it is overwritten when the context is
+dropped.
+
+**Constant-time management key verification.** The card's response in
+the 3DES mutual-authentication challenge is compared using
+`subtle::ConstantTimeEq` to prevent timing-based key extraction.
 
 ---
 
