@@ -115,14 +115,17 @@ pub trait PivBackend: Send + Sync {
 
     /// Start flashing the LED on the device attached to `reader`.
     ///
-    /// `interval_ms` controls the period between flashes in milliseconds.
-    /// Recommended values: 333 ms (3 Hz) for device selection, 200 ms (5 Hz)
-    /// for active-operation feedback.
+    /// `on_ms` — how long the LED stays on per cycle (milliseconds).
+    /// `off_ms` — how long the LED stays off per cycle (milliseconds).
+    ///
+    /// Recommended values:
+    /// - Device selection: on=400, off=400 (calm 1.25 Hz, easy to follow)
+    /// - Destructive confirmation: on=200, off=400 (faster, conveys urgency)
     ///
     /// Returns a [`FlashHandle`]; the LED stops flashing when the handle is
     /// dropped.  The default implementation is a no-op so existing backends
     /// are unaffected.
-    fn start_flash(&self, _reader: &str, _interval_ms: u64) -> Box<dyn FlashHandle> {
+    fn start_flash(&self, _reader: &str, _on_ms: u64, _off_ms: u64) -> Box<dyn FlashHandle> {
         Box::new(NoopFlash)
     }
 }

@@ -19,8 +19,9 @@ use std::io::{stderr, Write as _};
 use std::sync::Arc;
 use yb_core::{DeviceInfo, PivBackend};
 
-/// 3 Hz — calm, clearly intentional blink for device identification.
-const FLASH_INTERVAL_MS: u64 = 333;
+/// On/off durations for device-selection flash: 400 ms on, 400 ms off (1.25 Hz).
+const FLASH_ON_MS: u64 = 400;
+const FLASH_OFF_MS: u64 = 400;
 
 /// Run the interactive single-line carousel device picker.
 ///
@@ -34,7 +35,7 @@ pub fn run_picker(piv: &Arc<dyn PivBackend>, devices: &[DeviceInfo]) -> Result<O
     );
 
     let mut idx = 0usize;
-    let mut flash = piv.start_flash(&devices[idx].reader, FLASH_INTERVAL_MS);
+    let mut flash = piv.start_flash(&devices[idx].reader, FLASH_ON_MS, FLASH_OFF_MS);
 
     terminal::enable_raw_mode()?;
     let mut out = stderr();
@@ -54,7 +55,7 @@ pub fn run_picker(piv: &Arc<dyn PivBackend>, devices: &[DeviceInfo]) -> Result<O
                 | (KeyCode::Char('k'), KeyModifiers::NONE) => {
                     drop(flash);
                     idx = if idx == 0 { devices.len() - 1 } else { idx - 1 };
-                    flash = piv.start_flash(&devices[idx].reader, FLASH_INTERVAL_MS);
+                    flash = piv.start_flash(&devices[idx].reader, FLASH_ON_MS, FLASH_OFF_MS);
                     render(&mut out, devices, idx, false)?;
                 }
                 // Navigate right / next.
@@ -63,7 +64,7 @@ pub fn run_picker(piv: &Arc<dyn PivBackend>, devices: &[DeviceInfo]) -> Result<O
                 | (KeyCode::Char('j'), KeyModifiers::NONE) => {
                     drop(flash);
                     idx = (idx + 1) % devices.len();
-                    flash = piv.start_flash(&devices[idx].reader, FLASH_INTERVAL_MS);
+                    flash = piv.start_flash(&devices[idx].reader, FLASH_ON_MS, FLASH_OFF_MS);
                     render(&mut out, devices, idx, false)?;
                 }
                 // Confirm.
