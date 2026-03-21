@@ -20,7 +20,7 @@ jobs:
       - name: Install Nix
         uses: cachix/install-nix-action@v27
         with:
-          nix_path: nixpkgs=channel:nixos-24.11
+          nix_path: nixpkgs=channel:nixos-25.11
 
       - name: Check formatting (rustfmt)
         run: nix-build -A rust-fmt
@@ -41,7 +41,7 @@ jobs:
       - name: Install Nix
         uses: cachix/install-nix-action@v27
         with:
-          nix_path: nixpkgs=channel:nixos-24.11
+          nix_path: nixpkgs=channel:nixos-25.11
 
       - name: Build yb binary
         run: nix-build -A yb-rust
@@ -56,7 +56,7 @@ jobs:
       - name: Install Nix
         uses: cachix/install-nix-action@v27
         with:
-          nix_path: nixpkgs=channel:nixos-24.11
+          nix_path: nixpkgs=channel:nixos-25.11
           extra_nix_config: |
             system-features = nixos-test kvm
 
