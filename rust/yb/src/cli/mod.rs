@@ -8,7 +8,9 @@ pub mod format;
 pub mod fsck;
 pub mod list;
 pub mod list_readers;
+pub mod picker;
 pub mod remove;
+pub mod select;
 pub mod store;
 pub mod util;
 

@@ -6,9 +6,10 @@
 use anyhow::Result;
 use clap::{CommandFactory, Parser};
 use clap_complete::CompleteEnv;
+use std::sync::Arc;
 use yb::cli;
 use yb::{Cli, Commands};
-use yb_core::{context::OutputOptions, Context};
+use yb_core::{context::OutputOptions, Context, DeviceInfo, PivBackend};
 
 fn main() {
     CompleteEnv::with_factory(Cli::command)
@@ -25,9 +26,12 @@ fn main() {
 }
 
 fn run(cli: Cli) -> Result<()> {
-    // list-readers bypasses Context construction (works without a YubiKey).
+    // Commands that bypass Context construction.
     if let Commands::ListReaders(args) = cli.command {
         return cli::list_readers::run(&args);
+    }
+    if let Commands::Select(args) = cli.command {
+        return cli::select::run(&args);
     }
 
     // Emit deprecation warnings for legacy flags.
@@ -40,6 +44,7 @@ fn run(cli: Cli) -> Result<()> {
 
     let (pin, pin_fn) = make_pin_resolver(cli.pin_stdin, cli.pin_deprecated)?;
     let management_key = resolve_management_key(cli.key_deprecated);
+    let device_picker = make_device_picker();
 
     let ctx = Context::new(
         cli.serial,
@@ -47,6 +52,7 @@ fn run(cli: Cli) -> Result<()> {
         management_key,
         pin,
         pin_fn,
+        device_picker,
         OutputOptions {
             debug: cli.debug,
             quiet: cli.quiet,
@@ -61,7 +67,7 @@ fn run(cli: Cli) -> Result<()> {
         Commands::List(args) => cli::list::run(&ctx, &args),
         Commands::Remove(args) => cli::remove::run(&ctx, &args),
         Commands::Fsck(args) => cli::fsck::run(&ctx, &args),
-        Commands::ListReaders(_) => unreachable!("handled above"),
+        Commands::ListReaders(_) | Commands::Select(_) => unreachable!("handled above"),
         #[cfg(feature = "self-test")]
         Commands::SelfTest(args) => cli::self_test::run(&ctx, &args),
     };
@@ -71,6 +77,31 @@ fn run(cli: Cli) -> Result<()> {
     }
 
     result
+}
+
+// ---------------------------------------------------------------------------
+// Device picker
+// ---------------------------------------------------------------------------
+
+type PickerFn = Box<dyn Fn(&Arc<dyn PivBackend>, &[DeviceInfo]) -> Result<Option<DeviceInfo>>>;
+
+fn make_device_picker() -> PickerFn {
+    if atty::is(atty::Stream::Stderr) {
+        Box::new(|piv: &Arc<dyn PivBackend>, devices: &[DeviceInfo]| {
+            cli::picker::run_picker(piv, devices)
+        })
+    } else {
+        Box::new(|_piv: &Arc<dyn PivBackend>, devices: &[DeviceInfo]| {
+            eprintln!("Multiple YubiKeys found. Use --serial to select one:");
+            for d in devices {
+                eprintln!(
+                    "  serial={} version={} reader={}",
+                    d.serial, d.version, d.reader
+                );
+            }
+            anyhow::bail!("ambiguous device selection — use --serial or --reader")
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
