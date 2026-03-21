@@ -99,7 +99,7 @@ loop:
 The connection uses `pcsc::ShareMode::Shared` so it coexists with the main
 connection that the rest of `yb` opens later.
 
-#### 1.3 Known residual noise
+#### 1.3 Known residual noise — the CCID heartbeat
 
 A faint off/on dip (~50 ms) occurs approximately every 3 seconds regardless
 of the host-side timing or connection strategy.  This was confirmed by:
@@ -109,8 +109,14 @@ of the host-side timing or connection strategy.  This was confirmed by:
 - The dip cannot be hidden by adjusting on/off timing because it is visible
   whether the LED is on or off at the time it occurs.
 
-Conclusion: the dip is **intrinsic YubiKey 5 firmware behavior** — a periodic
-internal housekeeping operation that briefly interrupts LED state.  It cannot
+The cause is the **YubiKey's built-in CCID heartbeat**, documented in the
+YubiKey Manual v3.4:
+
+> When the CCID interface is acquired and no touch is pending, the LED is
+> constant ON with a short flash OFF every **1.5 seconds**.
+
+Two heartbeat cycles = ~3 seconds, which matches the observed period.  This
+is a deliberate firmware feature on all YubiKey 5 series devices.  It cannot
 be suppressed from the host side and is accepted as an unavoidable artifact.
 
 #### 1.4 Chosen timings
@@ -373,3 +379,8 @@ no arrow-key navigation.  The picker needs raw-mode key input, which
 - `context.rs`: `select_device`, `Context::new`
 - `crossterm` crate: cross-platform raw-mode terminal I/O
 - PC/SC spec: `SCardConnect` `SCARD_SHARE_SHARED`, `SCardTransmit`
+- YubiKey Manual v3.4 §LED behavior: documents the 1.5-second CCID heartbeat
+  (constant ON, brief flash OFF every 1.5 s when interface acquired)
+- Yubico Forum: "It will blink when CCID mode is enabled, period."
+  https://forum.yubico.com/viewtopicfa02.html?p=8196
+- Empirical LED exploration tools: `attic/mock_up/flash_test.rs`
