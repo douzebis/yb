@@ -15,10 +15,17 @@ pub const OBJECT_MIN_SIZE: usize = 512;
 pub const OBJECT_MAX_SIZE: usize = 3_052;
 
 /// Default number of PIV objects allocated per store.
-pub const DEFAULT_OBJECT_COUNT: u8 = 12;
+///
+/// 20 objects × 2,048 bytes = 40,960 bytes gross, leaving ~10 KB of the
+/// YubiKey 5's 51,200-byte NVM pool for standard-slot certificates.
+pub const DEFAULT_OBJECT_COUNT: u8 = 20;
 
 /// Default PIV object size.
-pub const DEFAULT_OBJECT_SIZE: usize = OBJECT_MAX_SIZE;
+///
+/// 2,048 bytes balances fragmentation (avg ~1,024 B wasted per blob's last
+/// chunk) against write amplification (an 8 KB blob needs 5 PIV writes
+/// instead of 3 at the 3,052-byte maximum).
+pub const DEFAULT_OBJECT_SIZE: usize = 2_048;
 
 /// First PIV object data-object ID (object index 0).
 pub const OBJECT_ID_ZERO: u32 = 0x5f_0000;
