@@ -1,0 +1,36 @@
+# SPDX-FileCopyrightText: 2025 - 2026 Frederic Ruget <fred@atlant.is> <fred@s3ns.io> (GitHub: @douzebis)
+# SPDX-FileCopyrightText: 2025 - 2026 Thales Cloud Sécurisé
+#
+# SPDX-License-Identifier: MIT
+
+name: Nix
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  nix-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+        with:
+          nix_path: nixpkgs=channel:nixos-24.11
+
+      - name: Check formatting (rustfmt)
+        run: nix-build -A rust-fmt
+
+      - name: Check lints (clippy)
+        run: nix-build -A rust-clippy
+
+      - name: Run unit tests
+        run: nix-build -A rust-tests
+
+      - name: Build yb binary
+        run: nix-build -A yb-rust
