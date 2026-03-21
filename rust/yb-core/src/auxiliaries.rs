@@ -38,6 +38,11 @@ pub(crate) fn parse_tlv_flat(data: &[u8]) -> HashMap<u8, Vec<u8>> {
         let (len, consumed) = decode_tlv_length(&data[i..]);
         i += consumed;
         if i + len > data.len() {
+            debug_assert!(
+                false,
+                "parse_tlv_flat: truncated TLV at offset {i} (tag=0x{tag:02x}, claimed len={len}, available={})",
+                data.len() - i
+            );
             break;
         }
         map.insert(tag, data[i..i + len].to_vec());
@@ -202,14 +207,10 @@ pub fn detect_pin_protected_mode(reader: &str, piv: &dyn PivBackend) -> Result<(
 /// to avoid the card resetting PIN-verified state between calls.
 pub fn get_pin_protected_management_key(
     reader: &str,
-    _piv: &dyn PivBackend,
+    piv: &dyn PivBackend,
     pin: &str,
 ) -> Result<String> {
-    use crate::piv::hardware::PcscSession;
-
-    let mut session = PcscSession::open(reader)?;
-    session.verify_pin(pin)?;
-    let raw = session.get_data(OBJ_PRINTED)?;
+    let raw = piv.read_printed_object_with_pin(reader, pin)?;
     extract_pin_protected_key(&raw)
 }
 

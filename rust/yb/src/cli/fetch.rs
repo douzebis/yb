@@ -5,12 +5,12 @@
 use anyhow::{bail, Result};
 use clap::Args;
 use clap_complete::engine::{ArgValueCompleter, PathCompleter};
-use globset::GlobBuilder;
 use std::io::Write as _;
 use std::path::PathBuf;
 use yb_core::orchestrator;
 use yb_core::{store::Store, Context};
 
+use crate::cli::util::resolve_patterns;
 use crate::complete::complete_blob_names;
 
 #[derive(Args, Debug)]
@@ -56,37 +56,8 @@ pub fn run(ctx: &Context, args: &FetchArgs) -> Result<()> {
     let all_blobs = orchestrator::list_blobs(&store);
 
     // Resolve patterns to matched blob names.
-    let mut matched: Vec<String> = Vec::new();
-    for pattern in &args.patterns {
-        let is_glob = pattern.chars().any(|c| matches!(c, '*' | '?' | '['));
-        if is_glob {
-            let glob = GlobBuilder::new(pattern)
-                .case_insensitive(false)
-                .build()?
-                .compile_matcher();
-            let hits: Vec<String> = all_blobs
-                .iter()
-                .filter(|b| glob.is_match(&b.name))
-                .map(|b| b.name.clone())
-                .collect();
-            if hits.is_empty() {
-                bail!("pattern '{}' matched no blobs", pattern);
-            }
-            for name in hits {
-                if !matched.contains(&name) {
-                    matched.push(name);
-                }
-            }
-        } else {
-            // Plain name: exact match.
-            if !all_blobs.iter().any(|b| b.name == *pattern) {
-                bail!("blob '{}' not found", pattern);
-            }
-            if !matched.contains(pattern) {
-                matched.push(pattern.clone());
-            }
-        }
-    }
+    let all_blob_names: Vec<String> = all_blobs.iter().map(|b| b.name.clone()).collect();
+    let matched = resolve_patterns(&args.patterns, &all_blob_names, false)?;
 
     // Validate per-match constraints.
     if (args.stdout || args.output.is_some()) && matched.len() != 1 {

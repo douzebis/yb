@@ -10,6 +10,14 @@ use crate::store::{constants::MAX_NAME_LEN, Object, Store};
 use anyhow::{bail, Context, Result};
 use p256::PublicKey;
 
+/// Encryption mode for `store_blob`.
+pub enum Encryption<'a> {
+    /// Store the blob in plaintext.
+    None,
+    /// Encrypt the blob to the given P-256 public key.
+    Encrypted(&'a PublicKey),
+}
+
 /// Metadata returned by list_blobs.
 #[derive(Debug, Clone)]
 pub struct BlobInfo {
@@ -35,33 +43,46 @@ impl BlobInfo {
 }
 
 // ---------------------------------------------------------------------------
+// chunks_needed
+// ---------------------------------------------------------------------------
+
+/// Calculate how many objects a blob of `data_len` bytes with a name of
+/// `name_len` bytes needs in a store with `object_size`-byte objects.
+pub fn chunks_needed(data_len: usize, name_len: usize, object_size: usize) -> usize {
+    let head_cap = Object::head_payload_capacity(object_size, name_len);
+    let cont_cap = Object::continuation_payload_capacity(object_size);
+    if data_len <= head_cap {
+        1
+    } else {
+        1 + (data_len - head_cap).div_ceil(cont_cap)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // store_blob
 // ---------------------------------------------------------------------------
 
 /// Store a blob on the YubiKey.
 ///
-/// `peer_public_key` must be `Some` when `encrypted` is true.
 /// Returns `false` if the store is full.
 pub fn store_blob(
     store: &mut Store,
     piv: &dyn PivBackend,
     name: &str,
     payload: &[u8],
-    encrypted: bool,
-    peer_public_key: Option<&PublicKey>,
+    encryption: Encryption<'_>,
     management_key: Option<&str>,
     pin: Option<&str>,
 ) -> Result<bool> {
     validate_name(name)?;
 
     // Encrypt if requested.
-    let (data, blob_key_slot) = if encrypted {
-        let pk = peer_public_key
-            .ok_or_else(|| anyhow::anyhow!("peer_public_key required for encrypted store"))?;
-        let enc = crypto::hybrid_encrypt(payload, pk).context("encrypting blob")?;
-        (enc, store.store_key_slot)
-    } else {
-        (payload.to_vec(), 0u8)
+    let (data, blob_key_slot) = match encryption {
+        Encryption::Encrypted(pk) => {
+            let enc = crypto::hybrid_encrypt(payload, pk).context("encrypting blob")?;
+            (enc, store.store_key_slot)
+        }
+        Encryption::None => (payload.to_vec(), 0u8),
     };
 
     let plain_size = payload.len() as u32;
@@ -72,11 +93,7 @@ pub fn store_blob(
     let head_cap = Object::head_payload_capacity(store.object_size, name_len);
     let cont_cap = Object::continuation_payload_capacity(store.object_size);
 
-    let chunks_needed = if data.len() <= head_cap {
-        1
-    } else {
-        1 + (data.len() - head_cap).div_ceil(cont_cap)
-    };
+    let chunks_needed = chunks_needed(data.len(), name_len, store.object_size);
 
     if store.free_count() < chunks_needed {
         return Ok(false);

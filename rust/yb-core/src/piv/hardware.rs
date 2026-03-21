@@ -201,7 +201,7 @@ impl PcscSession {
             .ok_or_else(|| anyhow::anyhow!("MGMT AUTH step1: missing tag 80"))?;
 
         // Step 2: decrypt witness, generate our own challenge, send both.
-        let witness_dec = crypto_ecb_decrypt(&key_bytes, witness_enc, block_size)?;
+        let witness_dec = crypto_ecb(&key_bytes, witness_enc, block_size, EcbDir::Decrypt)?;
         let challenge: Vec<u8> = (0..block_size).map(|_| rand::random::<u8>()).collect();
 
         // Build data: 7C <len> [ 80 <len> <decrypted-witness> 81 <len> <challenge> ]
@@ -225,7 +225,7 @@ impl PcscSession {
             .get(&0x82)
             .ok_or_else(|| anyhow::anyhow!("MGMT AUTH step2: missing tag 82"))?;
 
-        let challenge_enc = crypto_ecb_encrypt(&key_bytes, &challenge, block_size)?;
+        let challenge_enc = crypto_ecb(&key_bytes, &challenge, block_size, EcbDir::Encrypt)?;
         if challenge_enc != *challenge_resp {
             bail!("management key authentication failed: card response mismatch");
         }
@@ -437,6 +437,13 @@ impl PivBackend for HardwarePiv {
         session.generate_key(slot)
     }
 
+    fn read_printed_object_with_pin(&self, reader: &str, pin: &str) -> Result<Vec<u8>> {
+        use crate::auxiliaries::OBJ_PRINTED;
+        let mut session = PcscSession::open(reader)?;
+        session.verify_pin(pin)?;
+        session.get_data(OBJ_PRINTED)
+    }
+
     fn generate_certificate(
         &self,
         reader: &str,
@@ -622,7 +629,11 @@ fn encode_length(len: usize) -> Vec<u8> {
     } else if len <= 0xFFFF {
         vec![0x82, (len >> 8) as u8, (len & 0xFF) as u8]
     } else {
-        panic!("length too large for BER encoding: {len}");
+        // SAFETY: PIV data objects are bounded by OBJECT_MAX_SIZE (3,052 bytes)
+        // which is well within the 0xFFFF BER two-byte limit.
+        unreachable!(
+            "encode_length called with len={len} > 0xFFFF; PIV objects cannot exceed 3,052 bytes"
+        )
     }
 }
 
@@ -703,10 +714,20 @@ fn crypto_ecb_op(
     Ok(block)
 }
 
-fn crypto_ecb_decrypt(key: &[u8], data: &[u8], block_size: usize) -> Result<Vec<u8>> {
-    crypto_ecb_op(key, data, block_size, "decrypt", |key, block| {
-        match key.len() {
-            24 => {
+#[derive(Clone, Copy)]
+enum EcbDir {
+    Encrypt,
+    Decrypt,
+}
+
+fn crypto_ecb(key: &[u8], data: &[u8], block_size: usize, dir: EcbDir) -> Result<Vec<u8>> {
+    let dir_str = match dir {
+        EcbDir::Encrypt => "encrypt",
+        EcbDir::Decrypt => "decrypt",
+    };
+    crypto_ecb_op(key, data, block_size, dir_str, |key, block| {
+        match (key.len(), dir) {
+            (24, EcbDir::Decrypt) => {
                 use des::cipher::{BlockDecrypt, KeyInit};
                 use des::TdesEde3;
                 let cipher =
@@ -715,32 +736,7 @@ fn crypto_ecb_decrypt(key: &[u8], data: &[u8], block_size: usize) -> Result<Vec<
                 cipher.decrypt_block(&mut b);
                 block.copy_from_slice(&b);
             }
-            16 => {
-                use aes::cipher::{BlockDecrypt, KeyInit};
-                let cipher = aes::Aes128::new_from_slice(key)
-                    .map_err(|e| anyhow::anyhow!("AES-128 key: {e}"))?;
-                let mut b = aes::cipher::generic_array::GenericArray::clone_from_slice(block);
-                cipher.decrypt_block(&mut b);
-                block.copy_from_slice(&b);
-            }
-            32 => {
-                use aes::cipher::{BlockDecrypt, KeyInit};
-                let cipher = aes::Aes256::new_from_slice(key)
-                    .map_err(|e| anyhow::anyhow!("AES-256 key: {e}"))?;
-                let mut b = aes::cipher::generic_array::GenericArray::clone_from_slice(block);
-                cipher.decrypt_block(&mut b);
-                block.copy_from_slice(&b);
-            }
-            n => bail!("unsupported key length for ECB: {n}"),
-        }
-        Ok(())
-    })
-}
-
-fn crypto_ecb_encrypt(key: &[u8], data: &[u8], block_size: usize) -> Result<Vec<u8>> {
-    crypto_ecb_op(key, data, block_size, "encrypt", |key, block| {
-        match key.len() {
-            24 => {
+            (24, EcbDir::Encrypt) => {
                 use des::cipher::{BlockEncrypt, KeyInit};
                 use des::TdesEde3;
                 let cipher =
@@ -749,7 +745,15 @@ fn crypto_ecb_encrypt(key: &[u8], data: &[u8], block_size: usize) -> Result<Vec<
                 cipher.encrypt_block(&mut b);
                 block.copy_from_slice(&b);
             }
-            16 => {
+            (16, EcbDir::Decrypt) => {
+                use aes::cipher::{BlockDecrypt, KeyInit};
+                let cipher = aes::Aes128::new_from_slice(key)
+                    .map_err(|e| anyhow::anyhow!("AES-128 key: {e}"))?;
+                let mut b = aes::cipher::generic_array::GenericArray::clone_from_slice(block);
+                cipher.decrypt_block(&mut b);
+                block.copy_from_slice(&b);
+            }
+            (16, EcbDir::Encrypt) => {
                 use aes::cipher::{BlockEncrypt, KeyInit};
                 let cipher = aes::Aes128::new_from_slice(key)
                     .map_err(|e| anyhow::anyhow!("AES-128 key: {e}"))?;
@@ -757,7 +761,15 @@ fn crypto_ecb_encrypt(key: &[u8], data: &[u8], block_size: usize) -> Result<Vec<
                 cipher.encrypt_block(&mut b);
                 block.copy_from_slice(&b);
             }
-            32 => {
+            (32, EcbDir::Decrypt) => {
+                use aes::cipher::{BlockDecrypt, KeyInit};
+                let cipher = aes::Aes256::new_from_slice(key)
+                    .map_err(|e| anyhow::anyhow!("AES-256 key: {e}"))?;
+                let mut b = aes::cipher::generic_array::GenericArray::clone_from_slice(block);
+                cipher.decrypt_block(&mut b);
+                block.copy_from_slice(&b);
+            }
+            (32, EcbDir::Encrypt) => {
                 use aes::cipher::{BlockEncrypt, KeyInit};
                 let cipher = aes::Aes256::new_from_slice(key)
                     .map_err(|e| anyhow::anyhow!("AES-256 key: {e}"))?;
@@ -765,7 +777,7 @@ fn crypto_ecb_encrypt(key: &[u8], data: &[u8], block_size: usize) -> Result<Vec<
                 cipher.encrypt_block(&mut b);
                 block.copy_from_slice(&b);
             }
-            n => bail!("unsupported key length for ECB: {n}"),
+            (n, _) => bail!("unsupported key length for ECB: {n}"),
         }
         Ok(())
     })

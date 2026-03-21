@@ -20,7 +20,10 @@ let
   # tree does not affect the hash).
   rustSrc = pkgs.lib.cleanSourceWith {
     src    = pkgs.lib.cleanSource ./rust;
-    filter = path: type: crane.filterCargoSources path type;
+    # Include Cargo sources plus YAML fixtures used by tests.
+    filter = path: type:
+      crane.filterCargoSources path type
+      || pkgs.lib.hasSuffix ".yaml" path;
   };
 
   rustCommon = {
@@ -277,6 +280,16 @@ let
     '';
   };
 
+  # Fixture files needed by yb_cli_tests at runtime in the NixOS VM.
+  # crane.filterCargoSources strips .yaml from the build sandbox, so the
+  # compile-time CARGO_MANIFEST_DIR path is gone by VM time; we ship the
+  # fixtures as a separate store path and inject YB_FIXTURE_DIR instead.
+  testFixtures = pkgs.runCommand "yb-test-fixtures" {} ''
+    mkdir -p $out
+    cp ${./rust/yb-core/tests/fixtures/with_key.yaml} $out/with_key.yaml
+    cp ${./rust/yb-core/tests/fixtures/default.yaml}  $out/default.yaml
+  '';
+
   # ---------------------------------------------------------------------------
   # NIXOS VM INTEGRATION TEST (tier-1 + tier-2)
   # ---------------------------------------------------------------------------
@@ -306,8 +319,12 @@ let
       # Tier-2: CLI subprocess tests. YB_BIN points to the Nix-built binary so
       # the pre-built yb_cli_tests binary can find it (CARGO_BIN_EXE_yb is
       # baked at compile time and would point to the wrong store path).
+      # YB_FIXTURE_DIR points to fixtures in the nix store (the build-sandbox
+      # path baked into CARGO_MANIFEST_DIR is gone at VM runtime).
       out = machine.succeed(
-        "RUST_TEST_THREADS=1 YB_BIN=${ybRust}/bin/yb yb_cli_tests 2>&1"
+        "RUST_TEST_THREADS=1 YB_BIN=${ybRust}/bin/yb"
+        + " YB_FIXTURE_DIR=${testFixtures}"
+        + " yb_cli_tests 2>&1"
       )
       print(out)
       if "test result: ok" not in out:

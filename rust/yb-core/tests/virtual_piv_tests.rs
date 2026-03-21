@@ -11,7 +11,7 @@
 use std::path::Path;
 use std::sync::Arc;
 use yb_core::{
-    orchestrator::{fetch_blob, list_blobs, remove_blob, store_blob},
+    orchestrator::{fetch_blob, list_blobs, remove_blob, store_blob, Encryption},
     piv::PivBackend,
     store::Store,
     Context, VirtualPiv,
@@ -242,8 +242,7 @@ fn test_store_list_fetch_plain() {
         &piv,
         "greeting",
         payload,
-        false,
-        None,
+        Encryption::None,
         Some(mgmt),
         None,
     )
@@ -280,8 +279,7 @@ fn test_store_fetch_encrypted() {
         &piv,
         "secret",
         payload,
-        true,
-        Some(&pub_key),
+        Encryption::Encrypted(&pub_key),
         Some(mgmt),
         None,
     )
@@ -309,8 +307,7 @@ fn test_remove_blob() {
         &piv,
         "to-delete",
         b"bye",
-        false,
-        None,
+        Encryption::None,
         Some(mgmt),
         None,
     )

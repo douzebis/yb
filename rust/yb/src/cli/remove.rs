@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: MIT
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use clap::Args;
 use clap_complete::engine::ArgValueCompleter;
-use globset::GlobBuilder;
 use yb_core::{list_blobs, store::Store, Context};
 
+use crate::cli::util::resolve_patterns;
 use crate::complete::complete_blob_names;
 
 #[derive(Args, Debug)]
@@ -25,46 +25,10 @@ pub fn run(ctx: &Context, args: &RemoveArgs) -> Result<()> {
     let mut store = Store::from_device(&ctx.reader, ctx.piv.as_ref())?;
     store.sanitize();
 
-    let all_blobs: Vec<String> = list_blobs(&store).into_iter().map(|b| b.name).collect();
+    let all_blob_names: Vec<String> = list_blobs(&store).into_iter().map(|b| b.name).collect();
 
     // Resolve all patterns to a deduplicated list of blob names to remove.
-    let mut to_remove: Vec<String> = Vec::new();
-    for pattern in &args.patterns {
-        let is_glob = pattern.chars().any(|c| matches!(c, '*' | '?' | '['));
-        if is_glob {
-            let glob = GlobBuilder::new(pattern)
-                .case_insensitive(false)
-                .build()?
-                .compile_matcher();
-            let hits: Vec<&str> = all_blobs
-                .iter()
-                .filter(|n| glob.is_match(n.as_str()))
-                .map(|n| n.as_str())
-                .collect();
-            if hits.is_empty() {
-                if args.ignore_missing {
-                    continue;
-                }
-                bail!("pattern '{}' matched no blobs", pattern);
-            }
-            for name in hits {
-                if !to_remove.iter().any(|n| n == name) {
-                    to_remove.push(name.to_owned());
-                }
-            }
-        } else {
-            // Plain name: exact match.
-            if !all_blobs.iter().any(|n| n == pattern) {
-                if args.ignore_missing {
-                    continue;
-                }
-                bail!("blob '{}' not found", pattern);
-            }
-            if !to_remove.iter().any(|n| n == pattern) {
-                to_remove.push(pattern.clone());
-            }
-        }
-    }
+    let to_remove = resolve_patterns(&args.patterns, &all_blob_names, args.ignore_missing)?;
 
     if to_remove.is_empty() {
         return Ok(());

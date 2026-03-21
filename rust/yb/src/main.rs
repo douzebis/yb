@@ -7,7 +7,7 @@ use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{engine::ArgValueCompleter, CompleteEnv};
 use yb::cli;
 use yb::complete::complete_serials;
-use yb_core::Context;
+use yb_core::{context::OutputOptions, Context};
 
 // ---------------------------------------------------------------------------
 // Top-level CLI definition
@@ -117,8 +117,10 @@ fn run(cli: Cli) -> Result<()> {
         management_key,
         pin,
         pin_fn,
-        cli.debug,
-        cli.quiet,
+        OutputOptions {
+            debug: cli.debug,
+            quiet: cli.quiet,
+        },
         cli.allow_defaults,
     )?;
 
@@ -155,10 +157,12 @@ fn run(cli: Cli) -> Result<()> {
 ///   first time a PIN is actually needed and `pin` is still `None`.  When a
 ///   PIN was already resolved above, this is a no-op closure.  Otherwise it
 ///   prompts via a TTY (stderr) and returns whatever the user types.
+type PinFn = Box<dyn Fn() -> Result<Option<String>>>;
+
 fn make_pin_resolver(
     pin_stdin: bool,
     pin_deprecated: Option<String>,
-) -> Result<(Option<String>, Box<dyn Fn() -> Result<Option<String>>>)> {
+) -> Result<(Option<String>, PinFn)> {
     // 1. --pin-stdin: read one line from stdin.
     if pin_stdin {
         use std::io::BufRead as _;

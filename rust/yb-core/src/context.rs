@@ -15,6 +15,13 @@ use p256::PublicKey;
 use std::cell::RefCell;
 use std::sync::Arc;
 
+/// Output-control flags passed to `Context::new`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct OutputOptions {
+    pub debug: bool,
+    pub quiet: bool,
+}
+
 pub struct Context {
     pub reader: String,
     pub serial: u32,
@@ -44,10 +51,11 @@ impl Context {
         management_key: Option<String>,
         pin: Option<String>,
         pin_fn: Box<dyn Fn() -> Result<Option<String>>>,
-        debug: bool,
-        quiet: bool,
+        output: OutputOptions,
         allow_defaults: bool,
     ) -> Result<Self> {
+        let debug = output.debug;
+        let quiet = output.quiet;
         #[cfg(feature = "virtual-piv")]
         let piv: Arc<dyn PivBackend> = if let Ok(path) = std::env::var("YB_FIXTURE") {
             Arc::new(VirtualPiv::from_fixture(std::path::Path::new(&path))?)

@@ -7,9 +7,9 @@
 //! # Quick start
 //!
 //! ```no_run
-//! use yb_core::{store::Store, orchestrator, Context};
+//! use yb_core::{store::Store, orchestrator, Context, OutputOptions};
 //!
-//! let ctx = Context::new(None, None, None, Some("123456".into()), Box::new(|| Ok(None)), false, false, false)?;
+//! let ctx = Context::new(None, None, None, Some("123456".into()), Box::new(|| Ok(None)), OutputOptions::default(), false)?;
 //! let store = Store::from_device(&ctx.reader, ctx.piv.as_ref())?;
 //! for blob in orchestrator::list_blobs(&store) {
 //!     println!("{} ({} bytes)", blob.name, blob.plain_size);
@@ -35,14 +35,16 @@
 //! agreement is performed on-card via the PIV GENERAL AUTHENTICATE command.
 
 pub(crate) mod auxiliaries;
-pub(crate) mod crypto;
+pub mod crypto;
 
 pub mod context;
 pub mod orchestrator;
 pub mod piv;
 pub mod store;
 
-pub use context::Context;
-pub use orchestrator::{fetch_blob, list_blobs, remove_blob, store_blob, BlobInfo};
+pub use context::{Context, OutputOptions};
+pub use orchestrator::{
+    chunks_needed, fetch_blob, list_blobs, remove_blob, store_blob, BlobInfo, Encryption,
+};
 pub use piv::hardware::HardwarePiv;
 pub use piv::{DeviceInfo, PivBackend, VirtualPiv};
