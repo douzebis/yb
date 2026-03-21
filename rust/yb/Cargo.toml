@@ -18,6 +18,10 @@ categories  = ["command-line-utilities", "cryptography"]
 name = "yb"
 path = "src/main.rs"
 
+[lib]
+name = "yb"
+path = "src/lib.rs"
+
 [dependencies]
 yb-core       = { path = "../yb-core", features = ["chrono"] }
 clap          = { version = "4", features = ["derive", "env"] }
@@ -31,3 +35,5 @@ rpassword     = "7"
 atty          = "0.2"
 
 [dev-dependencies]
+yb-core  = { path = "../yb-core", features = ["chrono", "virtual-piv"] }
+tempfile = "3"
