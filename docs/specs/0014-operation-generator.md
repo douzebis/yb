@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: 2025 - 2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+
+SPDX-License-Identifier: MIT
+-->
+
 # 0014 — ToyFilesystem and OperationGenerator Test Primitives
 
 **Status:** draft

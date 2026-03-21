@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: 2025 - 2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+
+SPDX-License-Identifier: MIT
+-->
+
 # 0002 — Crate structure: library + CLI split
 
 **Status:** draft

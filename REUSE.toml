@@ -1,19 +1,26 @@
-# SPDX-FileCopyrightText: 2025 2025 Frederic Ruget <fred@atlant.is>
+# SPDX-FileCopyrightText: 2025 - 2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
 #
 # SPDX-License-Identifier: MIT
 
 version = 1
+SPDX-PackageName = "yb"
+SPDX-PackageSupplier = "Frederic Ruget <fred@atlant.is>"
+SPDX-PackageDownloadLocation = "https://github.com/douzebis/yb"
 
 [[annotations]]
-path = "./*"
-SPDX-FileCopyrightText = "2025 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)"
+path = ["rust/Cargo.lock", "rust/yb-core/tests/fixtures/**.yaml", "yb.1", ".gitignore", "LICENSE"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2025 - 2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)"
 SPDX-License-Identifier = "MIT"
 
-# Note
-#
-# The information above must be explicitly provided on the command-line
-# to the reuse utility, like so:
-#
-# reuse annotate --recursive toto \
-#   --copyright "Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)" \
-#   --license MIT
+[[annotations]]
+path = "vendor/vpicc-rs/**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2022 Nitrokey GmbH"
+SPDX-License-Identifier = "CC0-1.0"
+
+[[annotations]]
+path = "vendor/piv-authenticator/**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = ["Nicolas Stalder <n@stalder.io>", "Nitrokey GmbH"]
+SPDX-License-Identifier = "Apache-2.0 OR MIT"

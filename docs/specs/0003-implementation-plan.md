@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: 2025 - 2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+
+SPDX-License-Identifier: MIT
+-->
+
 # 0003 — Implementation plan for spec 0002 evolutions
 
 **Status:** draft
@@ -185,7 +191,6 @@ chrono        = "0.4"
 ### 1.5 `rust/yb-core/src/lib.rs` (new)
 
 ```rust
-// SPDX-FileCopyrightText: 2025 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
 // SPDX-License-Identifier: MIT
 
 //! Core library for yb — secure blob storage on a YubiKey.

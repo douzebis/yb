@@ -1,12 +1,8 @@
 <!--
-SPDX-FileCopyrightText: 2025 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+SPDX-FileCopyrightText: 2025 - 2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
 
 SPDX-License-Identifier: MIT
 -->
-
-# SPDX-FileCopyrightText: 2025 2025 Frederic Ruget <fred@atlant.is>
-#
-# SPDX-License-Identifier: MIT
 
 - [ ] Add a --pin option (useful for coding automated tests)
 - [ ] Add a -i/--in-place to the store subcommand
