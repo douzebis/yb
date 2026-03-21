@@ -30,6 +30,14 @@ jobs:
         with:
           tool: zola@0.19.2
 
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Generate man pages
+        run: |
+          mkdir -p man/man1
+          cargo run --release -p yb --bin yb-gen-man -- man/man1
+
       - name: Copy docs into website/content
         run: |
           set -e
@@ -62,6 +70,21 @@ jobs:
             [ "$name" = "0000-template" ] && continue
             inject "$f" "website/content/specs/${name}.md"
           done
+
+          # man pages → website/content/man-pages.md
+          # Render each .1 page to HTML with mandoc, embed in a Zola page.
+          {
+            printf '+++\ntitle = "Man Pages"\n+++\n\n'
+            printf '# yb man pages\n\n'
+            for page in yb yb-format yb-store yb-fetch yb-list yb-remove yb-fsck yb-list-readers yb-select; do
+              f="man/man1/${page}.1"
+              [ -f "$f" ] || continue
+              printf '<h2 id="%s"><code>%s(1)</code></h2>\n\n' "$page" "$page"
+              printf '<div class="manpage">\n'
+              mandoc -T html -O fragment "$f" 2>/dev/null || cat "$f"
+              printf '</div>\n\n'
+            done
+          } > website/content/man-pages.md
 
       - name: Build
         run: cd website && zola build

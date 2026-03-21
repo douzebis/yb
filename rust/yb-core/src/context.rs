@@ -23,6 +23,20 @@ pub struct OutputOptions {
     pub quiet: bool,
 }
 
+/// Callback type for interactive device selection.
+pub type DevicePicker =
+    Box<dyn Fn(&Arc<dyn PivBackend>, &[DeviceInfo]) -> Result<Option<DeviceInfo>>>;
+
+/// Plain configuration options for `Context::new`.
+#[derive(Debug, Default)]
+pub struct ContextOptions {
+    pub serial: Option<u32>,
+    pub reader: Option<String>,
+    pub management_key: Option<String>,
+    pub pin: Option<String>,
+    pub allow_defaults: bool,
+}
+
 pub struct Context {
     pub reader: String,
     pub serial: u32,
@@ -48,16 +62,10 @@ impl Context {
     /// a PIN is needed and `pin` is still `None` — typically a TTY prompt
     /// closure supplied by the application layer.
     pub fn new(
-        serial: Option<u32>,
-        reader: Option<String>,
-        management_key: Option<String>,
-        pin: Option<String>,
+        opts: ContextOptions,
         pin_fn: Box<dyn Fn() -> Result<Option<String>>>,
-        device_picker: Box<
-            dyn Fn(&Arc<dyn PivBackend>, &[DeviceInfo]) -> Result<Option<DeviceInfo>>,
-        >,
+        device_picker: DevicePicker,
         output: OutputOptions,
-        allow_defaults: bool,
     ) -> Result<Self> {
         let debug = output.debug;
         let quiet = output.quiet;
@@ -74,8 +82,8 @@ impl Context {
 
         let (device, selected_reader) = select_device(
             &devices,
-            serial.as_ref(),
-            reader.as_deref(),
+            opts.serial.as_ref(),
+            opts.reader.as_deref(),
             &piv,
             &*device_picker,
         )?;
@@ -85,7 +93,7 @@ impl Context {
             auxiliaries::check_for_default_credentials(
                 &selected_reader,
                 piv.as_ref(),
-                allow_defaults,
+                opts.allow_defaults,
             )?;
         }
 
@@ -98,8 +106,8 @@ impl Context {
         Ok(Self {
             reader: selected_reader,
             serial: device.serial,
-            management_key,
-            pin: RefCell::new(pin.map(Zeroizing::new)),
+            management_key: opts.management_key,
+            pin: RefCell::new(opts.pin.map(Zeroizing::new)),
             pin_fn,
             piv,
             debug,
@@ -212,6 +220,7 @@ fn reject_pin_derived(pin_derived: bool) -> Result<()> {
 // Device selection
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::type_complexity)]
 fn select_device(
     devices: &[DeviceInfo],
     serial: Option<&u32>,

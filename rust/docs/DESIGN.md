@@ -295,15 +295,30 @@ Offset  Size  Field
 0x0A     1    NEXT_CHUNK     index of next chunk; self-ref = last
 ─── present only in head chunks (chunk_pos == 0) ─────────────────
 0x0B     4    BLOB_MTIME     u32 LE, Unix timestamp (seconds)
-0x0F     3    BLOB_SIZE      u24 LE, encrypted payload size
+0x0F     3    BLOB_SIZE      u24 LE, encrypted+compressed payload size
 0x12     1    BLOB_KEY_SLOT  PIV slot used for encryption; 0 = none
-0x13     3    BLOB_PLAIN_SIZE u24 LE, plaintext size
+0x13     3    BLOB_PLAIN_SIZE u24 LE; bit 23 = compression flag (C);
+                              bits 0–22 = uncompressed plaintext size
 0x16     1    BLOB_NAME_LEN  byte length of name
 0x17   var    BLOB_NAME      UTF-8, no null/slash, max 255 bytes
 0x17+N  rem   PAYLOAD        blob data (head portion)
 ─── continuation chunks: payload starts at 0x0B ──────────────────
 0x0B   rem    PAYLOAD        blob data (continuation portion)
 ```
+
+**Compression flag (bit 23 of BLOB_PLAIN_SIZE):**
+When C = 1 the payload (after decryption, if encrypted) is compressed.
+The algorithm is identified by magic bytes at the start of the
+decompressed payload:
+
+| Magic bytes (hex) | Algorithm |
+|---|---|
+| `59 42 72 01` ("YBr\\x01") | brotli level 11 — prefix added by `yb` |
+| `FD 37 7A 58 5A 00` | xz / LZMA2 standard container |
+
+On store: both brotli and xz are attempted; the smaller result is kept
+if it is strictly smaller than the plaintext, otherwise C = 0.
+On fetch: magic bytes dispatch to the correct decompressor.
 
 ### Chunk chain
 
@@ -407,15 +422,22 @@ head chunk).  For unencrypted blobs, `blob_key_slot == 0`.
 
 ### `store_blob`
 
+Signature: `store_blob(store, piv, name, payload, encryption, compression, management_key, pin)`
+
 1. `validate_name`: not empty, ≤ 255 bytes, no `\0` or `/`.
-2. Encrypt payload if requested (calls `hybrid_encrypt`).
-3. Calculate chunk count from payload size vs. head/continuation capacities.
-4. Check `store.free_count() >= chunks_needed`; return `false` if full.
-5. Delete any existing blob with the same name (reset its chunk chain).
-6. Allocate chunk indices via `alloc_free`, mark age=1 as placeholder.
-7. Fill head object (all metadata fields + first portion of payload).
-8. Fill continuation objects (payload only, no blob metadata).
-9. `store.sync(piv, management_key, pin)`.
+2. Reject if `payload.len() > 0x7FFFFF` (would overflow the 23-bit plain-size field).
+3. If `Compression::Auto`: compress with brotli level 11 and xz preset 9 (via `lzma-rust2`);
+   keep the smaller result if it is strictly smaller than the plaintext (set C = 1),
+   else use plaintext (C = 0).  `Compression::None` skips this step.
+4. Encrypt candidate payload if requested (calls `hybrid_encrypt`).
+5. Reject if `stored.len() > 0x7FFFFF` (would overflow the 23-bit blob-size field).
+6. Calculate chunk count from stored size vs. head/continuation capacities.
+7. Check `store.free_count() >= chunks_needed`; return `false` if full.
+8. Delete any existing blob with the same name (reset its chunk chain).
+9. Allocate chunk indices via `alloc_free`, mark age=1 as placeholder.
+10. Fill head object (all metadata fields including `is_compressed` → C-bit + first portion of payload).
+11. Fill continuation objects (payload only, no blob metadata).
+12. `store.sync(piv, management_key, pin)`.
 
 **Head payload capacity:** `object_size - (0x17 + name_len_bytes)`
 
@@ -426,7 +448,10 @@ head chunk).  For unencrypted blobs, `blob_key_slot == 0`.
 1. `store.find_head(name)` → head object or `None`.
 2. Walk `store.chunk_chain(head.index)` collecting all payloads.
 3. Truncate to `head.blob_size` (trailing zeros in last object).
-4. If encrypted, call `hybrid_decrypt`; if unencrypted return raw bytes.
+4. If encrypted, call `hybrid_decrypt`; if unencrypted use raw bytes.
+5. If `head.is_compressed` (C-bit), inspect magic bytes and decompress:
+   `YBr\x01` prefix → strip prefix + brotli decompress;
+   `\xFD7zXZ\x00` → xz decompress; anything else → error.
 
 PIN is required for encrypted blobs; `fetch_blob` errors out if
 `pin.is_none()` and the blob is encrypted.
@@ -485,12 +510,13 @@ fixture's reader list when set).
 | Command | Alias | Key args | What it does |
 |---|---|---|---|
 | `format` | — | `--object-count` (def 20), `--object-size` (def 2048), `--key-slot` (def `0x82`), `-g/--generate`, `--subject` | Provisions PIV objects; optionally generates ECDH key |
-| `store` | — | `[files…]` (stdin if empty), `-n/--name`, `-e/--encrypted`, `-u/--unencrypted` | Stores one or more blobs |
-| `fetch` | — | `[patterns…]` (glob), `-p/--stdout`, `-o/--output`, `-O/--output-dir` | Retrieves blob(s) |
+| `store` | — | `[files…]` (stdin if empty), `-n/--name`, `-e/--encrypted`, `-u/--unencrypted`, `--no-compress` | Stores one or more blobs (compressed by default) |
+| `fetch` | — | `[patterns…]` (glob), `-p/--stdout`, `-o/--output`, `-O/--output-dir` | Retrieves blob(s); decompresses transparently |
 | `list` | `ls` | `[pattern]` (glob), `-l/--long`, `-1`, `-t/--sort-time`, `-r/--reverse` | Lists blobs |
 | `remove` | `rm` | `[patterns…]` (glob), `-f/--ignore-missing` | Removes blobs |
 | `fsck` | — | `-v/--verbose` | Store integrity check |
 | `list-readers` | — | — | Lists PC/SC readers |
+| `select` | — | `--reader` | Interactive YubiKey picker; prints serial (or reader name) to stdout |
 
 ### `format`
 
@@ -508,8 +534,12 @@ fixture's reader list when set).
 - `-n/--name` with a single file: overrides the stored name.
 - `-e/--encrypted` / `-u/--unencrypted`: explicit encryption choice
   (default: encrypted if an ECDH key slot is present).
+- `--no-compress`: skip compression (pass `Compression::None` to `store_blob`).
+  Useful for data that is already compressed (JPEG, ZIP, tar.xz, …).
+  Default is `Compression::Auto`.
 - Performs basename-collision check and all-or-nothing capacity check
-  before writing anything.
+  before writing anything.  The capacity check uses the uncompressed size
+  as a conservative upper bound (compression can only reduce chunk count).
 
 ### `fetch`
 
@@ -545,6 +575,20 @@ fixture's reader list when set).
 - `-v/--verbose`: full per-object table before the summary.
 - Anomalies detected: duplicate blob names, orphaned continuation chunks.
 - Exits 1 if any anomaly is found.
+
+### `select`
+
+Interactive YubiKey picker; does not construct a `Context`.
+
+- One device: print serial (or reader name with `--reader`) and exit 0.
+- Multiple devices + TTY: render a single-line carousel on stderr.
+  Left/right arrows (or `h`/`l`) cycle devices; the highlighted device
+  flashes its LED at 3 Hz via `PivBackend::start_flash`.  Enter confirms;
+  Esc / `q` / Ctrl-C cancels.
+- Multiple devices + no TTY: error out.
+- No device: error out.
+
+Intended use: `yb --serial "$(yb select)" store myfile`.
 
 ---
 

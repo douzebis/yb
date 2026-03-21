@@ -8,7 +8,9 @@ use clap_complete::CompleteEnv;
 use std::sync::Arc;
 use yb::cli;
 use yb::{Cli, Commands};
-use yb_core::{context::OutputOptions, Context, DeviceInfo, PivBackend};
+use yb_core::{
+    context::OutputOptions, Context, ContextOptions, DeviceInfo, DevicePicker, PivBackend,
+};
 
 fn main() {
     CompleteEnv::with_factory(Cli::command)
@@ -46,17 +48,19 @@ fn run(cli: Cli) -> Result<()> {
     let device_picker = make_device_picker();
 
     let ctx = Context::new(
-        cli.serial,
-        cli.reader,
-        management_key,
-        pin,
+        ContextOptions {
+            serial: cli.serial,
+            reader: cli.reader,
+            management_key,
+            pin,
+            allow_defaults: cli.allow_defaults,
+        },
         pin_fn,
         device_picker,
         OutputOptions {
             debug: cli.debug,
             quiet: cli.quiet,
         },
-        cli.allow_defaults,
     )?;
 
     let result = match cli.command {
@@ -82,9 +86,7 @@ fn run(cli: Cli) -> Result<()> {
 // Device picker
 // ---------------------------------------------------------------------------
 
-type PickerFn = Box<dyn Fn(&Arc<dyn PivBackend>, &[DeviceInfo]) -> Result<Option<DeviceInfo>>>;
-
-fn make_device_picker() -> PickerFn {
+fn make_device_picker() -> DevicePicker {
     if atty::is(atty::Stream::Stderr) {
         Box::new(|piv: &Arc<dyn PivBackend>, devices: &[DeviceInfo]| {
             cli::picker::run_picker(piv, devices)

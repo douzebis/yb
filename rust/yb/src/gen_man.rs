@@ -16,6 +16,7 @@
 //!   <output-dir>/yb-remove.1
 //!   <output-dir>/yb-fsck.1
 //!   <output-dir>/yb-list-readers.1
+//!   <output-dir>/yb-select.1
 
 use std::path::PathBuf;
 
@@ -122,6 +123,7 @@ P-256 private key that never leaves the YubiKey hardware.
 \fByb\-remove\fR(1),
 \fByb\-fsck\fR(1),
 \fByb\-list\-readers\fR(1),
+\fByb\-select\fR(1),
 \fBykman\fR(1)"#,
         ),
 
@@ -170,6 +172,13 @@ Write one or more binary blobs to the YubiKey.
 Each blob is identified by a short name (at most 32 bytes).  When a
 blob with the same name already exists it is replaced atomically.
 .PP
+Blobs are compressed before storage by default.  \fByb\fR tries both
+brotli (level 11) and xz (preset 9) and keeps the smaller result;
+if neither algorithm reduces the size the blob is stored uncompressed.
+Pass \fB\-\-no\-compress\fR to skip compression entirely (useful for
+already-compressed data such as JPEG, ZIP, or existing brotli/xz
+archives).
+.PP
 Blobs are encrypted by default using AES-256-GCM with a key derived via
 ECDH from the public key stored in the configured PIV slot.  Pass
 \fB\-\-unencrypted\fR to skip encryption (use with care)."#,
@@ -207,6 +216,13 @@ Store unencrypted (plain-text blob):
 .RS
 .nf
 yb store \-\-unencrypted config.toml
+.fi
+.RE
+.PP
+Store without compression (e.g. already-compressed binary):
+.RS
+.nf
+yb store \-\-no\-compress archive.tar.xz
 .fi
 .RE
 .SH SEE ALSO
@@ -380,6 +396,52 @@ yb fsck \-\-verbose
 \fByb\fR(1), \fByb\-format\fR(1), \fByb\-remove\fR(1)"#,
         ),
 
+        "yb-select" => (
+            r#".PP
+Interactively select one YubiKey from all connected devices and print
+its serial number to stdout.  Intended for use in scripts:
+.PP
+.RS
+.nf
+yb \-\-serial "$(yb select)" store myfile
+.fi
+.RE
+.PP
+If only one YubiKey is connected the serial is printed immediately
+without displaying the picker.  If multiple YubiKeys are connected and
+the process is attached to a TTY, a single-line carousel is rendered on
+stderr: use \fB\(la\fR/\fB\(ra\fR (or \fBj\fR/\fBk\fR) to cycle through devices
+and \fBEnter\fR to confirm.  The currently highlighted device flashes its
+LED to help identify it physically.  Press \fBEsc\fR or \fBCtrl\-C\fR to cancel.
+.PP
+If multiple YubiKeys are connected but stderr is not a TTY, the command
+exits with an error."#,
+            r#".SH EXAMPLES
+.PP
+Print the serial number of the selected YubiKey:
+.RS
+.nf
+yb select
+.fi
+.RE
+.PP
+Print the PC/SC reader name instead:
+.RS
+.nf
+yb select \-\-reader
+.fi
+.RE
+.PP
+Use in a script to target a specific YubiKey:
+.RS
+.nf
+yb \-\-serial "$(yb select)" store secret.key
+.fi
+.RE
+.SH SEE ALSO
+\fByb\fR(1), \fByb\-list\-readers\fR(1)"#,
+        ),
+
         "yb-list-readers" => (
             r#".PP
 Print all PC/SC reader names visible to the pcscd daemon, one per line.
@@ -408,7 +470,7 @@ yb \-r "Yubico YubiKey OTP+FIDO+CCID 00 00" list
     }
 }
 
-fn write_man(dir: &PathBuf, cmd: &clap::Command, page_name: &str) {
+fn write_man(dir: &std::path::Path, cmd: &clap::Command, page_name: &str) {
     let man = clap_mangen::Man::new(cmd.clone())
         .title(page_name.to_uppercase())
         .section("1")

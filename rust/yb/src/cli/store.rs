@@ -8,7 +8,7 @@ use clap_complete::engine::{ArgValueCompleter, PathCompleter};
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::PathBuf;
-use yb_core::orchestrator::{self, Encryption};
+use yb_core::orchestrator::{self, Compression, Encryption, StoreOptions};
 use yb_core::store::{constants::MAX_NAME_LEN, Store};
 use yb_core::Context;
 
@@ -35,10 +35,18 @@ pub struct StoreArgs {
     /// Store the blob unencrypted.
     #[arg(short = 'u', long = "unencrypted")]
     pub unencrypted: bool,
+
+    /// Skip compression (useful for already-compressed data).
+    #[arg(long = "no-compress")]
+    pub no_compress: bool,
 }
 
 pub fn run(ctx: &Context, args: &StoreArgs) -> Result<()> {
     let encrypted = !args.unencrypted;
+    let compression = match args.no_compress {
+        true => Compression::None,
+        false => Compression::Auto,
+    };
 
     // Build list of (blob_name, payload) pairs.
     let entries: Vec<(String, Vec<u8>)> = if args.files.is_empty() {
@@ -139,16 +147,18 @@ pub fn run(ctx: &Context, args: &StoreArgs) -> Result<()> {
 
     let pin = ctx.require_pin()?;
     for (name, payload) in &entries {
-        let encryption = match peer_pk.as_ref() {
-            Some(pk) => Encryption::Encrypted(pk),
-            None => Encryption::None,
-        };
         let ok = orchestrator::store_blob(
             &mut store,
             ctx.piv.as_ref(),
             name,
             payload,
-            encryption,
+            StoreOptions {
+                encryption: match peer_pk.as_ref() {
+                    Some(pk) => Encryption::Encrypted(pk),
+                    None => Encryption::None,
+                },
+                compression,
+            },
             mgmt_key.as_deref(),
             pin.as_deref(),
         )?;

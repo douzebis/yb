@@ -7,9 +7,9 @@
 //! # Quick start
 //!
 //! ```no_run
-//! use yb_core::{store::Store, orchestrator, Context, OutputOptions};
+//! use yb_core::{store::Store, orchestrator, Context, ContextOptions, OutputOptions};
 //!
-//! let ctx = Context::new(None, None, None, Some("123456".into()), Box::new(|| Ok(None)), Box::new(|_, _| Ok(None)), OutputOptions::default(), false)?;
+//! let ctx = Context::new(ContextOptions { pin: Some("123456".into()), ..Default::default() }, Box::new(|| Ok(None)), Box::new(|_, _| Ok(None)), OutputOptions::default())?;
 //! let store = Store::from_device(&ctx.reader, ctx.piv.as_ref())?;
 //! for blob in orchestrator::list_blobs(&store) {
 //!     println!("{} ({} bytes)", blob.name, blob.plain_size);
@@ -42,9 +42,10 @@ pub mod orchestrator;
 pub mod piv;
 pub mod store;
 
-pub use context::{Context, OutputOptions};
+pub use context::{Context, ContextOptions, DevicePicker, OutputOptions};
 pub use orchestrator::{
-    chunks_needed, fetch_blob, list_blobs, remove_blob, store_blob, BlobInfo, Encryption,
+    chunks_needed, fetch_blob, list_blobs, remove_blob, store_blob, BlobInfo, Compression,
+    Encryption, StoreOptions,
 };
 pub use piv::hardware::HardwarePiv;
 pub use piv::{DeviceInfo, FlashHandle, PivBackend, VirtualPiv};

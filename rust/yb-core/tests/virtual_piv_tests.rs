@@ -11,7 +11,9 @@
 use std::path::Path;
 use std::sync::Arc;
 use yb_core::{
-    orchestrator::{fetch_blob, list_blobs, remove_blob, store_blob, Encryption},
+    orchestrator::{
+        fetch_blob, list_blobs, remove_blob, store_blob, Compression, Encryption, StoreOptions,
+    },
     piv::PivBackend,
     store::Store,
     test_utils::{OpType, OperationGenerator, ToyFilesystem},
@@ -243,7 +245,10 @@ fn test_store_list_fetch_plain() {
         &piv,
         "greeting",
         payload,
-        Encryption::None,
+        StoreOptions {
+            encryption: Encryption::None,
+            compression: Compression::None,
+        },
         Some(mgmt),
         None,
     )
@@ -280,7 +285,10 @@ fn test_store_fetch_encrypted() {
         &piv,
         "secret",
         payload,
-        Encryption::Encrypted(&pub_key),
+        StoreOptions {
+            encryption: Encryption::Encrypted(&pub_key),
+            compression: Compression::None,
+        },
         Some(mgmt),
         None,
     )
@@ -308,7 +316,10 @@ fn test_remove_blob() {
         &piv,
         "to-delete",
         b"bye",
-        Encryption::None,
+        StoreOptions {
+            encryption: Encryption::None,
+            compression: Compression::None,
+        },
         Some(mgmt),
         None,
     )
@@ -318,6 +329,130 @@ fn test_remove_blob() {
     let removed = remove_blob(&mut store, &piv, "to-delete", Some(mgmt), None).unwrap();
     assert!(removed);
     assert_eq!(list_blobs(&store).len(), 0);
+}
+
+// ---------------------------------------------------------------------------
+// Compression path coverage
+// ---------------------------------------------------------------------------
+
+/// Brotli wins: short English prose — brotli's static dictionary compresses
+/// this far better than xz.
+/// Fixture: "The quick brown fox jumps over the lazy dog. " × 5 (225 bytes).
+/// Measured: brotli=62  xz=116  → brotli wins.
+#[test]
+fn test_compression_brotli_path() {
+    let piv = with_key_piv();
+    let mgmt = "010203040506070801020304050607080102030405060708";
+    let mut store = formatted_store(&piv);
+    let reader = piv.reader_name();
+
+    let payload: Vec<u8> = b"The quick brown fox jumps over the lazy dog. "
+        .repeat(5)
+        .to_vec();
+
+    store_blob(
+        &mut store,
+        &piv,
+        "brotli-blob",
+        &payload,
+        StoreOptions {
+            encryption: Encryption::None,
+            compression: Compression::Auto,
+        },
+        Some(mgmt),
+        None,
+    )
+    .unwrap();
+
+    let head = store.find_head("brotli-blob").unwrap();
+    assert!(head.is_compressed, "expected C-bit set");
+    // Stored bytes must start with brotli magic YBr\x01.
+    assert!(
+        head.payload.starts_with(b"\x59\x42\x72\x01"),
+        "expected brotli magic"
+    );
+
+    let fetched = fetch_blob(&store, &piv, &reader, "brotli-blob", None, false)
+        .unwrap()
+        .unwrap();
+    assert_eq!(fetched, payload);
+}
+
+/// XZ wins: sequential little-endian u32 integers — LZMA2's delta model
+/// compresses structured binary better than brotli.
+/// Fixture: 0u32..250 as LE bytes (1000 bytes).
+/// Measured: brotli=327  xz=292  → xz wins.
+#[test]
+fn test_compression_xz_path() {
+    let piv = with_key_piv();
+    let mgmt = "010203040506070801020304050607080102030405060708";
+    let mut store = formatted_store(&piv);
+    let reader = piv.reader_name();
+
+    let payload: Vec<u8> = (0u32..250).flat_map(|i| i.to_le_bytes()).collect();
+
+    store_blob(
+        &mut store,
+        &piv,
+        "xz-blob",
+        &payload,
+        StoreOptions {
+            encryption: Encryption::None,
+            compression: Compression::Auto,
+        },
+        Some(mgmt),
+        None,
+    )
+    .unwrap();
+
+    let head = store.find_head("xz-blob").unwrap();
+    assert!(head.is_compressed, "expected C-bit set");
+    // Stored bytes must start with xz magic \xfd7zXZ\x00.
+    assert!(
+        head.payload.starts_with(b"\xfd7zXZ\x00"),
+        "expected xz magic"
+    );
+
+    let fetched = fetch_blob(&store, &piv, &reader, "xz-blob", None, false)
+        .unwrap()
+        .unwrap();
+    assert_eq!(fetched, payload);
+}
+
+/// Raw path (C=0): short string — both compressors expand it due to header
+/// overhead, so the payload is stored uncompressed.
+/// Fixture: b"hello world" (11 bytes).
+/// Measured: brotli=19  xz=68  → neither helps, raw wins.
+#[test]
+fn test_compression_raw_path() {
+    let piv = with_key_piv();
+    let mgmt = "010203040506070801020304050607080102030405060708";
+    let mut store = formatted_store(&piv);
+    let reader = piv.reader_name();
+
+    let payload = b"hello world";
+
+    store_blob(
+        &mut store,
+        &piv,
+        "raw-blob",
+        payload,
+        StoreOptions {
+            encryption: Encryption::None,
+            compression: Compression::Auto,
+        },
+        Some(mgmt),
+        None,
+    )
+    .unwrap();
+
+    let head = store.find_head("raw-blob").unwrap();
+    assert!(!head.is_compressed, "expected C-bit clear");
+
+    let fetched = fetch_blob(&store, &piv, &reader, "raw-blob", None, false)
+        .unwrap()
+        .unwrap();
+    assert_eq!(fetched, payload);
 }
 
 /// Context::with_backend works with VirtualPiv.
@@ -478,7 +613,10 @@ fn test_random_operations() {
                     &piv,
                     &op.name,
                     &op.payload,
-                    Encryption::None,
+                    StoreOptions {
+                        encryption: Encryption::None,
+                        compression: Compression::None,
+                    },
                     Some(mgmt),
                     None,
                 )
