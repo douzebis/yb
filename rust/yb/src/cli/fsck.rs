@@ -83,7 +83,7 @@ pub fn run(ctx: &Context, args: &FsckArgs) -> Result<()> {
     Ok(())
 }
 
-fn detect_anomalies(store: &Store) -> Vec<String> {
+pub fn detect_anomalies(store: &Store) -> Vec<String> {
     use std::collections::{HashMap, HashSet};
 
     let mut warnings = Vec::new();

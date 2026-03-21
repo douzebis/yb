@@ -221,8 +221,123 @@ fn hkdf_expand(ikm: &[u8]) -> Result<[u8; 32]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::piv::PivBackend;
     use p256::ecdh::EphemeralSecret;
     use rand::rngs::OsRng;
+
+    // Mock whose ecdh() returns a pre-set shared secret (T3 + CBC test).
+    struct MockPiv {
+        shared_secret: Vec<u8>,
+    }
+    impl PivBackend for MockPiv {
+        fn list_readers(&self) -> Result<Vec<String>> {
+            Ok(vec!["mock".to_owned()])
+        }
+        fn list_devices(&self) -> Result<Vec<crate::piv::DeviceInfo>> {
+            Ok(vec![crate::piv::DeviceInfo {
+                serial: 1,
+                version: "5.4.3".to_owned(),
+                reader: "mock".to_owned(),
+            }])
+        }
+        fn read_object(&self, _r: &str, _id: u32) -> Result<Vec<u8>> {
+            bail!("mock")
+        }
+        fn write_object(
+            &self,
+            _r: &str,
+            _id: u32,
+            _d: &[u8],
+            _mk: Option<&str>,
+            _pin: Option<&str>,
+        ) -> Result<()> {
+            bail!("mock")
+        }
+        fn verify_pin(&self, _r: &str, _pin: &str) -> Result<()> {
+            bail!("mock")
+        }
+        fn send_apdu(&self, _r: &str, _apdu: &[u8]) -> Result<Vec<u8>> {
+            bail!("mock")
+        }
+        fn ecdh(&self, _r: &str, _slot: u8, _peer: &[u8], _pin: Option<&str>) -> Result<Vec<u8>> {
+            Ok(self.shared_secret.clone())
+        }
+        fn read_certificate(&self, _r: &str, _slot: u8) -> Result<Vec<u8>> {
+            bail!("mock")
+        }
+        fn generate_key(&self, _r: &str, _slot: u8, _mk: Option<&str>) -> Result<Vec<u8>> {
+            bail!("mock")
+        }
+        fn generate_certificate(
+            &self,
+            _r: &str,
+            _slot: u8,
+            _subj: &str,
+            _mk: Option<&str>,
+            _pin: Option<&str>,
+        ) -> Result<Vec<u8>> {
+            bail!("mock")
+        }
+        fn read_printed_object_with_pin(&self, _r: &str, _pin: &str) -> Result<Vec<u8>> {
+            bail!("mock")
+        }
+    }
+
+    // Mock whose ecdh() always errors (T4/T5 which never reach ECDH).
+    struct EcdhErrMock;
+    impl PivBackend for EcdhErrMock {
+        fn list_readers(&self) -> Result<Vec<String>> {
+            Ok(vec!["r".to_owned()])
+        }
+        fn list_devices(&self) -> Result<Vec<crate::piv::DeviceInfo>> {
+            Ok(vec![crate::piv::DeviceInfo {
+                serial: 1,
+                version: "5.4.3".to_owned(),
+                reader: "r".to_owned(),
+            }])
+        }
+        fn read_object(&self, _r: &str, _id: u32) -> Result<Vec<u8>> {
+            bail!("mock")
+        }
+        fn write_object(
+            &self,
+            _r: &str,
+            _id: u32,
+            _d: &[u8],
+            _mk: Option<&str>,
+            _pin: Option<&str>,
+        ) -> Result<()> {
+            bail!("mock")
+        }
+        fn verify_pin(&self, _r: &str, _pin: &str) -> Result<()> {
+            bail!("mock")
+        }
+        fn send_apdu(&self, _r: &str, _apdu: &[u8]) -> Result<Vec<u8>> {
+            bail!("mock")
+        }
+        fn ecdh(&self, _r: &str, _slot: u8, _peer: &[u8], _pin: Option<&str>) -> Result<Vec<u8>> {
+            bail!("ecdh not available in mock")
+        }
+        fn read_certificate(&self, _r: &str, _slot: u8) -> Result<Vec<u8>> {
+            bail!("mock")
+        }
+        fn generate_key(&self, _r: &str, _slot: u8, _mk: Option<&str>) -> Result<Vec<u8>> {
+            bail!("mock")
+        }
+        fn generate_certificate(
+            &self,
+            _r: &str,
+            _slot: u8,
+            _subj: &str,
+            _mk: Option<&str>,
+            _pin: Option<&str>,
+        ) -> Result<Vec<u8>> {
+            bail!("mock")
+        }
+        fn read_printed_object_with_pin(&self, _r: &str, _pin: &str) -> Result<Vec<u8>> {
+            bail!("mock")
+        }
+    }
 
     /// Round-trip encrypt/decrypt using the GCM format (no YubiKey).
     #[test]
@@ -294,71 +409,7 @@ mod tests {
         legacy_blob.extend_from_slice(&iv);
         legacy_blob.extend_from_slice(&ciphertext);
 
-        // Mock backend whose ecdh() returns the precomputed shared secret.
-        use crate::piv::PivBackend;
-        struct MockPiv {
-            shared_secret: Vec<u8>,
-        }
-        impl PivBackend for MockPiv {
-            fn list_readers(&self) -> Result<Vec<String>> {
-                Ok(vec!["mock".to_owned()])
-            }
-            fn list_devices(&self) -> Result<Vec<crate::piv::DeviceInfo>> {
-                Ok(vec![crate::piv::DeviceInfo {
-                    serial: 1,
-                    version: "5.4.3".to_owned(),
-                    reader: "mock".to_owned(),
-                }])
-            }
-            fn read_object(&self, _r: &str, _id: u32) -> Result<Vec<u8>> {
-                bail!("mock")
-            }
-            fn write_object(
-                &self,
-                _r: &str,
-                _id: u32,
-                _d: &[u8],
-                _mk: Option<&str>,
-                _pin: Option<&str>,
-            ) -> Result<()> {
-                bail!("mock")
-            }
-            fn verify_pin(&self, _r: &str, _pin: &str) -> Result<()> {
-                bail!("mock")
-            }
-            fn send_apdu(&self, _r: &str, _apdu: &[u8]) -> Result<Vec<u8>> {
-                bail!("mock")
-            }
-            fn ecdh(
-                &self,
-                _r: &str,
-                _slot: u8,
-                _peer: &[u8],
-                _pin: Option<&str>,
-            ) -> Result<Vec<u8>> {
-                Ok(self.shared_secret.clone())
-            }
-            fn read_certificate(&self, _r: &str, _slot: u8) -> Result<Vec<u8>> {
-                bail!("mock")
-            }
-            fn generate_key(&self, _r: &str, _slot: u8, _mk: Option<&str>) -> Result<Vec<u8>> {
-                bail!("mock")
-            }
-            fn generate_certificate(
-                &self,
-                _r: &str,
-                _slot: u8,
-                _subj: &str,
-                _mk: Option<&str>,
-                _pin: Option<&str>,
-            ) -> Result<Vec<u8>> {
-                bail!("mock")
-            }
-            fn read_printed_object_with_pin(&self, _r: &str, _pin: &str) -> Result<Vec<u8>> {
-                bail!("mock")
-            }
-        }
-
+        // Use the module-level MockPiv.
         let mock = MockPiv {
             shared_secret: shared.raw_secret_bytes().to_vec(),
         };
@@ -370,5 +421,69 @@ mod tests {
         // hybrid_decrypt should also route to CBC via the 0x04 first byte.
         let decrypted2 = hybrid_decrypt(&mock, "mock", 0x9e, &legacy_blob, None, false).unwrap();
         assert_eq!(decrypted2, plaintext);
+    }
+
+    /// T3: flipping a byte in the GCM ciphertext fails authentication.
+    #[test]
+    fn tampered_ciphertext_fails_authentication() {
+        let plaintext = b"sensitive data";
+
+        let device_secret = EphemeralSecret::random(&mut OsRng);
+        let device_pubkey = p256::PublicKey::from(&device_secret);
+
+        let mut encrypted = hybrid_encrypt(plaintext, &device_pubkey).unwrap();
+
+        // Flip a byte in the ciphertext region (after the GCM header).
+        let tamper_offset = GCM_HEADER_LEN + 1;
+        encrypted[tamper_offset] ^= 0xFF;
+
+        // Build a mock that returns the correct shared secret so only the GCM
+        // authentication check can fail.
+        let epk_bytes = &encrypted[VERSION_LEN..VERSION_LEN + EPHEMERAL_PK_LEN];
+        let epk = p256::PublicKey::from_sec1_bytes(epk_bytes).unwrap();
+        let shared = device_secret.diffie_hellman(&epk);
+        let secret_bytes = shared.raw_secret_bytes().to_vec();
+
+        let mock = MockPiv {
+            shared_secret: secret_bytes,
+        };
+
+        let result = hybrid_decrypt(&mock, "mock", 0x82, &encrypted, None, false);
+        assert!(
+            result.is_err(),
+            "tampered ciphertext must fail authentication"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("authentication failed") || msg.contains("tampered"),
+            "error message should mention authentication: {msg}"
+        );
+    }
+
+    /// T4: unknown version byte (not 0x02 or 0x04) is rejected immediately.
+    #[test]
+    fn unknown_version_byte_rejected() {
+        let mock = EcdhErrMock;
+        let blob = vec![0x03u8, 0x00, 0x00]; // unknown version
+        let result = hybrid_decrypt(&mock, "r", 0x82, &blob, None, false);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("unknown version byte"),
+            "expected 'unknown version byte' in error: {msg}"
+        );
+    }
+
+    /// T5: empty input is rejected before any field access.
+    #[test]
+    fn empty_blob_rejected() {
+        let mock = EcdhErrMock;
+        let result = hybrid_decrypt(&mock, "r", 0x82, &[], None, false);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("empty"),
+            "expected 'empty' in error message: {msg}"
+        );
     }
 }

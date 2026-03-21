@@ -468,6 +468,165 @@ fn fsck_clean_store() {
     fsck_run(&ctx, &args).unwrap();
 }
 
+/// T9a: fsck verbose — run returns Ok on a store that has objects.
+#[test]
+fn fsck_verbose() {
+    let piv = with_key_piv();
+    let ctx = make_ctx(piv);
+    format_store(&ctx);
+    store_plain(&ctx, "verbose-blob", b"data");
+
+    let args = FsckArgs { verbose: true };
+    fsck_run(&ctx, &args).unwrap();
+}
+
+/// T9b: detect_anomalies finds duplicate-named heads.
+#[test]
+fn fsck_detect_duplicate_name_anomaly() {
+    use yb::cli::fsck::detect_anomalies;
+    use yb_core::store::{constants::YBLOB_MAGIC, Store};
+
+    let piv = with_key_piv();
+    let ctx = make_ctx(piv);
+    // Format a 4-object store.
+    Store::format(
+        &ctx.reader,
+        ctx.piv.as_ref(),
+        4,
+        512,
+        0x82,
+        Some(MGMT),
+        None,
+    )
+    .unwrap();
+
+    // Write two head objects with the same name by manipulating the store
+    // in-memory and syncing.
+    let mut store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+
+    // Manually set both objects 0 and 1 as heads named "dup".
+    use yb_core::store::Object;
+    store.objects[0] = Object {
+        index: 0,
+        object_size: 512,
+        yblob_magic: YBLOB_MAGIC,
+        object_count: 4,
+        store_key_slot: 0x82,
+        age: 1,
+        chunk_pos: 0,
+        next_chunk: 0,
+        blob_mtime: 0,
+        blob_size: 1,
+        blob_key_slot: 0,
+        blob_plain_size: 1,
+        blob_name: "dup".to_owned(),
+        payload: vec![0],
+        dirty: true,
+    };
+    store.objects[1] = Object {
+        index: 1,
+        object_size: 512,
+        yblob_magic: YBLOB_MAGIC,
+        object_count: 4,
+        store_key_slot: 0x82,
+        age: 2,
+        chunk_pos: 0,
+        next_chunk: 1,
+        blob_mtime: 0,
+        blob_size: 1,
+        blob_key_slot: 0,
+        blob_plain_size: 1,
+        blob_name: "dup".to_owned(),
+        payload: vec![0],
+        dirty: true,
+    };
+    store.sync(ctx.piv.as_ref(), Some(MGMT), None).unwrap();
+
+    // Re-read and run detect_anomalies.
+    let store2 = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+    let warnings = detect_anomalies(&store2);
+    assert!(
+        !warnings.is_empty(),
+        "duplicate blob name should produce a warning"
+    );
+    assert!(
+        warnings.iter().any(|w| w.contains("duplicate")),
+        "warning should mention 'duplicate': {warnings:?}"
+    );
+}
+
+/// T9c: detect_anomalies finds an orphaned continuation chunk.
+#[test]
+fn fsck_detect_orphaned_continuation() {
+    use yb::cli::fsck::detect_anomalies;
+    use yb_core::store::{constants::YBLOB_MAGIC, Store};
+
+    let piv = with_key_piv();
+    let ctx = make_ctx(piv);
+    Store::format(
+        &ctx.reader,
+        ctx.piv.as_ref(),
+        4,
+        512,
+        0x82,
+        Some(MGMT),
+        None,
+    )
+    .unwrap();
+
+    let mut store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+
+    // Object 0: valid single-chunk head "solo".
+    use yb_core::store::Object;
+    store.objects[0] = Object {
+        index: 0,
+        object_size: 512,
+        yblob_magic: YBLOB_MAGIC,
+        object_count: 4,
+        store_key_slot: 0x82,
+        age: 1,
+        chunk_pos: 0,
+        next_chunk: 0,
+        blob_mtime: 0,
+        blob_size: 1,
+        blob_key_slot: 0,
+        blob_plain_size: 1,
+        blob_name: "solo".to_owned(),
+        payload: vec![0],
+        dirty: true,
+    };
+    // Object 1: orphaned continuation (no head points to it).
+    store.objects[1] = Object {
+        index: 1,
+        object_size: 512,
+        yblob_magic: YBLOB_MAGIC,
+        object_count: 4,
+        store_key_slot: 0x82,
+        age: 2,
+        chunk_pos: 1,
+        next_chunk: 1,
+        blob_mtime: 0,
+        blob_size: 0,
+        blob_key_slot: 0,
+        blob_plain_size: 0,
+        blob_name: String::new(),
+        payload: vec![0],
+        dirty: true,
+    };
+    store.sync(ctx.piv.as_ref(), Some(MGMT), None).unwrap();
+
+    let store2 = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+    let warnings = detect_anomalies(&store2);
+    assert!(
+        !warnings.is_empty(),
+        "orphaned chunk should produce a warning"
+    );
+    assert!(
+        warnings.iter().any(|w| w.contains("orphaned")),
+        "warning should mention 'orphaned': {warnings:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // format (--key-slot parsing)
 // ---------------------------------------------------------------------------
