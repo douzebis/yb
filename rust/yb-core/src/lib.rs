@@ -9,13 +9,13 @@
 //! ```no_run
 //! use yb_core::{store::Store, orchestrator, Context};
 //!
-//! let ctx = Context::new(None, None, None, Some("123456".into()), false, false, false)?;
+//! let ctx = Context::new(None, None, None, Some("123456".into()), Box::new(|| Ok(None)), false, false, false)?;
 //! let store = Store::from_device(&ctx.reader, ctx.piv.as_ref())?;
 //! for blob in orchestrator::list_blobs(&store) {
 //!     println!("{} ({} bytes)", blob.name, blob.plain_size);
 //! }
 //! let data = orchestrator::fetch_blob(
-//!     &store, ctx.piv.as_ref(), &ctx.reader, "my-secret", ctx.pin.as_deref(), false,
+//!     &store, ctx.piv.as_ref(), &ctx.reader, "my-secret", ctx.require_pin()?.as_deref(), false,
 //! )?;
 //! # Ok::<(), anyhow::Error>(())
 //! ```

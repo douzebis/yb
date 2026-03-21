@@ -104,8 +104,9 @@ fn run(cli: Cli) -> Result<()> {
         eprintln!("Warning: --key is deprecated; use YB_MANAGEMENT_KEY");
     }
 
-    // S1: Resolve PIN — priority: --pin-stdin > --pin (deprecated) > YB_PIN > TTY prompt > None.
-    let pin = resolve_pin(cli.pin_stdin, cli.pin_deprecated)?;
+    // S1: Resolve PIN from non-interactive sources; build a TTY-prompt closure
+    // for the lazy fallback used by Context::require_pin().
+    let (pin, pin_fn) = make_pin_resolver(cli.pin_stdin, cli.pin_deprecated)?;
 
     // S1: Resolve management key — priority: --key (deprecated) > YB_MANAGEMENT_KEY > None.
     let management_key = resolve_management_key(cli.key_deprecated);
@@ -115,6 +116,7 @@ fn run(cli: Cli) -> Result<()> {
         cli.reader,
         management_key,
         pin,
+        pin_fn,
         cli.debug,
         cli.quiet,
         cli.allow_defaults,
@@ -144,8 +146,19 @@ fn run(cli: Cli) -> Result<()> {
 // PIN / key resolution (S1)
 // ---------------------------------------------------------------------------
 
-/// Resolve the PIN from explicit flags, env var, or TTY prompt.
-fn resolve_pin(pin_stdin: bool, pin_deprecated: Option<String>) -> Result<Option<String>> {
+/// Resolve the PIN from non-interactive sources and build a lazy fallback.
+///
+/// Returns `(pin, pin_fn)`:
+/// - `pin`: PIN already known from `--pin-stdin`, `--pin` (deprecated), or
+///   `YB_PIN`.  `None` when none of those were set.
+/// - `pin_fn`: closure passed to `Context::new`; called by `require_pin()` the
+///   first time a PIN is actually needed and `pin` is still `None`.  When a
+///   PIN was already resolved above, this is a no-op closure.  Otherwise it
+///   prompts via a TTY (stderr) and returns whatever the user types.
+fn make_pin_resolver(
+    pin_stdin: bool,
+    pin_deprecated: Option<String>,
+) -> Result<(Option<String>, Box<dyn Fn() -> Result<Option<String>>>)> {
     // 1. --pin-stdin: read one line from stdin.
     if pin_stdin {
         use std::io::BufRead as _;
@@ -155,32 +168,35 @@ fn resolve_pin(pin_stdin: bool, pin_deprecated: Option<String>) -> Result<Option
             .trim_end_matches('\n')
             .trim_end_matches('\r')
             .to_owned();
-        return Ok(Some(pin));
+        return Ok((Some(pin), Box::new(|| Ok(None))));
     }
 
     // 2. --pin (deprecated).
     if let Some(p) = pin_deprecated {
-        return Ok(Some(p));
+        return Ok((Some(p), Box::new(|| Ok(None))));
     }
 
     // 3. YB_PIN environment variable.
     if let Ok(v) = std::env::var("YB_PIN") {
         if !v.is_empty() {
-            return Ok(Some(v));
+            return Ok((Some(v), Box::new(|| Ok(None))));
         }
     }
 
-    // 4. Interactive TTY prompt (only when stderr is a TTY).
-    if atty::is(atty::Stream::Stderr) {
-        match rpassword::prompt_password("Enter YubiKey PIN: ") {
-            Ok(pin) if !pin.is_empty() => return Ok(Some(pin)),
-            Ok(_) => {}  // empty → treat as not provided
-            Err(_) => {} // no TTY available or other error → skip
-        }
-    }
-
-    // 5. No PIN available — operations that need it will fail with a clear message.
-    Ok(None)
+    // 4. No PIN available yet — defer to a TTY prompt on first use.
+    Ok((
+        None,
+        Box::new(|| {
+            if atty::is(atty::Stream::Stderr) {
+                match rpassword::prompt_password("Enter YubiKey PIN: ") {
+                    Ok(p) if !p.is_empty() => return Ok(Some(p)),
+                    Ok(_) => {}  // empty → treat as not provided
+                    Err(_) => {} // no TTY or other error → skip
+                }
+            }
+            Ok(None)
+        }),
+    ))
 }
 
 /// Resolve the management key from deprecated flag or env var.

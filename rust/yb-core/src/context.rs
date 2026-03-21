@@ -12,13 +12,19 @@ use crate::{
 };
 use anyhow::{bail, Context as _, Result};
 use p256::PublicKey;
+use std::cell::RefCell;
 use std::sync::Arc;
 
 pub struct Context {
     pub reader: String,
     pub serial: u32,
     pub management_key: Option<String>,
-    pub pin: Option<String>,
+    /// Cached PIN.  Starts as `None` when no non-interactive source provided
+    /// one; populated on the first call to `require_pin()`.
+    pin: RefCell<Option<String>>,
+    /// Called by `require_pin()` when `pin` is still `None`.
+    /// Returns `Some(pin)` if it can supply one, `None` otherwise.
+    pin_fn: Box<dyn Fn() -> Result<Option<String>>>,
     pub piv: Arc<dyn PivBackend>,
     pub debug: bool,
     pub quiet: bool,
@@ -27,11 +33,17 @@ pub struct Context {
 
 impl Context {
     /// Build a Context from global CLI options, selecting the device.
+    ///
+    /// `pin` is the PIN resolved from non-interactive sources (env var, stdin,
+    /// deprecated flag).  `pin_fn` is called by `require_pin()` the first time
+    /// a PIN is needed and `pin` is still `None` — typically a TTY prompt
+    /// closure supplied by the application layer.
     pub fn new(
         serial: Option<u32>,
         reader: Option<String>,
         management_key: Option<String>,
         pin: Option<String>,
+        pin_fn: Box<dyn Fn() -> Result<Option<String>>>,
         debug: bool,
         quiet: bool,
         allow_defaults: bool,
@@ -69,7 +81,8 @@ impl Context {
             reader: selected_reader,
             serial: device.serial,
             management_key,
-            pin,
+            pin: RefCell::new(pin),
+            pin_fn,
             piv,
             debug,
             quiet,
@@ -110,12 +123,30 @@ impl Context {
             reader,
             serial: device.serial,
             management_key: None,
-            pin,
+            pin: RefCell::new(pin),
+            pin_fn: Box::new(|| Ok(None)),
             piv: backend,
             debug,
             quiet: false,
             pin_protected,
         })
+    }
+
+    /// Return the PIN, invoking `pin_fn` on first call if not yet resolved.
+    ///
+    /// Resolution order:
+    /// 1. Already-cached PIN (from a non-interactive source or a prior call).
+    /// 2. `pin_fn()` — supplied by the caller of `Context::new`; typically a
+    ///    TTY prompt closure in the application layer.  The result is cached so
+    ///    subsequent calls never invoke `pin_fn` again.
+    /// 3. `None` — the caller must decide whether to error.
+    pub fn require_pin(&self) -> Result<Option<String>> {
+        if self.pin.borrow().is_some() {
+            return Ok(self.pin.borrow().clone());
+        }
+        let resolved = (self.pin_fn)()?;
+        *self.pin.borrow_mut() = resolved.clone();
+        Ok(resolved)
     }
 
     /// Return the management key to use for write operations.
@@ -126,13 +157,13 @@ impl Context {
             return Ok(Some(k.clone()));
         }
         if self.pin_protected {
-            let pin = self.pin.as_deref().ok_or_else(|| {
+            let pin = self.require_pin()?.ok_or_else(|| {
                 anyhow::anyhow!("PIN required to retrieve PIN-protected management key")
             })?;
             let key = auxiliaries::get_pin_protected_management_key(
                 &self.reader,
                 self.piv.as_ref(),
-                pin,
+                &pin,
             )?;
             return Ok(Some(key));
         }

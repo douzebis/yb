@@ -39,8 +39,8 @@ pub struct FormatArgs {
 }
 
 pub fn run(ctx: &Context, args: &FormatArgs) -> Result<()> {
-    if !(1..=16).contains(&args.object_count) {
-        bail!("object-count must be 1–16");
+    if !(1..=20).contains(&args.object_count) {
+        bail!("object-count must be 1–20");
     }
     if !(OBJECT_MIN_SIZE..=OBJECT_MAX_SIZE).contains(&args.object_size) {
         bail!("object-size must be {OBJECT_MIN_SIZE}–{OBJECT_MAX_SIZE}");
@@ -63,6 +63,7 @@ pub fn run(ctx: &Context, args: &FormatArgs) -> Result<()> {
 
     let mgmt_key = ctx.management_key_for_write()?;
 
+    let pin = ctx.require_pin()?;
     Store::format(
         &ctx.reader,
         ctx.piv.as_ref(),
@@ -70,7 +71,7 @@ pub fn run(ctx: &Context, args: &FormatArgs) -> Result<()> {
         args.object_size,
         slot,
         mgmt_key.as_deref(),
-        ctx.pin.as_deref(),
+        pin.as_deref(),
     )?;
 
     if !ctx.quiet {
@@ -93,12 +94,13 @@ fn parse_slot(s: &str) -> anyhow::Result<u8> {
 
 fn generate_certificate(ctx: &Context, slot: u8, subject: &str) -> Result<()> {
     let mgmt_key = ctx.management_key_for_write()?;
+    let pin = ctx.require_pin()?;
     ctx.piv.generate_certificate(
         &ctx.reader,
         slot,
         subject,
         mgmt_key.as_deref(),
-        ctx.pin.as_deref(),
+        pin.as_deref(),
     )?;
     Ok(())
 }
