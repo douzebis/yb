@@ -2,10 +2,9 @@
 //
 // SPDX-License-Identifier: MIT
 
-mod cli;
-
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use yb::cli;
 use yb_core::Context;
 
 // ---------------------------------------------------------------------------
