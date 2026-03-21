@@ -37,7 +37,7 @@ jobs:
       - name: Generate man pages
         run: |
           mkdir -p man/man1
-          cargo run --release -p yb --bin yb-gen-man -- man/man1
+          cargo run --release -p yb --bin yb-gen-man --manifest-path rust/Cargo.toml -- man/man1
 
       - name: Copy docs into website/content
         run: |
