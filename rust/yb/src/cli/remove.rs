@@ -4,13 +4,16 @@
 
 use anyhow::{bail, Result};
 use clap::Args;
+use clap_complete::engine::ArgValueCompleter;
 use globset::GlobBuilder;
 use yb_core::{list_blobs, store::Store, Context};
+
+use crate::complete::complete_blob_names;
 
 #[derive(Args, Debug)]
 pub struct RemoveArgs {
     /// Blob name(s) or glob patterns to remove.
-    #[arg(required = true)]
+    #[arg(required = true, add = ArgValueCompleter::new(complete_blob_names))]
     pub patterns: Vec<String>,
 
     /// Silently skip patterns that match nothing; exit 0 even if nothing was removed.

@@ -3,8 +3,10 @@
 // SPDX-License-Identifier: MIT
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::{engine::ArgValueCompleter, CompleteEnv};
 use yb::cli;
+use yb::complete::complete_serials;
 use yb_core::Context;
 
 // ---------------------------------------------------------------------------
@@ -15,7 +17,7 @@ use yb_core::Context;
 #[command(name = "yb", about = "Secure blob storage on a YubiKey", version)]
 struct Cli {
     /// YubiKey serial number.
-    #[arg(short = 's', long = "serial")]
+    #[arg(short = 's', long = "serial", add = ArgValueCompleter::new(complete_serials))]
     serial: Option<u32>,
 
     /// PC/SC reader name (legacy; prefer --serial).
@@ -75,6 +77,10 @@ enum Commands {
 // ---------------------------------------------------------------------------
 
 fn main() {
+    CompleteEnv::with_factory(Cli::command)
+        .var("YB_COMPLETE")
+        .complete();
+
     let cli = Cli::parse();
 
     let result = run(cli);
