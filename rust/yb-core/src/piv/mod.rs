@@ -6,6 +6,8 @@
 
 pub mod emulated;
 pub mod hardware;
+pub(crate) mod session;
+pub(crate) mod tlv;
 pub mod virtual_piv;
 
 pub use virtual_piv::VirtualPiv;
