@@ -35,5 +35,5 @@ Documentation for the `yb` command-line tool.
 | [0011](specs/0011-refactor-and-test-coverage) | Refactoring Opportunities and Test Coverage Gaps | implemented |
 | [0012](specs/0012-transparent-compression) | Transparent Compression | implemented |
 | [0013](specs/0013-interactive-device-selection) | Interactive Device Selection with LED Feedback | implemented |
-| [0014](specs/0014-operation-generator) | ToyFilesystem and OperationGenerator Test Primitives | draft |
-| [0015](specs/0015-self-test-command) | `yb self-test` Command | draft |
+| [0014](specs/0014-operation-generator) | ToyFilesystem and OperationGenerator Test Primitives | implemented |
+| [0015](specs/0015-self-test-command) | `yb self-test` Command | implemented |

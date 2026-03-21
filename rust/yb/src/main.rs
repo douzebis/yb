@@ -64,6 +64,10 @@ fn run(cli: Cli) -> Result<()> {
         },
     )?;
 
+    // `mut` is only used by the `SelfTest` arm (feature-gated); suppress the
+    // lint when that feature is absent.
+    #[allow(unused_mut)]
+    let mut ctx = ctx;
     let result = match cli.command {
         Commands::Format(args) => cli::format::run(&ctx, &args),
         Commands::Store(args) => cli::store::run(&ctx, &args),
@@ -73,7 +77,7 @@ fn run(cli: Cli) -> Result<()> {
         Commands::Fsck(args) => cli::fsck::run(&ctx, &args),
         Commands::ListReaders(_) | Commands::Select(_) => unreachable!("handled above"),
         #[cfg(feature = "self-test")]
-        Commands::SelfTest(args) => cli::self_test::run(&ctx, &args),
+        Commands::SelfTest(args) => cli::self_test::run(&mut ctx, &args),
     };
 
     if let Ok(path) = std::env::var("YB_FIXTURE") {
