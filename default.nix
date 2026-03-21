@@ -124,6 +124,9 @@ let
           -e 's|words\[COMP_CWORD\]="$2"|local _cur="''${COMP_LINE:0:''${COMP_POINT}}"; _cur="''${_cur##* }"; words[COMP_CWORD]="''${_cur}"|') \
         --zsh  <(YB_COMPLETE=zsh  $out/bin/yb) \
         --fish <(YB_COMPLETE=fish $out/bin/yb)
+
+      # Generate and install man pages.
+      $out/bin/yb-gen-man $out/share/man/man1
     '';
 
     meta = with pkgs.lib; {
@@ -161,6 +164,7 @@ let
       reuse
       gh
       usbutils
+      mandoc
     ];
 
     shellHook = ''
@@ -179,6 +183,13 @@ let
 
       # Build the Rust binary if not already built
       cargo build --release --manifest-path rust/Cargo.toml
+
+      # Generate man pages into man/man1/ (gitignored) using the release binary.
+      ./rust/target/release/yb-gen-man man/man1
+
+      # Expose generated man pages.
+      export MANPATH="$PWD/man:''${MANPATH:-}"
+      makewhatis "$PWD/man" 2>/dev/null || true
 
       # Activate shell completions for the current session (bash only).
       # Re-runs on each nix-shell entry so completions stay in sync with
