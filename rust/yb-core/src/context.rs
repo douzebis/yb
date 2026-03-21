@@ -14,6 +14,7 @@ use anyhow::{bail, Context as _, Result};
 use p256::PublicKey;
 use std::cell::RefCell;
 use std::sync::Arc;
+use zeroize::Zeroizing;
 
 /// Output-control flags passed to `Context::new`.
 #[derive(Debug, Clone, Copy, Default)]
@@ -28,7 +29,8 @@ pub struct Context {
     pub management_key: Option<String>,
     /// Cached PIN.  Starts as `None` when no non-interactive source provided
     /// one; populated on the first call to `require_pin()`.
-    pin: RefCell<Option<String>>,
+    /// Wrapped in `Zeroizing` so the bytes are overwritten on drop.
+    pin: RefCell<Option<Zeroizing<String>>>,
     /// Called by `require_pin()` when `pin` is still `None`.
     /// Returns `Some(pin)` if it can supply one, `None` otherwise.
     pin_fn: Box<dyn Fn() -> Result<Option<String>>>,
@@ -89,7 +91,7 @@ impl Context {
             reader: selected_reader,
             serial: device.serial,
             management_key,
-            pin: RefCell::new(pin),
+            pin: RefCell::new(pin.map(Zeroizing::new)),
             pin_fn,
             piv,
             debug,
@@ -131,7 +133,7 @@ impl Context {
             reader,
             serial: device.serial,
             management_key: None,
-            pin: RefCell::new(pin),
+            pin: RefCell::new(pin.map(Zeroizing::new)),
             pin_fn: Box::new(|| Ok(None)),
             piv: backend,
             debug,
@@ -150,10 +152,10 @@ impl Context {
     /// 3. `None` — the caller must decide whether to error.
     pub fn require_pin(&self) -> Result<Option<String>> {
         if self.pin.borrow().is_some() {
-            return Ok(self.pin.borrow().clone());
+            return Ok(self.pin.borrow().as_ref().map(|z| z.as_str().to_owned()));
         }
         let resolved = (self.pin_fn)()?;
-        *self.pin.borrow_mut() = resolved.clone();
+        *self.pin.borrow_mut() = resolved.as_deref().map(|s| Zeroizing::new(s.to_owned()));
         Ok(resolved)
     }
 

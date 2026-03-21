@@ -215,6 +215,13 @@ yb resolves the PIN in this order:
 
 Commands that never need a PIN (`list`, `fsck`) never prompt.
 
+> **Security note:** `YB_PIN` and `--pin-stdin` are convenient for
+> scripting but carry OS-level exposure risks.  `YB_PIN` is visible to
+> child processes and, on some systems, to other users via `/proc`.
+> `--pin-stdin` is the safer non-interactive option — pipe the PIN on
+> stdin rather than setting an environment variable when possible.
+> The default interactive TTY prompt (`rpassword`) has no such exposure.
+
 ---
 
 ## Cryptographic Model

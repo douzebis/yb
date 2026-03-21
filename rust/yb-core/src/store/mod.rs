@@ -64,14 +64,14 @@ impl Object {
             );
         }
 
-        let magic = read_u32_le(data, MAGIC_O);
+        let magic = read_u32_le(data, MAGIC_O)?;
         if magic != YBLOB_MAGIC {
             bail!("object {index}: bad magic 0x{magic:08x} (expected 0x{YBLOB_MAGIC:08x})");
         }
 
         let object_count = data[OBJECT_COUNT_O];
         let store_key_slot = data[STORE_KEY_SLOT_O];
-        let age = read_u24_le(data, OBJECT_AGE_O);
+        let age = read_u24_le(data, OBJECT_AGE_O)?;
 
         if age == 0 {
             // Empty slot — remaining fields are zero / don't-care.
@@ -99,10 +99,10 @@ impl Object {
 
         let (blob_mtime, blob_size, blob_key_slot, blob_plain_size, blob_name, payload_start) =
             if chunk_pos == 0 {
-                let mtime = read_u32_le(data, BLOB_MTIME_O);
-                let bsize = read_u24_le(data, BLOB_SIZE_O);
+                let mtime = read_u32_le(data, BLOB_MTIME_O)?;
+                let bsize = read_u24_le(data, BLOB_SIZE_O)?;
                 let bkslot = data[BLOB_KEY_SLOT_O];
-                let plain = read_u24_le(data, BLOB_PLAIN_SIZE_O);
+                let plain = read_u24_le(data, BLOB_PLAIN_SIZE_O)?;
                 let nlen = data[BLOB_NAME_LEN_O] as usize;
                 if BLOB_NAME_O + nlen > object_size {
                     bail!("object {index}: name length {nlen} overflows object");
@@ -466,13 +466,27 @@ impl Store {
 // Little-endian helpers
 // ---------------------------------------------------------------------------
 
-pub(crate) fn read_u32_le(buf: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes(buf[offset..offset + 4].try_into().unwrap())
+pub(crate) fn read_u32_le(buf: &[u8], offset: usize) -> Result<u32> {
+    let end = offset + 4;
+    if end > buf.len() {
+        bail!(
+            "read_u32_le: offset {offset}+4 out of bounds (buf len {})",
+            buf.len()
+        );
+    }
+    Ok(u32::from_le_bytes(buf[offset..end].try_into().unwrap()))
 }
 
-pub(crate) fn read_u24_le(buf: &[u8], offset: usize) -> u32 {
-    let b = &buf[offset..offset + 3];
-    b[0] as u32 | ((b[1] as u32) << 8) | ((b[2] as u32) << 16)
+pub(crate) fn read_u24_le(buf: &[u8], offset: usize) -> Result<u32> {
+    let end = offset + 3;
+    if end > buf.len() {
+        bail!(
+            "read_u24_le: offset {offset}+3 out of bounds (buf len {})",
+            buf.len()
+        );
+    }
+    let b = &buf[offset..end];
+    Ok(b[0] as u32 | ((b[1] as u32) << 8) | ((b[2] as u32) << 16))
 }
 
 pub(crate) fn write_u32_le(buf: &mut [u8], offset: usize, v: u32) {

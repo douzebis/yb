@@ -10,6 +10,7 @@ use super::tlv::{
 use crate::auxiliaries::{extract_pin_protected_key, parse_tlv_flat, OBJ_PRINTED};
 use anyhow::{bail, Context, Result};
 use std::ffi::CString;
+use subtle::ConstantTimeEq;
 
 // ---------------------------------------------------------------------------
 // PcscSession — card handle + helpers for a single PC/SC connection
@@ -225,7 +226,7 @@ impl PcscSession {
             .ok_or_else(|| anyhow::anyhow!("MGMT AUTH step2: missing tag 82"))?;
 
         let challenge_enc = crypto_ecb(&key_bytes, &challenge, block_size, EcbDir::Encrypt)?;
-        if challenge_enc != *challenge_resp {
+        if challenge_enc.ct_eq(challenge_resp).unwrap_u8() == 0 {
             bail!("management key authentication failed: card response mismatch");
         }
 
