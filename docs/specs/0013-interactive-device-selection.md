@@ -72,23 +72,58 @@ The `SELECT PIV` APDU already exists in the Rust codebase as `SELECT_PIV`
 
 #### 1.2 PC/SC connection model for flashing
 
-A `PcscSession` holds an open `pcsc::Card` handle.  Opening a fresh
-`PcscSession` for every flash would incur round-trip overhead for context
-establishment and `SCardConnect`.  Instead, a **dedicated flash connection**
-is kept open for the lifetime of each flash loop:
+The LED lights when the card processes an APDU and goes **dark when power is
+removed** (`SCardDisconnect(SCARD_UNPOWER_CARD)`).  Key findings from
+empirical testing with the `flash_test` tool (see `attic/mock_up/flash_test.rs`):
+
+- Keeping a connection open and repeatedly sending SELECT_PIV leaves the LED
+  **continuously lit** — it does not blink between transmits.
+- `SCardDisconnect(SCARD_RESET_CARD)` (the `Drop` default) does **not** turn
+  the LED off reliably.
+- `SCardDisconnect(SCARD_UNPOWER_CARD)` turns the LED off immediately.
+- `SCardConnect` causes a brief power-up transient flash.  This is absorbed
+  into the on-period by connecting at the end of the off-period (before
+  SELECT_PIV), not at the start.
+
+The flash loop therefore uses this cycle:
 
 ```
-while flashing:
-    SCardConnect (Shared mode) → card handle
-    loop every 200 ms:
-        transmit SELECT_PIV on card handle   ← flash
-    SCardDisconnect
+initial SCardConnect
+loop:
+    SELECT_PIV                          ← LED on
+    sleep on_ms
+    SCardDisconnect(SCARD_UNPOWER_CARD) ← LED off
+    sleep off_ms
+    SCardConnect                        ← power-up transient (→ next on-period)
 ```
 
 The connection uses `pcsc::ShareMode::Shared` so it coexists with the main
-connection that the rest of `yb` will open later.
+connection that the rest of `yb` opens later.
 
-#### 1.3 Threading model
+#### 1.3 Known residual noise
+
+A faint off/on dip (~50 ms) occurs approximately every 3 seconds regardless
+of the host-side timing or connection strategy.  This was confirmed by:
+
+- Holding a connection open with no transmits → **no dip** (LED off throughout).
+- Sending repeated SELECT_PIV on a persistent connection → dip every ~3 s.
+- The dip cannot be hidden by adjusting on/off timing because it is visible
+  whether the LED is on or off at the time it occurs.
+
+Conclusion: the dip is **intrinsic YubiKey 5 firmware behavior** — a periodic
+internal housekeeping operation that briefly interrupts LED state.  It cannot
+be suppressed from the host side and is accepted as an unavoidable artifact.
+
+#### 1.4 Chosen timings
+
+| Context | on_ms | off_ms | Rate |
+|---------|-------|--------|------|
+| Device selection (`picker`) | 400 | 400 | 1.25 Hz |
+| Destructive confirmation (`self-test`) | 200 | 400 | ~1.7 Hz |
+
+The faster rate for destructive operations conveys urgency.
+
+#### 1.5 Threading model
 
 One background Rust thread per actively flashing device.  The thread owns a
 `std::sync::atomic::AtomicBool` stop flag (shared via `Arc`).  The main thread
@@ -104,13 +139,13 @@ Stop sequence:
 
 The thread is spawned with `std::thread::Builder::new().name("yb-flash-N")`.
 
-#### 1.4 Error handling in the flash thread
+#### 1.6 Error handling in the flash thread
 
 The flash thread must **never panic** the process.  Any `transmit` error
 (device removed, USB glitch) silently breaks the loop.  The main thread does
 not observe flash errors; worst case the LED simply stops blinking.
 
-#### 1.5 `PivBackend::flash` method
+#### 1.7 `PivBackend::start_flash` method
 
 A new optional method is added to the `PivBackend` trait:
 
