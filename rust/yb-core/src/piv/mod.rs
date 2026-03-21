@@ -76,4 +76,13 @@ pub trait PivBackend: Send + Sync {
         management_key: Option<&str>,
         pin: Option<&str>,
     ) -> Result<Vec<u8>>;
+
+    /// Persist state to a fixture file (no-op for hardware backends).
+    ///
+    /// `VirtualPiv` overrides this to serialize its in-memory state back to
+    /// disk, allowing subprocess tests to share state across process
+    /// boundaries via the `YB_FIXTURE` env var.
+    fn save_fixture(&self, _path: &std::path::Path) -> Result<()> {
+        Ok(())
+    }
 }
