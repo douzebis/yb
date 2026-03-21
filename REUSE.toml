@@ -10,7 +10,6 @@ SPDX-PackageDownloadLocation = "https://github.com/douzebis/yb"
 [[annotations]]
 path = ["rust/Cargo.lock", "rust/yb-core/tests/fixtures/**.yaml", "yb.1", ".gitignore", "LICENSE"]
 precedence = "aggregate"
-SPDX-FileCopyrightText = "2025 - 2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)"
 SPDX-License-Identifier = "MIT"
 
 [[annotations]]
