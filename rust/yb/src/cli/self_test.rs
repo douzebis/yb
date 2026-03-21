@@ -161,7 +161,7 @@ enum StoreResult {
 // Public entry point
 // ---------------------------------------------------------------------------
 
-pub fn run(ctx: &Context, args: &SelfTestArgs) -> Result<()> {
+pub fn run(ctx: &mut Context, args: &SelfTestArgs) -> Result<()> {
     let serial = ctx.serial;
     let version = {
         let devices = ctx.piv.list_devices()?;
@@ -175,19 +175,26 @@ pub fn run(ctx: &Context, args: &SelfTestArgs) -> Result<()> {
     // Confirmation prompt — flash the LED at 5 Hz while waiting for 'yes'.
     print_warning(serial, &version, args.count);
 
-    let _flash = if !args.no_flash {
+    let _flash: Option<Box<dyn yb_core::piv::FlashHandle>> = if !args.no_flash {
         eprintln!("YubiKey LED is flashing to help you identify the correct device.");
         eprintln!();
-        // 5 Hz (200 ms) — conveys urgency during destructive operation prompt.
-        let reader = ctx
-            .piv
-            .list_devices()?
-            .into_iter()
-            .find(|d| d.serial == serial)
-            .map(|d| d.reader)
-            .unwrap_or_default();
-        Some(ctx.piv.start_flash(&reader, 200, 400))
+        // Reuse the flash handle from the picker if available so the LED
+        // continues without a gap; otherwise start a fresh flash.
+        let existing = ctx.take_flash();
+        if existing.is_some() {
+            existing
+        } else {
+            let reader = ctx
+                .piv
+                .list_devices()?
+                .into_iter()
+                .find(|d| d.serial == serial)
+                .map(|d| d.reader)
+                .unwrap_or_default();
+            Some(ctx.piv.start_flash(&reader, 100, 100))
+        }
     } else {
+        drop(ctx.take_flash()); // stop picker flash if --no-flash
         None
     };
 
@@ -221,7 +228,7 @@ pub fn run(ctx: &Context, args: &SelfTestArgs) -> Result<()> {
             .args(["--serial", &serial.to_string()])
             .env("YB_PIN", &pin)
             .env("YB_MANAGEMENT_KEY", &mgmt_key)
-            .args(["format", "--generate", "--object-count", "16"])
+            .args(["format", "--generate", "--object-count", "20"])
             .status()?;
         if !status.success() {
             bail!("format failed");

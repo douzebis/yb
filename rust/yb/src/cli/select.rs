@@ -36,7 +36,7 @@ pub fn run(args: &SelectArgs) -> Result<()> {
                 bail!("multiple YubiKeys found and no TTY — use --serial to select one");
             }
             match super::picker::run_picker(&piv, &devices)? {
-                Some(d) => d,
+                Some((d, _flash)) => d,
                 None => bail!("device selection cancelled"),
             }
         }
