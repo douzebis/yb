@@ -310,4 +310,77 @@ mod tests {
         assert!(validate_name("🔑").is_ok());
         assert!(validate_name("tab\there").is_ok());
     }
+
+    /// T6: validate_name length boundaries — empty, max-length, and one over max.
+    #[test]
+    fn validate_name_length_boundaries() {
+        assert!(validate_name("").is_err(), "empty name must be rejected");
+        assert!(
+            validate_name(&"x".repeat(MAX_NAME_LEN)).is_ok(),
+            "max-length name must be accepted"
+        );
+        assert!(
+            validate_name(&"x".repeat(MAX_NAME_LEN + 1)).is_err(),
+            "name one byte over max must be rejected"
+        );
+    }
+
+    /// T14: store_blob returns false (not an error) when the store is full,
+    /// and leaves the store unchanged.
+    #[test]
+    fn store_blob_returns_false_when_full() {
+        use crate::piv::VirtualPiv;
+        use crate::store::Store;
+        use std::path::Path;
+
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/with_key.yaml");
+        let piv = VirtualPiv::from_fixture(&fixture).unwrap();
+        let mgmt = "010203040506070801020304050607080102030405060708";
+        let reader = piv.reader_name();
+
+        // Format a tiny store: 2 objects × 512 bytes.
+        let mut store = Store::format(&reader, &piv, 2, 512, 0x82, Some(mgmt), None).unwrap();
+
+        // Fill both slots with single-chunk blobs.
+        let ok1 = store_blob(
+            &mut store,
+            &piv,
+            "a",
+            b"aaa",
+            Encryption::None,
+            Some(mgmt),
+            None,
+        )
+        .unwrap();
+        assert!(ok1, "first blob should fit");
+        let ok2 = store_blob(
+            &mut store,
+            &piv,
+            "b",
+            b"bbb",
+            Encryption::None,
+            Some(mgmt),
+            None,
+        )
+        .unwrap();
+        assert!(ok2, "second blob should fit");
+
+        assert_eq!(store.free_count(), 0, "store should be full");
+
+        // Attempt to store a third blob — must return false, not an error.
+        let result = store_blob(
+            &mut store,
+            &piv,
+            "c",
+            b"ccc",
+            Encryption::None,
+            Some(mgmt),
+            None,
+        );
+        assert!(result.is_ok(), "full store must not error");
+        assert_eq!(result.unwrap(), false, "full store must return false");
+
+        // Store must be unchanged — still two blobs.
+        assert_eq!(list_blobs(&store).len(), 2, "store must be unmodified");
+    }
 }

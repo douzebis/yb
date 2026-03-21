@@ -328,6 +328,122 @@ fn test_context_with_backend() {
     assert_eq!(ctx.require_pin().unwrap().as_deref(), Some("123456"));
 }
 
+/// T8: from_device with a mismatched object count — first object claims N
+/// objects but fewer are actually present → error instead of panic.
+#[test]
+fn test_from_device_missing_objects() {
+    use yb_core::store::constants::OBJECT_ID_ZERO;
+
+    let piv = default_piv();
+    let mgmt = "010203040506070801020304050607080102030405060708";
+    let reader = piv.reader_name();
+
+    // Write only object 0, which claims object_count = 5.  Objects 1–4 are
+    // never written, so reading them returns an error.
+    use yb_core::store::constants::{MAGIC_O, OBJECT_COUNT_O, STORE_KEY_SLOT_O};
+    let mut buf = vec![0u8; 512];
+    // Magic (little-endian)
+    let magic: u32 = 0xF2ED5F0B;
+    buf[MAGIC_O..MAGIC_O + 4].copy_from_slice(&magic.to_le_bytes());
+    buf[OBJECT_COUNT_O] = 5; // claims 5 objects
+    buf[STORE_KEY_SLOT_O] = 0x82;
+    // age = 0 (empty slot)
+    piv.write_object(&reader, OBJECT_ID_ZERO, &buf, Some(mgmt), None)
+        .unwrap();
+
+    use yb_core::store::Store;
+    let result = Store::from_device(&reader, &piv);
+    assert!(
+        result.is_err(),
+        "from_device must error when claimed objects are missing"
+    );
+}
+
+/// T11: Context::with_backend errors when the backend exposes multiple devices.
+#[test]
+fn test_with_backend_multiple_devices_errors() {
+    use std::sync::Arc;
+    use yb_core::piv::{DeviceInfo, PivBackend};
+
+    struct TwoDevicePiv;
+    impl PivBackend for TwoDevicePiv {
+        fn list_readers(&self) -> anyhow::Result<Vec<String>> {
+            Ok(vec!["r0".to_owned(), "r1".to_owned()])
+        }
+        fn list_devices(&self) -> anyhow::Result<Vec<DeviceInfo>> {
+            Ok(vec![
+                DeviceInfo {
+                    serial: 1,
+                    version: "5.4.3".to_owned(),
+                    reader: "r0".to_owned(),
+                },
+                DeviceInfo {
+                    serial: 2,
+                    version: "5.4.3".to_owned(),
+                    reader: "r1".to_owned(),
+                },
+            ])
+        }
+        fn read_object(&self, _r: &str, _id: u32) -> anyhow::Result<Vec<u8>> {
+            anyhow::bail!("stub")
+        }
+        fn write_object(
+            &self,
+            _r: &str,
+            _id: u32,
+            _d: &[u8],
+            _mk: Option<&str>,
+            _pin: Option<&str>,
+        ) -> anyhow::Result<()> {
+            anyhow::bail!("stub")
+        }
+        fn verify_pin(&self, _r: &str, _pin: &str) -> anyhow::Result<()> {
+            anyhow::bail!("stub")
+        }
+        fn send_apdu(&self, _r: &str, _apdu: &[u8]) -> anyhow::Result<Vec<u8>> {
+            anyhow::bail!("stub")
+        }
+        fn ecdh(
+            &self,
+            _r: &str,
+            _slot: u8,
+            _peer: &[u8],
+            _pin: Option<&str>,
+        ) -> anyhow::Result<Vec<u8>> {
+            anyhow::bail!("stub")
+        }
+        fn read_certificate(&self, _r: &str, _slot: u8) -> anyhow::Result<Vec<u8>> {
+            anyhow::bail!("stub")
+        }
+        fn generate_key(&self, _r: &str, _slot: u8, _mk: Option<&str>) -> anyhow::Result<Vec<u8>> {
+            anyhow::bail!("stub")
+        }
+        fn generate_certificate(
+            &self,
+            _r: &str,
+            _slot: u8,
+            _subj: &str,
+            _mk: Option<&str>,
+            _pin: Option<&str>,
+        ) -> anyhow::Result<Vec<u8>> {
+            anyhow::bail!("stub")
+        }
+        fn read_printed_object_with_pin(&self, _r: &str, _pin: &str) -> anyhow::Result<Vec<u8>> {
+            anyhow::bail!("stub")
+        }
+    }
+
+    let result = Context::with_backend(Arc::new(TwoDevicePiv), None, false);
+    let err = result
+        .err()
+        .expect("with_backend must error when backend has multiple devices");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("multiple devices"),
+        "error must mention 'multiple devices': {msg}"
+    );
+}
+
 /// remove_blob returns false for a blob that does not exist.
 #[test]
 fn test_remove_nonexistent() {
