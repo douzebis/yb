@@ -11,9 +11,9 @@ on:
   workflow_dispatch:
 
 jobs:
-  nix-build:
+  # Fast gates: formatting, lints, tier-1 unit tests.
+  check:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
 
@@ -28,8 +28,37 @@ jobs:
       - name: Check lints (clippy)
         run: nix-build -A rust-clippy
 
-      - name: Run unit tests
+      - name: Run unit tests (tier-1)
         run: nix-build -A rust-tests
+
+  # Build the release binary.
+  build:
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+        with:
+          nix_path: nixpkgs=channel:nixos-24.11
 
       - name: Build yb binary
         run: nix-build -A yb-rust
+
+  # Integration tests: NixOS VM with pcscd + vsmartcard + piv-authenticator.
+  integration:
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+        with:
+          nix_path: nixpkgs=channel:nixos-24.11
+          extra_nix_config: |
+            system-features = nixos-test kvm
+
+      - name: Run integration tests (tier-1 + tier-2, NixOS VM)
+        run: nix-build -A integration-tests
