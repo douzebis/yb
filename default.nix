@@ -107,6 +107,7 @@ let
   ybRust = crane.buildPackage (rustCommon // {
     pname          = "yb-rust";
     cargoArtifacts = rustDeps;
+    cargoExtraArgs = "-p yb --features self-test";
 
     nativeBuildInputs = rustCommon.nativeBuildInputs ++ [ pkgs.installShellFiles ];
 

@@ -6,9 +6,9 @@ SPDX-License-Identifier: MIT
 
 # 0015 — `yb self-test` Command
 
-**Status:** draft
+**Status:** implemented
 **App:** yb (Rust)
-**Implemented in:** <!-- YYYY-MM-DD, fill after implementation -->
+**Implemented in:** 2026-03-21
 
 ## Problem
 
@@ -68,7 +68,7 @@ invoked first.
 1. [select device]          — spec 0013 picker if multiple devices
 2. [confirm]                — destructive warning, LED flash, "yes" prompt
 3. [request credentials]    — PIN if not provided; mgmt key if not provided
-4. [format]                 — yb format --generate --object-count 16
+4. [format]                 — yb format --generate --object-count 20
 5. [run operations]         — N operations via SubprocessExecutor (§4)
 6. [cleanup or preserve]    — remove all blobs on success; keep on failure
 7. [report]                 — per-type statistics, pass/fail, error list

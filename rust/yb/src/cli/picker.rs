@@ -18,16 +18,21 @@ use std::io::{stderr, Write as _};
 use std::sync::Arc;
 use yb_core::{DeviceInfo, PivBackend};
 
-/// On/off durations for device-selection flash: 400 ms on, 400 ms off (1.25 Hz).
-const FLASH_ON_MS: u64 = 400;
-const FLASH_OFF_MS: u64 = 400;
+/// On/off durations for device-selection flash: 100 ms on, 100 ms off (5 Hz).
+const FLASH_ON_MS: u64 = 100;
+const FLASH_OFF_MS: u64 = 100;
 
 /// Run the interactive single-line carousel device picker.
 ///
 /// Cycles through `devices` with left/right arrow keys (or j/k).
-/// The current device flashes its LED.  Returns the selected [`DeviceInfo`],
-/// or `None` if the user presses Esc.
-pub fn run_picker(piv: &Arc<dyn PivBackend>, devices: &[DeviceInfo]) -> Result<Option<DeviceInfo>> {
+/// The current device flashes its LED.  Returns the selected [`DeviceInfo`]
+/// together with the live flash handle (so the caller can keep the LED
+/// flashing uninterrupted into the next prompt), or `None` if the user
+/// cancels.
+pub fn run_picker(
+    piv: &Arc<dyn PivBackend>,
+    devices: &[DeviceInfo],
+) -> Result<Option<(DeviceInfo, Option<Box<dyn yb_core::piv::FlashHandle>>)>> {
     assert!(
         !devices.is_empty(),
         "run_picker called with empty device list"
@@ -66,10 +71,9 @@ pub fn run_picker(piv: &Arc<dyn PivBackend>, devices: &[DeviceInfo]) -> Result<O
                     flash = piv.start_flash(&devices[idx].reader, FLASH_ON_MS, FLASH_OFF_MS);
                     render(&mut out, devices, idx, false)?;
                 }
-                // Confirm.
+                // Confirm — keep the flash handle alive for the caller.
                 (KeyCode::Enter, _) => {
-                    drop(flash);
-                    break Some(devices[idx].clone());
+                    break Some((devices[idx].clone(), Some(flash)));
                 }
                 // Cancel.
                 (KeyCode::Esc, _)

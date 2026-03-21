@@ -308,31 +308,41 @@ fn flash_loop(reader: &str, on_ms: u64, off_ms: u64, stop: &AtomicBool) {
     let off_ticks = (off_ms / 10).max(1);
 
     // Initial connect before the loop.
-    let mut card = match ctx.connect(&reader_cstr, pcsc::ShareMode::Shared, pcsc::Protocols::ANY) {
+    // Use Exclusive mode so UnpowerCard takes effect immediately with no
+    // other holders keeping the card powered.
+    let mut card = match ctx.connect(
+        &reader_cstr,
+        pcsc::ShareMode::Exclusive,
+        pcsc::Protocols::ANY,
+    ) {
         Ok(c) => c,
         Err(_) => return,
     };
 
     loop {
         if stop.load(Ordering::Relaxed) {
-            break;
+            // Unpower before exiting so the LED goes dark immediately.
+            let _ = card.disconnect(pcsc::Disposition::UnpowerCard);
+            return;
         }
         // SELECT PIV → LED on.
         if card.transmit(SELECT_PIV, &mut buf).is_err() {
-            break;
+            return;
         }
-        // Hold on-period.
+        // Hold on-period — check stop flag every 10 ms.
         for _ in 0..on_ticks {
             if stop.load(Ordering::Relaxed) {
+                // Unpower immediately so the LED goes dark without delay.
+                let _ = card.disconnect(pcsc::Disposition::UnpowerCard);
                 return;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         // UnpowerCard → LED off immediately.
         if card.disconnect(pcsc::Disposition::UnpowerCard).is_err() {
-            break;
+            return;
         }
-        // Off-period.
+        // Off-period — check stop flag every 10 ms.
         for _ in 0..off_ticks {
             if stop.load(Ordering::Relaxed) {
                 return;
@@ -340,7 +350,11 @@ fn flash_loop(reader: &str, on_ms: u64, off_ms: u64, stop: &AtomicBool) {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         // Reconnect — power-up transient is absorbed into the next on-period.
-        card = match ctx.connect(&reader_cstr, pcsc::ShareMode::Shared, pcsc::Protocols::ANY) {
+        card = match ctx.connect(
+            &reader_cstr,
+            pcsc::ShareMode::Exclusive,
+            pcsc::Protocols::ANY,
+        ) {
             Ok(c) => c,
             Err(_) => return,
         };

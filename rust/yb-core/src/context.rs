@@ -24,8 +24,16 @@ pub struct OutputOptions {
 }
 
 /// Callback type for interactive device selection.
-pub type DevicePicker =
-    Box<dyn Fn(&Arc<dyn PivBackend>, &[DeviceInfo]) -> Result<Option<DeviceInfo>>>;
+///
+/// Returns the selected device together with an optional flash handle.  When
+/// the picker has been flashing the LED of the chosen device, it may pass that
+/// handle through so the flash continues uninterrupted into the next prompt.
+pub type DevicePicker = Box<
+    dyn Fn(
+        &Arc<dyn PivBackend>,
+        &[DeviceInfo],
+    ) -> Result<Option<(DeviceInfo, Option<Box<dyn crate::piv::FlashHandle>>)>>,
+>;
 
 /// Plain configuration options for `Context::new`.
 #[derive(Debug, Default)]
@@ -52,6 +60,10 @@ pub struct Context {
     pub debug: bool,
     pub quiet: bool,
     pub pin_protected: bool,
+    /// Optional flash handle passed in from the interactive device picker.
+    /// Kept alive so the LED continues to flash into the next prompt.
+    /// Consumed by [`Context::take_flash`].
+    pub flash_handle: Option<Box<dyn crate::piv::FlashHandle>>,
 }
 
 impl Context {
@@ -80,7 +92,7 @@ impl Context {
 
         let devices = piv.list_devices().context("listing YubiKey devices")?;
 
-        let (device, selected_reader) = select_device(
+        let (device, selected_reader, flash_handle) = select_device(
             &devices,
             opts.serial.as_ref(),
             opts.reader.as_deref(),
@@ -113,6 +125,7 @@ impl Context {
             debug,
             quiet,
             pin_protected,
+            flash_handle,
         })
     }
 
@@ -155,6 +168,7 @@ impl Context {
             debug,
             quiet: false,
             pin_protected,
+            flash_handle: None,
         })
     }
 
@@ -196,6 +210,15 @@ impl Context {
         Ok(None)
     }
 
+    /// Take the flash handle passed in from the interactive device picker.
+    ///
+    /// Returns `Some(handle)` the first time it is called (if the picker
+    /// provided one), and `None` on all subsequent calls.  The LED stops
+    /// flashing when the returned handle is dropped.
+    pub fn take_flash(&mut self) -> Option<Box<dyn crate::piv::FlashHandle>> {
+        self.flash_handle.take()
+    }
+
     /// Retrieve the YubiKey's public key from the given PIV slot.
     pub fn get_public_key(&self, slot: u8) -> Result<PublicKey> {
         let cert_der = self
@@ -226,14 +249,19 @@ fn select_device(
     serial: Option<&u32>,
     reader: Option<&str>,
     piv: &Arc<dyn PivBackend>,
-    device_picker: &dyn Fn(&Arc<dyn PivBackend>, &[DeviceInfo]) -> Result<Option<DeviceInfo>>,
-) -> Result<(DeviceInfo, String)> {
+    device_picker: &dyn Fn(
+        &Arc<dyn PivBackend>,
+        &[DeviceInfo],
+    ) -> Result<
+        Option<(DeviceInfo, Option<Box<dyn crate::piv::FlashHandle>>)>,
+    >,
+) -> Result<(DeviceInfo, String, Option<Box<dyn crate::piv::FlashHandle>>)> {
     if let Some(s) = serial {
         let dev = devices
             .iter()
             .find(|d| &d.serial == s)
             .ok_or_else(|| anyhow::anyhow!("no YubiKey with serial {s} found"))?;
-        return Ok((dev.clone(), dev.reader.clone()));
+        return Ok((dev.clone(), dev.reader.clone(), None));
     }
 
     if let Some(r) = reader {
@@ -241,18 +269,18 @@ fn select_device(
             .iter()
             .find(|d| d.reader == r)
             .ok_or_else(|| anyhow::anyhow!("no device on reader '{r}'"))?;
-        return Ok((dev.clone(), r.to_owned()));
+        return Ok((dev.clone(), r.to_owned(), None));
     }
 
     match devices.len() {
         0 => bail!("no YubiKey found"),
-        1 => Ok((devices[0].clone(), devices[0].reader.clone())),
+        1 => Ok((devices[0].clone(), devices[0].reader.clone(), None)),
         _ => {
             // Multiple devices: invoke the picker (interactive or fallback).
             match device_picker(piv, devices)? {
-                Some(dev) => {
+                Some((dev, flash)) => {
                     let reader = dev.reader.clone();
-                    Ok((dev, reader))
+                    Ok((dev, reader, flash))
                 }
                 None => bail!("device selection cancelled"),
             }
