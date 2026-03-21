@@ -4,6 +4,7 @@
 
 use anyhow::{bail, Result};
 use clap::Args;
+use clap_complete::engine::{ArgValueCompleter, PathCompleter};
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::PathBuf;
@@ -15,7 +16,7 @@ use yb_core::Context;
 pub struct StoreArgs {
     /// Source files to store.  Blob name defaults to each file's basename.
     /// If no files are given, payload is read from stdin (requires --name).
-    #[arg()]
+    #[arg(add = ArgValueCompleter::new(PathCompleter::file()))]
     pub files: Vec<PathBuf>,
 
     /// Override blob name (required when reading from stdin; only valid with a single file).

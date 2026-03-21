@@ -4,16 +4,19 @@
 
 use anyhow::{bail, Result};
 use clap::Args;
+use clap_complete::engine::{ArgValueCompleter, PathCompleter};
 use globset::GlobBuilder;
 use std::io::Write as _;
 use std::path::PathBuf;
 use yb_core::orchestrator;
 use yb_core::{store::Store, Context};
 
+use crate::complete::complete_blob_names;
+
 #[derive(Args, Debug)]
 pub struct FetchArgs {
     /// Blob name(s) or glob patterns to retrieve.
-    #[arg(required = true)]
+    #[arg(required = true, add = ArgValueCompleter::new(complete_blob_names))]
     pub patterns: Vec<String>,
 
     /// Write blob content to stdout (only valid when exactly one blob matches).
@@ -21,11 +24,11 @@ pub struct FetchArgs {
     pub stdout: bool,
 
     /// Write output to this file (only valid when exactly one blob matches).
-    #[arg(short = 'o', long = "output")]
+    #[arg(short = 'o', long = "output", add = ArgValueCompleter::new(PathCompleter::file()))]
     pub output: Option<PathBuf>,
 
     /// Write fetched files into this directory (default: current directory).
-    #[arg(short = 'O', long = "output-dir")]
+    #[arg(short = 'O', long = "output-dir", add = ArgValueCompleter::new(PathCompleter::dir()))]
     pub output_dir: Option<PathBuf>,
 
     /// Deprecated: saving to files is now the default behavior.

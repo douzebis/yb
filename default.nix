@@ -107,10 +107,21 @@ let
     pname          = "yb-rust";
     cargoArtifacts = rustDeps;
 
+    nativeBuildInputs = rustCommon.nativeBuildInputs ++ [ pkgs.installShellFiles ];
+
     checkPhase = ''
       echo "fmt:    ${rustFmt}"
       echo "clippy: ${rustClippy}"
       echo "tests:  ${rustTests}"
+    '';
+
+    postInstall = ''
+      installShellCompletion --cmd yb \
+        --bash <(YB_COMPLETE=bash $out/bin/yb | sed \
+          -e '/^\s*) )$/a\    compopt -o filenames 2>/dev/null' \
+          -e 's|words\[COMP_CWORD\]="$2"|local _cur="''${COMP_LINE:0:''${COMP_POINT}}"; _cur="''${_cur##* }"; words[COMP_CWORD]="''${_cur}"|') \
+        --zsh  <(YB_COMPLETE=zsh  $out/bin/yb) \
+        --fish <(YB_COMPLETE=fish $out/bin/yb)
     '';
 
     meta = with pkgs.lib; {
@@ -244,6 +255,15 @@ let
 
       # Build the Rust binary if not already built
       cargo build --release --manifest-path rust/Cargo.toml
+
+      # Activate shell completions for the current session (bash only).
+      # Re-runs on each nix-shell entry so completions stay in sync with
+      # the freshly built binary.
+      if command -v yb &>/dev/null; then
+        source <(YB_COMPLETE=bash yb | sed \
+          -e '/^\s*) )$/a\    compopt -o filenames 2>/dev/null' \
+          -e 's|words\[COMP_CWORD\]="$2"|local _cur="''${COMP_LINE:0:''${COMP_POINT}}"; _cur="''${_cur##* }"; words[COMP_CWORD]="''${_cur}"|')
+      fi
 
       # Generate .env file for VS Code integration
       echo "PYTHON_INTERPRETER=$(which python)" > .env

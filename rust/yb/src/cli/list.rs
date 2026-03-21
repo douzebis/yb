@@ -5,13 +5,17 @@
 use anyhow::Result;
 use chrono::{DateTime, Duration, Local, Utc};
 use clap::Args;
+use clap_complete::engine::ArgValueCompleter;
 use globset::GlobBuilder;
 use yb_core::orchestrator;
 use yb_core::{store::Store, Context};
 
+use crate::complete::complete_blob_names;
+
 #[derive(Args, Debug)]
 pub struct ListArgs {
     /// Glob pattern to filter blob names (default: all).
+    #[arg(add = ArgValueCompleter::new(complete_blob_names))]
     pub pattern: Option<String>,
 
     /// Long format: flag, chunks, date, size, name.
