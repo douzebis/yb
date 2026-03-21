@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: 2025 - 2026 Frederic Ruget <fred@atlant.is> <fred@s3ns.io> (GitHub: @douzebis)
+
+SPDX-License-Identifier: MIT
+-->
+
 <!-- Security review of the Rust implementation — 2026-03-21 -->
 <!-- Supersedes the December 2025 review of the deprecated Python implementation -->
 

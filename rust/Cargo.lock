@@ -3140,9 +3140,11 @@ dependencies = [
  "serde_yaml",
  "sha2 0.10.9",
  "spki",
+ "subtle",
  "thiserror",
  "x509-cert",
  "yb-core",
+ "zeroize",
 ]
 
 [[package]]

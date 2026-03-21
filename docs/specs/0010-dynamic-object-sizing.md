@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: 2025 - 2026 Frederic Ruget <fred@atlant.is> <fred@s3ns.io> (GitHub: @douzebis)
+
+SPDX-License-Identifier: MIT
+-->
+
 # 0010 — Dynamic PIV Object Sizing
 
 **Status:** draft
