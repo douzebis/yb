@@ -237,11 +237,35 @@ YubiKey GENERAL AUTHENTICATE semantics.
 ## 5. Store Binary Format
 
 All integers are little-endian.  Every PIV object is exactly
-`object_size` bytes (default: 3052, range: 512–3052).  Up to 16 objects
-are addressable; default is 12.
+`object_size` bytes (default: 2048, range: 512–3052).  Up to 20 objects
+are addressable; default is 20.
 
-Object IDs run from `0x5F_0000` (index 0) to `0x5F_000B` (index 11)
-for a 12-object default store.
+Object IDs run from `0x5F_0000` (index 0) to `0x5F_0013` (index 19)
+for a 20-object default store.
+
+**Default sizing rationale.**  The YubiKey 5 PIV NVM pool is 51,200 bytes,
+shared across all data objects.  Standard-slot certificates (9A, 9C, 9D,
+9E, attestation) typically consume 3–5 KB, leaving roughly 46–48 KB for
+the yb store.  Blobs in practice range from small secrets (tokens, keys,
+~100–500 B) through medium (TLS certs, ~1–2 KB) to large (GPG exports,
+PKCS#12 bundles, ~4–8 KB).
+
+Choosing 20 × 2,048 bytes (40,960 bytes gross) balances three competing
+forces:
+
+- **Object count** — 20 slots accommodate a realistic mix without the
+  store filling up prematurely; the previous default of 12 was tight for
+  users storing several large blobs.
+- **Fragmentation** — each blob wastes on average half an object in its
+  last (partially filled) chunk.  At 2,048 bytes that waste is ~1,024 B
+  per blob vs. ~1,526 B at 3,052; meaningful for stores with many blobs.
+- **Write amplification** — each PIV write is a separate GENERAL
+  AUTHENTICATE + APDU round-trip.  Smaller objects increase chunk counts
+  for large blobs; 2,048 keeps large-blob chunk counts reasonable (an
+  8 KB blob needs 5 chunks vs. 3 at 3,052).
+
+20 × 2,048 = 40,960 bytes fits comfortably within the 51,200-byte pool
+while leaving ~10 KB for standard-slot certificates.
 
 ### Object layout
 
@@ -438,7 +462,7 @@ fixture's reader list when set).
 
 | Command | Alias | Key args | What it does |
 |---|---|---|---|
-| `format` | — | `--object-count` (def 12), `--object-size` (def 3052), `--key-slot` (def `0x82`), `-g/--generate`, `--subject` | Provisions PIV objects; optionally generates ECDH key |
+| `format` | — | `--object-count` (def 20), `--object-size` (def 2048), `--key-slot` (def `0x82`), `-g/--generate`, `--subject` | Provisions PIV objects; optionally generates ECDH key |
 | `store` | — | `[files…]` (stdin if empty), `-n/--name`, `-e/--encrypted`, `-u/--unencrypted` | Stores one or more blobs |
 | `fetch` | — | `[patterns…]` (glob), `-p/--stdout`, `-o/--output`, `-O/--output-dir` | Retrieves blob(s) |
 | `list` | `ls` | `[pattern]` (glob), `-l/--long`, `-1`, `-t/--sort-time`, `-r/--reverse` | Lists blobs |
@@ -668,7 +692,7 @@ DER is automatically zeroed on drop via `Zeroizing<>` wrappers in the
 
 | ID | Purpose |
 |---|---|
-| `0x5F_0000` – `0x5F_000B` | yb blob store (default 12 objects) |
+| `0x5F_0000` – `0x5F_0013` | yb blob store (default 20 objects) |
 | `0x5F_C109` | PRINTED — PIN-protected management key |
 | `0x5F_FF00` | ADMIN DATA — mgmt key storage mode flags |
 | `0x5F_C10A` | Key history |
