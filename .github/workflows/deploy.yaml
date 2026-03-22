@@ -32,7 +32,7 @@ jobs:
           tool: zola@0.19.2
 
       - name: Install system dependencies
-        run: sudo apt-get install -y libpcsclite-dev
+        run: sudo apt-get install -y libpcsclite-dev mandoc
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
