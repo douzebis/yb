@@ -16,7 +16,11 @@ use crossterm::{
 };
 use std::io::{stderr, Write as _};
 use std::sync::Arc;
-use yb_core::{DeviceInfo, PivBackend};
+use yb_core::{piv::FlashHandle, DeviceInfo, PivBackend};
+
+/// Return type of [`run_picker`]: selected device plus an optional live flash
+/// handle that keeps the LED flashing into the next prompt.
+pub type PickerResult = Option<(DeviceInfo, Option<Box<dyn FlashHandle>>)>;
 
 /// On/off durations for device-selection flash: 100 ms on, 100 ms off (5 Hz).
 const FLASH_ON_MS: u64 = 100;
@@ -29,10 +33,7 @@ const FLASH_OFF_MS: u64 = 100;
 /// together with the live flash handle (so the caller can keep the LED
 /// flashing uninterrupted into the next prompt), or `None` if the user
 /// cancels.
-pub fn run_picker(
-    piv: &Arc<dyn PivBackend>,
-    devices: &[DeviceInfo],
-) -> Result<Option<(DeviceInfo, Option<Box<dyn yb_core::piv::FlashHandle>>)>> {
+pub fn run_picker(piv: &Arc<dyn PivBackend>, devices: &[DeviceInfo]) -> Result<PickerResult> {
     assert!(
         !devices.is_empty(),
         "run_picker called with empty device list"
