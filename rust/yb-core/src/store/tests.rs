@@ -21,21 +21,28 @@ fn make_empty_object(object_size: usize) -> Vec<u8> {
 
 #[test]
 fn round_trip_empty() {
+    // from_bytes can parse any valid-size empty object (e.g. a legacy 512-byte one).
     let raw = make_empty_object(512);
     let obj = Object::from_bytes(0, &raw).unwrap();
     assert!(obj.is_empty());
-    assert_eq!(obj.to_bytes(), raw);
+    // to_bytes always produces the compact 9-byte sentinel (spec 0010).
+    let written = obj.to_bytes();
+    assert_eq!(written.len(), OBJECT_MIN_SIZE);
+    let reparsed = Object::from_bytes(0, &written).unwrap();
+    assert!(reparsed.is_empty());
+    assert_eq!(reparsed.yblob_magic, YBLOB_MAGIC);
+    assert_eq!(reparsed.object_count, 12);
+    assert_eq!(reparsed.store_key_slot, 0x82);
 }
 
 #[test]
 fn round_trip_head() {
-    let object_size = 512;
     let name = "hello";
     let payload_data = b"world!";
 
     let obj = Object {
         index: 0,
-        object_size,
+        object_size: 512, // legacy value — ignored by to_bytes (spec 0010)
         yblob_magic: YBLOB_MAGIC,
         object_count: 12,
         store_key_slot: 0x82,
@@ -53,24 +60,25 @@ fn round_trip_head() {
     };
 
     let bytes = obj.to_bytes();
-    assert_eq!(bytes.len(), object_size);
+    // Minimum size: BLOB_NAME_O + name_len + payload_len = 23 + 5 + 6 = 34 bytes.
+    let expected_size = BLOB_NAME_O + name.len() + payload_data.len();
+    assert_eq!(bytes.len(), expected_size);
 
     let obj2 = Object::from_bytes(0, &bytes).unwrap();
     assert_eq!(obj2.blob_name, name);
     assert_eq!(obj2.age, 1);
     assert_eq!(obj2.chunk_pos, 0);
     assert_eq!(obj2.blob_mtime, 1_700_000_000);
-    assert_eq!(&obj2.payload[..payload_data.len()], payload_data);
+    assert_eq!(&obj2.payload, payload_data);
 }
 
 #[test]
 fn round_trip_continuation() {
-    let object_size = 512;
     let payload_data = vec![0xABu8; 100];
 
     let obj = Object {
         index: 1,
-        object_size,
+        object_size: 512, // legacy value — ignored by to_bytes (spec 0010)
         yblob_magic: YBLOB_MAGIC,
         object_count: 12,
         store_key_slot: 0x82,
@@ -88,9 +96,11 @@ fn round_trip_continuation() {
     };
 
     let bytes = obj.to_bytes();
+    // Minimum size: CONTINUATION_PAYLOAD_O + payload_len = 11 + 100 = 111 bytes.
+    assert_eq!(bytes.len(), CONTINUATION_PAYLOAD_O + payload_data.len());
     let obj2 = Object::from_bytes(1, &bytes).unwrap();
     assert_eq!(obj2.chunk_pos, 1);
-    assert_eq!(&obj2.payload[..payload_data.len()], &payload_data);
+    assert_eq!(obj2.payload, payload_data);
 }
 
 /// Binary compatibility test: a vector produced by the Python implementation.
@@ -120,8 +130,18 @@ fn python_compat_vector() {
     assert_eq!(obj.blob_key_slot, 0);
     assert_eq!(&obj.payload[..7], b"content");
 
-    // Re-serialize must be identical.
-    assert_eq!(obj.to_bytes(), raw);
+    // Re-serialize produces minimum-size output (spec 0010), not the
+    // original 512-byte legacy format.  Verify content round-trips correctly.
+    let compact = obj.to_bytes();
+    assert!(
+        compact.len() < raw.len(),
+        "compact form must be smaller than 512 bytes"
+    );
+    let obj2 = Object::from_bytes(0, &compact).unwrap();
+    assert_eq!(obj2.blob_name, "config");
+    assert_eq!(obj2.blob_size, 7);
+    assert_eq!(obj2.blob_mtime, 1_717_243_342);
+    assert_eq!(obj2.payload, obj.payload);
 }
 
 // ---------------------------------------------------------------------------
@@ -334,7 +354,7 @@ fn format_zero_objects() {
     }
 
     let piv = NullPiv;
-    let store = Store::format("r", &piv, 0, 512, 0x82, None, None).unwrap();
+    let store = Store::format("r", &piv, 0, 0x82, None, None).unwrap();
     assert_eq!(store.object_count, 0);
     assert_eq!(store.objects.len(), 0);
     assert_eq!(store.free_count(), 0);

@@ -138,7 +138,20 @@ impl Object {
             (0, 0, 0, 0, false, String::new(), CONTINUATION_PAYLOAD_O)
         };
 
-        let payload = data[payload_start..].to_vec();
+        // For head chunks: trim payload to the actual blob data bytes that
+        // belong to this chunk.  This removes trailing zero-padding from
+        // legacy fixed-size objects and ensures to_bytes() writes the minimum
+        // necessary size.  For multi-chunk blobs blob_size > head capacity, so
+        // the full remaining region is valid — min() leaves it untouched.
+        // For continuation chunks blob_size = 0 (not stored), so we always
+        // take the full remaining region.
+        let raw_payload = &data[payload_start..];
+        let payload = if chunk_pos == 0 {
+            let cap = (blob_size as usize).min(raw_payload.len());
+            raw_payload[..cap].to_vec()
+        } else {
+            raw_payload.to_vec()
+        };
 
         Ok(Self {
             index,
@@ -160,23 +173,36 @@ impl Object {
         })
     }
 
-    /// Serialize this object to exactly `object_size` bytes.
+    /// Serialize this object to the minimum number of bytes required.
+    ///
+    /// - Empty slot (age == 0): 9-byte sentinel (common header only).
+    /// - Head chunk: `0x17 + name_len + payload_len` bytes.
+    /// - Continuation chunk: `0x0B + payload_len` bytes.
+    ///
+    /// The result is always in the range `OBJECT_MIN_SIZE`..=`OBJECT_MAX_SIZE`.
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut buf = vec![0u8; self.object_size];
-
-        write_u32_le(&mut buf, MAGIC_O, self.yblob_magic);
-        buf[OBJECT_COUNT_O] = self.object_count;
-        buf[STORE_KEY_SLOT_O] = self.store_key_slot;
-        write_u24_le(&mut buf, OBJECT_AGE_O, self.age);
-
         if self.age == 0 {
+            // Empty-slot sentinel: 9-byte common header only.
+            let mut buf = vec![0u8; OBJECT_MIN_SIZE];
+            write_u32_le(&mut buf, MAGIC_O, self.yblob_magic);
+            buf[OBJECT_COUNT_O] = self.object_count;
+            buf[STORE_KEY_SLOT_O] = self.store_key_slot;
+            // OBJECT_AGE stays 0.
             return buf;
         }
 
-        buf[CHUNK_POS_O] = self.chunk_pos;
-        buf[NEXT_CHUNK_O] = self.next_chunk;
-
         if self.chunk_pos == 0 {
+            // Head chunk: headers + name + payload.
+            let name_bytes = self.blob_name.as_bytes();
+            let total = (BLOB_NAME_O + name_bytes.len() + self.payload.len())
+                .clamp(OBJECT_MIN_SIZE, OBJECT_MAX_SIZE);
+            let mut buf = vec![0u8; total];
+            write_u32_le(&mut buf, MAGIC_O, self.yblob_magic);
+            buf[OBJECT_COUNT_O] = self.object_count;
+            buf[STORE_KEY_SLOT_O] = self.store_key_slot;
+            write_u24_le(&mut buf, OBJECT_AGE_O, self.age);
+            buf[CHUNK_POS_O] = self.chunk_pos;
+            buf[NEXT_CHUNK_O] = self.next_chunk;
             write_u32_le(&mut buf, BLOB_MTIME_O, self.blob_mtime);
             write_u24_le(&mut buf, BLOB_SIZE_O, self.blob_size);
             buf[BLOB_KEY_SLOT_O] = self.blob_key_slot;
@@ -185,20 +211,29 @@ impl Object {
                 BLOB_PLAIN_SIZE_O,
                 self.blob_plain_size | self.c_bit(),
             );
-            let name_bytes = self.blob_name.as_bytes();
             buf[BLOB_NAME_LEN_O] = name_bytes.len() as u8;
-            let payload_start = BLOB_NAME_O + name_bytes.len();
             buf[BLOB_NAME_O..BLOB_NAME_O + name_bytes.len()].copy_from_slice(name_bytes);
-            let payload_end = (payload_start + self.payload.len()).min(self.object_size);
+            let payload_start = BLOB_NAME_O + name_bytes.len();
+            let payload_end = (payload_start + self.payload.len()).min(total);
             buf[payload_start..payload_end]
                 .copy_from_slice(&self.payload[..payload_end - payload_start]);
+            buf
         } else {
-            let payload_end = (CONTINUATION_PAYLOAD_O + self.payload.len()).min(self.object_size);
+            // Continuation chunk: headers + payload.
+            let total = (CONTINUATION_PAYLOAD_O + self.payload.len())
+                .clamp(OBJECT_MIN_SIZE, OBJECT_MAX_SIZE);
+            let mut buf = vec![0u8; total];
+            write_u32_le(&mut buf, MAGIC_O, self.yblob_magic);
+            buf[OBJECT_COUNT_O] = self.object_count;
+            buf[STORE_KEY_SLOT_O] = self.store_key_slot;
+            write_u24_le(&mut buf, OBJECT_AGE_O, self.age);
+            buf[CHUNK_POS_O] = self.chunk_pos;
+            buf[NEXT_CHUNK_O] = self.next_chunk;
+            let payload_end = (CONTINUATION_PAYLOAD_O + self.payload.len()).min(total);
             buf[CONTINUATION_PAYLOAD_O..payload_end]
                 .copy_from_slice(&self.payload[..payload_end - CONTINUATION_PAYLOAD_O]);
+            buf
         }
-
-        buf
     }
 
     /// Mark this object as empty (age = 0) and dirty.
@@ -208,12 +243,11 @@ impl Object {
     /// preserved or zeroed on reset.
     pub fn reset(&mut self) {
         let index = self.index;
-        let object_size = self.object_size;
         let object_count = self.object_count;
         let store_key_slot = self.store_key_slot;
         *self = Self {
             index,
-            object_size,
+            object_size: OBJECT_MIN_SIZE, // write compact 9-byte sentinel
             yblob_magic: crate::store::constants::YBLOB_MAGIC,
             object_count,
             store_key_slot,
@@ -231,14 +265,20 @@ impl Object {
         };
     }
 
-    /// Capacity of the payload region in a head chunk.
-    pub fn head_payload_capacity(object_size: usize, name_len: usize) -> usize {
-        object_size.saturating_sub(BLOB_NAME_O + name_len)
+    /// Maximum payload capacity in a head chunk given a name of `name_len` bytes.
+    ///
+    /// Uses `OBJECT_MAX_SIZE` (the hard limit) regardless of the `object_size`
+    /// argument, which is ignored and retained only for call-site compatibility.
+    pub fn head_payload_capacity(_object_size: usize, name_len: usize) -> usize {
+        OBJECT_MAX_SIZE.saturating_sub(BLOB_NAME_O + name_len)
     }
 
-    /// Capacity of the payload region in a continuation chunk.
-    pub fn continuation_payload_capacity(object_size: usize) -> usize {
-        object_size.saturating_sub(CONTINUATION_PAYLOAD_O)
+    /// Maximum payload capacity in a continuation chunk.
+    ///
+    /// Uses `OBJECT_MAX_SIZE` (the hard limit).  The `object_size` argument is
+    /// ignored and retained only for call-site compatibility.
+    pub fn continuation_payload_capacity(_object_size: usize) -> usize {
+        OBJECT_MAX_SIZE.saturating_sub(CONTINUATION_PAYLOAD_O)
     }
 
     /// Returns `BLOB_SIZE_C_BIT` when the blob is compressed, 0 otherwise.
@@ -313,11 +353,14 @@ impl Store {
     }
 
     /// Write a fresh empty store to the device (yb format).
+    ///
+    /// Each slot is initialised with a compact 9-byte empty-slot sentinel
+    /// (spec 0010).  No `object_size` parameter — size is determined
+    /// dynamically at write time.
     pub fn format(
         reader: &str,
         piv: &dyn PivBackend,
         object_count: u8,
-        object_size: usize,
         store_key_slot: u8,
         management_key: Option<&str>,
         pin: Option<&str>,
@@ -326,7 +369,7 @@ impl Store {
         for i in 0..object_count {
             objects.push(Object {
                 index: i,
-                object_size,
+                object_size: OBJECT_MIN_SIZE, // will produce 9-byte sentinel
                 yblob_magic: YBLOB_MAGIC,
                 object_count,
                 store_key_slot,
@@ -345,7 +388,7 @@ impl Store {
         }
         let mut store = Self {
             reader: reader.to_owned(),
-            object_size,
+            object_size: OBJECT_MIN_SIZE,
             object_count,
             store_key_slot,
             objects,

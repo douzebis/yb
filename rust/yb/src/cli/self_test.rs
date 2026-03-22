@@ -88,7 +88,7 @@ struct Executor {
 impl Executor {
     fn run(&self, args: &[&str], stdin: Option<&[u8]>) -> Result<(i32, Vec<u8>, String)> {
         let mut cmd = Command::new(&self.yb_bin);
-        cmd.args(["--serial", &self.serial.to_string()])
+        cmd.args(["--serial", &self.serial.to_string(), "--allow-defaults"])
             .env("YB_PIN", &self.pin)
             .env("YB_MANAGEMENT_KEY", &self.mgmt_key)
             .args(args)
@@ -219,13 +219,21 @@ pub fn run(ctx: &mut Context, args: &SelfTestArgs) -> Result<()> {
         "010203040506070801020304050607080102030405060708".to_owned()
     });
 
+    // Resolve the reader string for NVM measurements (single device assumed).
+    let reader = ctx
+        .piv
+        .list_readers()?
+        .into_iter()
+        .next()
+        .unwrap_or_default();
+
     // Format via subprocess so key generation happens through the full CLI stack.
     eprintln!("Formatting YubiKey (serial={serial})...");
     let format_start = std::time::Instant::now();
     {
         let yb_bin = std::env::current_exe()?;
         let status = Command::new(&yb_bin)
-            .args(["--serial", &serial.to_string()])
+            .args(["--serial", &serial.to_string(), "--allow-defaults"])
             .env("YB_PIN", &pin)
             .env("YB_MANAGEMENT_KEY", &mgmt_key)
             .args(["format", "--generate", "--object-count", "20"])
@@ -240,16 +248,22 @@ pub fn run(ctx: &mut Context, args: &SelfTestArgs) -> Result<()> {
     );
     eprintln!();
 
+    // Measure free NVM after format (baseline).
+    eprintln!("Measuring free NVM after format (baseline)...");
+    let free_after_format = yb_core::nvm::measure_free_nvm(&reader, &mgmt_key, true)?;
+    eprintln!("Free NVM after format: {free_after_format} bytes.");
+    eprintln!();
+
     // Run operations.
     let yb_bin = std::env::current_exe()?;
     let executor = Executor {
         yb_bin,
         serial,
         pin,
-        mgmt_key,
+        mgmt_key: mgmt_key.clone(),
     };
     let mut toy = ToyFilesystem::new();
-    let mut gen = OperationGenerator::new(args.seed, 15);
+    let mut gen = OperationGenerator::new(args.seed, 25);
     let ops = gen.generate(args.count, 0.5);
 
     let mut stats = Stats::default();
@@ -291,6 +305,15 @@ pub fn run(ctx: &mut Context, args: &SelfTestArgs) -> Result<()> {
                         } else if !was_present {
                             toy.remove(&op.name);
                         }
+                        // Confirm NVM was genuinely insufficient.
+                        eprintln!("FULL");
+                        let free = yb_core::nvm::measure_free_nvm(&reader, &mgmt_key, false)?;
+                        let payload_len = op.payload.len();
+                        let sufficient = free >= payload_len;
+                        eprintln!(
+                            "  store-full check: free_nvm={free}B  payload={payload_len}B  \
+                             free>=payload: {sufficient} (expected false)"
+                        );
                         (true, String::new())
                     }
                     StoreResult::Err(e) => {
@@ -380,6 +403,14 @@ pub fn run(ctx: &mut Context, args: &SelfTestArgs) -> Result<()> {
 
     let duration = run_start.elapsed().as_secs_f64();
 
+    // Measure free NVM after ops.
+    if stats.all_passed() {
+        eprintln!();
+        eprintln!("Measuring free NVM after ops...");
+        let free_after_ops = yb_core::nvm::measure_free_nvm(&reader, &mgmt_key, true)?;
+        eprintln!("Free NVM after ops: {free_after_ops} bytes.");
+    }
+
     // Cleanup on success.
     if stats.all_passed() && !args.no_cleanup {
         eprintln!();
@@ -389,6 +420,16 @@ pub fn run(ctx: &mut Context, args: &SelfTestArgs) -> Result<()> {
             executor.remove(name)?;
         }
         eprintln!("Store emptied.");
+
+        // Measure free NVM after cleanup.
+        eprintln!();
+        eprintln!("Measuring free NVM after cleanup...");
+        let free_after_cleanup = yb_core::nvm::measure_free_nvm(&reader, &mgmt_key, true)?;
+        eprintln!("Free NVM after cleanup: {free_after_cleanup} bytes.");
+        eprintln!(
+            "NVM delta (cleanup − format): {:+} bytes.",
+            free_after_cleanup as isize - free_after_format as isize
+        );
     } else if !stats.all_passed() {
         eprintln!();
         eprintln!("NOTE: YubiKey state preserved for debugging.");

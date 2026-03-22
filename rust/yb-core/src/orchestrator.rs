@@ -474,8 +474,8 @@ mod tests {
         let mgmt = "010203040506070801020304050607080102030405060708";
         let reader = piv.reader_name();
 
-        // Format a tiny store: 2 objects × 512 bytes.
-        let mut store = Store::format(&reader, &piv, 2, 512, 0x82, Some(mgmt), None).unwrap();
+        // Format a tiny store: 2 objects.
+        let mut store = Store::format(&reader, &piv, 2, 0x82, Some(mgmt), None).unwrap();
 
         // Fill both slots with single-chunk blobs.
         let ok1 = store_blob(

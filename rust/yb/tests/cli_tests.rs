@@ -43,16 +43,7 @@ fn make_ctx(piv: VirtualPiv) -> Context {
 
 /// Format a store inside the given context's backend.
 fn format_store(ctx: &Context) {
-    Store::format(
-        &ctx.reader,
-        ctx.piv.as_ref(),
-        8,
-        512,
-        0x82,
-        Some(MGMT),
-        None,
-    )
-    .unwrap();
+    Store::format(&ctx.reader, ctx.piv.as_ref(), 8, 0x82, Some(MGMT), None).unwrap();
 }
 
 // ---------------------------------------------------------------------------
@@ -496,16 +487,7 @@ fn fsck_detect_duplicate_name_anomaly() {
     let piv = with_key_piv();
     let ctx = make_ctx(piv);
     // Format a 4-object store.
-    Store::format(
-        &ctx.reader,
-        ctx.piv.as_ref(),
-        4,
-        512,
-        0x82,
-        Some(MGMT),
-        None,
-    )
-    .unwrap();
+    Store::format(&ctx.reader, ctx.piv.as_ref(), 4, 0x82, Some(MGMT), None).unwrap();
 
     // Write two head objects with the same name by manipulating the store
     // in-memory and syncing.
@@ -515,7 +497,7 @@ fn fsck_detect_duplicate_name_anomaly() {
     use yb_core::store::Object;
     store.objects[0] = Object {
         index: 0,
-        object_size: 512,
+        object_size: yb_core::store::constants::OBJECT_MIN_SIZE,
         yblob_magic: YBLOB_MAGIC,
         object_count: 4,
         store_key_slot: 0x82,
@@ -533,7 +515,7 @@ fn fsck_detect_duplicate_name_anomaly() {
     };
     store.objects[1] = Object {
         index: 1,
-        object_size: 512,
+        object_size: yb_core::store::constants::OBJECT_MIN_SIZE,
         yblob_magic: YBLOB_MAGIC,
         object_count: 4,
         store_key_slot: 0x82,
@@ -572,16 +554,7 @@ fn fsck_detect_orphaned_continuation() {
 
     let piv = with_key_piv();
     let ctx = make_ctx(piv);
-    Store::format(
-        &ctx.reader,
-        ctx.piv.as_ref(),
-        4,
-        512,
-        0x82,
-        Some(MGMT),
-        None,
-    )
-    .unwrap();
+    Store::format(&ctx.reader, ctx.piv.as_ref(), 4, 0x82, Some(MGMT), None).unwrap();
 
     let mut store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
 
@@ -589,7 +562,7 @@ fn fsck_detect_orphaned_continuation() {
     use yb_core::store::Object;
     store.objects[0] = Object {
         index: 0,
-        object_size: 512,
+        object_size: yb_core::store::constants::OBJECT_MIN_SIZE,
         yblob_magic: YBLOB_MAGIC,
         object_count: 4,
         store_key_slot: 0x82,
@@ -608,7 +581,7 @@ fn fsck_detect_orphaned_continuation() {
     // Object 1: orphaned continuation (no head points to it).
     store.objects[1] = Object {
         index: 1,
-        object_size: 512,
+        object_size: yb_core::store::constants::OBJECT_MIN_SIZE,
         yblob_magic: YBLOB_MAGIC,
         object_count: 4,
         store_key_slot: 0x82,
@@ -643,7 +616,7 @@ fn fsck_detect_orphaned_continuation() {
 // ---------------------------------------------------------------------------
 
 use yb::cli::format::{run as format_run, FormatArgs};
-use yb_core::store::constants::{DEFAULT_OBJECT_COUNT, DEFAULT_OBJECT_SIZE, DEFAULT_SUBJECT};
+use yb_core::store::constants::{DEFAULT_OBJECT_COUNT, DEFAULT_SUBJECT};
 
 #[test]
 fn format_key_slot_hex_prefix() {
@@ -656,7 +629,7 @@ fn format_key_slot_hex_prefix() {
 
     let args = FormatArgs {
         object_count: DEFAULT_OBJECT_COUNT,
-        object_size: DEFAULT_OBJECT_SIZE,
+
         key_slot: "0x82".to_owned(),
         generate: false,
         subject: DEFAULT_SUBJECT.to_owned(),
@@ -675,7 +648,7 @@ fn format_key_slot_decimal() {
 
     let args = FormatArgs {
         object_count: DEFAULT_OBJECT_COUNT,
-        object_size: DEFAULT_OBJECT_SIZE,
+
         key_slot: "130".to_owned(),
         generate: false,
         subject: DEFAULT_SUBJECT.to_owned(),
@@ -690,7 +663,7 @@ fn format_key_slot_invalid_rejected() {
 
     let args = FormatArgs {
         object_count: DEFAULT_OBJECT_COUNT,
-        object_size: DEFAULT_OBJECT_SIZE,
+
         key_slot: "notanumber".to_owned(),
         generate: false,
         subject: DEFAULT_SUBJECT.to_owned(),
