@@ -501,14 +501,18 @@ fn experiment_fragmentation(piv: &Piv, baseline_nvm: usize) -> Result<()> {
     eprintln!("  Baseline NVM  : {baseline_nvm} bytes");
     eprintln!("  Post-stress   : {total_bytes} bytes");
     eprintln!("  Difference    : {diff:+} bytes");
-    if diff == 0 {
-        eprintln!("  --> NO FRAGMENTATION: full capacity preserved after random-size stress.");
-        eprintln!("      Dynamic object sizing (spec 0010) is safe.");
-    } else if diff < 0 {
-        eprintln!("  --> FRAGMENTATION DETECTED: {diff} bytes permanently lost.");
-        eprintln!("      Variable-size writes consume NVM that cannot be reclaimed.");
-    } else {
-        eprintln!("  --> Unexpected gain — measurement artifact, investigate.");
+    match diff.cmp(&0) {
+        std::cmp::Ordering::Equal => {
+            eprintln!("  --> NO FRAGMENTATION: full capacity preserved after random-size stress.");
+            eprintln!("      Dynamic object sizing (spec 0010) is safe.");
+        }
+        std::cmp::Ordering::Less => {
+            eprintln!("  --> FRAGMENTATION DETECTED: {diff} bytes permanently lost.");
+            eprintln!("      Variable-size writes consume NVM that cannot be reclaimed.");
+        }
+        std::cmp::Ordering::Greater => {
+            eprintln!("  --> Unexpected gain — measurement artifact, investigate.");
+        }
     }
 
     Ok(())
