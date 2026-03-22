@@ -127,7 +127,7 @@ completions are activated for the current session automatically.
 yb format --generate
 ```
 
-This writes 20 PIV objects (40 KB) to the YubiKey and generates a P-256
+This writes 20 PIV object sentinels to the YubiKey and generates a P-256
 key in slot `0x82`.  Run once per YubiKey.
 
 ### 2. Store a blob
@@ -268,8 +268,8 @@ using a linked-chunk format.  Default store configuration:
 | Parameter | Default | Notes |
 |---|---|---|
 | Object count | 20 | Tunable at format time (`--object-count`) |
-| Object size | 2,048 bytes | Tunable at format time (`--object-size`, max 3,052) |
-| Gross capacity | ~40 KB | Fits within YubiKey 5's 51,200-byte NVM pool |
+| Max object size | 3,063 bytes | Each PIV object is written at the size its content requires |
+| Gross capacity | up to ~61 KB | Shared with other PIV data; YubiKey 5 NVM pool is 51,200 bytes |
 | ECDH key slot | `0x82` | Tunable at format time (`--key-slot`) |
 
 ---

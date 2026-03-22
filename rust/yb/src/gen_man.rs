@@ -58,10 +58,11 @@ applet.  Each blob is encrypted with a per-device ECDH key before being
 written to the on-card PIV data objects; without the YubiKey the data
 cannot be decrypted.
 .PP
-The store is a flat sequence of fixed-size PIV objects provisioned by
-\fByb format\fR.  Large blobs are automatically split across multiple
-objects (chunk chaining); the number of objects and object size can be
-tuned at format time to trade capacity for per-object write speed.
+The store is a flat sequence of PIV objects provisioned by \fByb format\fR.
+Each object is written at exactly the size its content requires (9-byte
+sentinel when empty, up to 3,063 bytes when occupied).  Large blobs are
+automatically split across multiple objects (chunk chaining); the number of
+objects can be tuned at format time (\fB\-\-object\-count\fR).
 .PP
 All write operations (\fBformat\fR, \fBstore\fR, \fBremove\fR) require both the
 PIV PIN and the PIV management key.  Read operations (\fBfetch\fR,
@@ -82,7 +83,7 @@ Shell name (\fBbash\fR, \fBzsh\fR, \fBfish\fR).  When set, \fByb\fR emits shell
 completion code to stdout and exits.
 .SH EXAMPLES
 .PP
-Provision a new store (20 objects, default size) and generate an ECDH key:
+Provision a new store (20 objects) and generate an ECDH key:
 .RS
 .nf
 yb format \-\-generate
@@ -132,8 +133,9 @@ P-256 private key that never leaves the YubiKey hardware.
             r#".PP
 Prepare a YubiKey for use with \fByb\fR(1).
 \fBformat\fR writes a fresh store header and allocates \fICOUNT\fR PIV data
-objects of \fISIZE\fR bytes each.  Any existing \fByb\fR data on the card is
-erased.
+objects.  Any existing \fByb\fR data on the card is erased.
+Each object is written at exactly the size its content requires (9-byte
+sentinel for empty slots, up to 3,063 bytes for occupied slots).
 .PP
 By default \fBformat\fR expects an ECDH key to already exist in the chosen
 PIV slot (verified via its X.509 certificate).  Pass \fB\-\-generate\fR to
@@ -150,10 +152,10 @@ yb format \-\-generate
 .fi
 .RE
 .PP
-Compact store (10 objects, 1024 bytes each) in slot 0x83:
+Compact store (10 objects) in slot 0x83:
 .RS
 .nf
-yb format \-c 10 \-s 1024 \-k 0x83 \-\-generate
+yb format \-c 10 \-k 0x83 \-\-generate
 .fi
 .RE
 .PP
