@@ -17,16 +17,17 @@ interoperate with a yblob store without depending on the `yb` tool.
 ## 1. Overview
 
 A yblob store occupies a contiguous range of **PIV data objects** (retired key
-certificate slots).  Each PIV object holds exactly one **chunk** — a fixed-size
-binary record that is either empty or carries part of a blob's payload.
+certificate slots).  Each PIV object holds exactly one **chunk** — a
+variable-length binary record that is either empty or carries part of a blob's
+payload.
 
 Large blobs are split across multiple chunks, linked by index into a singly
-linked list.  All chunks in a store are the same fixed size, chosen at format
-time.
+linked list.  Each chunk is written at exactly the size its content requires
+(9 bytes for an empty sentinel, up to 3,063 bytes for an occupied chunk).
 
-The format is self-describing: every chunk encodes the total object count and
-object size, so any single object is sufficient to reconstruct the full store
-layout.
+The format is self-describing: every chunk encodes the total object count, so
+any single object is sufficient to reconstruct the full store layout.  Each
+object's actual byte length is inferred from the `GET DATA` response.
 
 ---
 
@@ -47,26 +48,37 @@ The default store uses 20 objects (`0x5F_0000`–`0x5F_0013`).
 
 ### Object size
 
-Every PIV object in a store is exactly `object_size` bytes.  Valid range:
-512–3,052 bytes.  The default is 2,048 bytes.
+Each PIV object is written at exactly the size its content requires:
 
-`object_size` is not encoded in the chunk header; it is inferred from the
-byte length returned by the PIV `GET DATA` command for object `0x5F_0000`.
+| Chunk type | Minimum | Maximum |
+|---|---|---|
+| Empty sentinel | 9 bytes | 9 bytes |
+| Head chunk | 23 + name_len + 1 bytes | 3,063 bytes |
+| Continuation chunk | 12 bytes | 3,063 bytes |
+
+The maximum of 3,063 bytes derives from the YubiKey APDU buffer (3,072 bytes)
+minus 9 bytes of BER-TLV framing overhead (`5C 03 …` + `53 82 HH LL`).
+
+Object sizes are not encoded in the chunk header; each object's length is
+inferred from the byte length returned by the PIV `GET DATA` command.
 
 ### YubiKey NVM budget
 
 The YubiKey 5 PIV application allocates 51,200 bytes of NVM shared across all
 data objects.  Standard-slot certificates (slots 9A, 9C, 9D, 9E, and the
 pre-loaded attestation certificate) typically consume 3–5 KB, leaving roughly
-46–48 KB for a yblob store.  The default 20 × 2,048 = 40,960 bytes fits
-comfortably within this budget.
+46–48 KB for a yblob store.  A freshly formatted 20-object store occupies only
+20 × 9 = 180 bytes of NVM; objects grow as blobs are written.  In practice,
+20 fully occupied objects consume up to 20 × 3,063 ≈ 60 KB — the object-count
+limit (20 slots) is reached well before the NVM pool is exhausted.
 
 ---
 
 ## 3. Chunk Layout
 
-All integers are **little-endian**.  Every chunk is exactly `object_size`
-bytes.  Fields are laid out at fixed offsets; unused trailing bytes are zero.
+All integers are **little-endian**.  Each chunk is written at the exact size
+its content requires (see section 2).  Fields are laid out at fixed offsets;
+no trailing padding bytes are written.
 
 ### 3.1 Common header (present in every chunk)
 
@@ -119,8 +131,10 @@ Payload bytes begin immediately after `BLOB_NAME`:
 Head payload capacity (bytes available for payload data in a head chunk):
 
 ```
-object_size − 0x17 − BLOB_NAME_LEN
+min(MAX_OBJECT_SIZE, needed) − 0x17 − BLOB_NAME_LEN
 ```
+
+where `MAX_OBJECT_SIZE = 3,063` and `needed` is the total content size.
 
 ### 3.4 Continuation chunk payload
 
@@ -130,7 +144,7 @@ begins at a fixed offset:
 ```
 Offset  Size  Field
 ──────  ────  ─────────────────────────────────────────────────────────────
-0x0B    …     Payload bytes (continuation payload capacity = object_size − 0x0B)
+0x0B    …     Payload bytes (continuation payload capacity = MAX_OBJECT_SIZE − 0x0B = 3,052 bytes)
 ```
 
 ---
@@ -226,7 +240,7 @@ The store age is the maximum `OBJECT_AGE` value across all chunks.
 | Property | Value |
 |----------|-------|
 | Magic | `0xF2ED5F0B` (LE u32 at offset 0x00) |
-| Object size range | 512–3,052 bytes |
+| Object size range | 9–3,063 bytes (written at exact content size; no padding) |
 | Object count range | 1–20 |
 | Object IDs | `0x5F_0000` + index (contiguous) |
 | Blob name encoding | UTF-8, no NUL bytes, no `/`, length 1–255 bytes |
@@ -264,7 +278,7 @@ yubikey_object_dump.bin: yblob object store image data
 
 ```
 1. Read PIV object 0x5F_0000.
-   object_size = len(response)          # e.g. 2048
+   object_size = len(response)          # 9 (empty) to 3063 (full)
 
 2. Parse common header:
    magic        = LE32(response[0:4])   # must be 0xF2ED5F0B
