@@ -229,7 +229,7 @@ fn test_fixture_with_key_loaded() {
 fn formatted_store(piv: &VirtualPiv) -> Store {
     let reader = piv.reader_name();
     let mgmt = "010203040506070801020304050607080102030405060708";
-    Store::format(&reader, piv, 8, 512, 0x82, Some(mgmt), None).unwrap()
+    Store::format(&reader, piv, 8, 0x82, Some(mgmt), None).unwrap()
 }
 
 /// store_blob + list_blobs + fetch_blob round-trip (unencrypted).

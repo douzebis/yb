@@ -165,6 +165,7 @@ let
       gh
       usbutils
       mandoc
+      poppler_utils
     ];
 
     shellHook = ''

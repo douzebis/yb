@@ -5,27 +5,28 @@
 //! Binary layout constants for PIV object storage.
 //!
 //! All multi-byte integers are little-endian unless noted.
-//! Every PIV object is exactly `object_size` bytes (512–3052).
+//! Objects are written at the minimum size required for their content;
+//! the PIV `GET DATA` response length tells the reader how large each
+//! object is.
 
 /// Magic marker at offset 0x00 (little-endian u32).
 pub const YBLOB_MAGIC: u32 = 0xF2ED5F0B;
 
-/// Minimum / maximum PIV object size in bytes.
-pub const OBJECT_MIN_SIZE: usize = 512;
-pub const OBJECT_MAX_SIZE: usize = 3_052;
+/// Minimum valid object size: the 9-byte empty-slot sentinel.
+pub const OBJECT_MIN_SIZE: usize = 9;
+
+/// Maximum PIV object payload in bytes.
+///
+/// The YubiKey firmware APDU buffer is 3,072 bytes; the TLV framing overhead
+/// is 9 bytes (`5C 03 XX XX XX` + `53 82 HH LL`), leaving 3,063 bytes for
+/// the payload.  Empirically confirmed on firmware 5.4.3.
+pub const OBJECT_MAX_SIZE: usize = 3_063;
+
+/// Total NVM budget of the YubiKey 5 PIV application (bytes).
+pub const YUBIKEY_NVM_BYTES: usize = 51_200;
 
 /// Default number of PIV objects allocated per store.
-///
-/// 20 objects × 2,048 bytes = 40,960 bytes gross, leaving ~10 KB of the
-/// YubiKey 5's 51,200-byte NVM pool for standard-slot certificates.
 pub const DEFAULT_OBJECT_COUNT: u8 = 20;
-
-/// Default PIV object size.
-///
-/// 2,048 bytes balances fragmentation (avg ~1,024 B wasted per blob's last
-/// chunk) against write amplification (an 8 KB blob needs 5 PIV writes
-/// instead of 3 at the 3,052-byte maximum).
-pub const DEFAULT_OBJECT_SIZE: usize = 2_048;
 
 /// First PIV object data-object ID (object index 0).
 pub const OBJECT_ID_ZERO: u32 = 0x5f_0000;
