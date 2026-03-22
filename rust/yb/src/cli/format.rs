@@ -7,10 +7,7 @@ use anyhow::{bail, Result};
 use clap::Args;
 use yb_core::{
     store::{
-        constants::{
-            DEFAULT_OBJECT_COUNT, DEFAULT_OBJECT_SIZE, DEFAULT_SUBJECT, OBJECT_MAX_SIZE,
-            OBJECT_MIN_SIZE,
-        },
+        constants::{DEFAULT_OBJECT_COUNT, DEFAULT_SUBJECT},
         Store,
     },
     Context,
@@ -21,10 +18,6 @@ pub struct FormatArgs {
     /// Number of PIV objects to allocate (1–20).
     #[arg(short = 'c', long = "object-count", default_value_t = DEFAULT_OBJECT_COUNT)]
     pub object_count: u8,
-
-    /// Size of each PIV object in bytes (512–3052).
-    #[arg(short = 's', long = "object-size", default_value_t = DEFAULT_OBJECT_SIZE)]
-    pub object_size: usize,
 
     /// PIV slot for the ECDH encryption key (decimal or 0x-prefixed hex, e.g. 0x82).
     #[arg(short = 'k', long = "key-slot", default_value = "0x82")]
@@ -42,9 +35,6 @@ pub struct FormatArgs {
 pub fn run(ctx: &Context, args: &FormatArgs) -> Result<()> {
     if !(1..=20).contains(&args.object_count) {
         bail!("object-count must be 1–20");
-    }
-    if !(OBJECT_MIN_SIZE..=OBJECT_MAX_SIZE).contains(&args.object_size) {
-        bail!("object-size must be {OBJECT_MIN_SIZE}–{OBJECT_MAX_SIZE}");
     }
 
     let slot = parse_slot(&args.key_slot)?;
@@ -69,7 +59,6 @@ pub fn run(ctx: &Context, args: &FormatArgs) -> Result<()> {
         &ctx.reader,
         ctx.piv.as_ref(),
         args.object_count,
-        args.object_size,
         slot,
         mgmt_key.as_deref(),
         pin.as_deref(),
@@ -77,8 +66,8 @@ pub fn run(ctx: &Context, args: &FormatArgs) -> Result<()> {
 
     if !ctx.quiet {
         eprintln!(
-            "Store formatted: {} object(s) × {} bytes, key slot 0x{slot:02x}",
-            args.object_count, args.object_size
+            "Store formatted: {} object(s), key slot 0x{slot:02x}",
+            args.object_count
         );
     }
     Ok(())

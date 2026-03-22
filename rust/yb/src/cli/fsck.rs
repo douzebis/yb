@@ -5,7 +5,13 @@
 
 use anyhow::Result;
 use clap::Args;
-use yb_core::{store::Store, Context};
+use yb_core::{
+    store::{
+        constants::{OBJECT_MAX_SIZE, YUBIKEY_NVM_BYTES},
+        Store,
+    },
+    Context,
+};
 
 #[derive(Args, Debug)]
 pub struct FsckArgs {
@@ -50,25 +56,21 @@ pub fn run(ctx: &Context, args: &FsckArgs) -> Result<()> {
     let stored = store.objects.iter().filter(|o| o.is_head()).count();
     let free = store.free_count();
 
-    // Compute the maximum plaintext blob that would fit in the free space.
-    // Uses name_len=0 (best case) so this is an upper bound; actual capacity
-    // shrinks by the blob's name length.
-    let max_next_blob = if free == 0 {
-        0
-    } else {
-        use yb_core::store::Object;
-        let head_cap = Object::head_payload_capacity(store.object_size, 0);
-        let cont_cap = Object::continuation_payload_capacity(store.object_size);
-        head_cap + (free - 1) * cont_cap
-    };
+    // Conservative free-byte estimate (spec 0010 §3.5):
+    //   free_bytes = min(free_slots × MAX_OBJECT_SIZE, nvm_remaining)
+    // where nvm_remaining = YUBIKEY_NVM_BYTES − sum of GET DATA response
+    // lengths for all objects yb manages.
+    let nvm_used: usize = store.objects.iter().map(|o| o.object_size).sum();
+    let nvm_remaining = YUBIKEY_NVM_BYTES.saturating_sub(nvm_used);
+    let free_bytes = (free * OBJECT_MAX_SIZE).min(nvm_remaining);
 
     println!(
-        "Store: {} objects × {} bytes, slot 0x{:02x}, age {}",
-        store.object_count, store.object_size, store.store_key_slot, store.store_age
+        "Store: {} objects, slot 0x{:02x}, age {}",
+        store.object_count, store.store_key_slot, store.store_age
     );
     println!(
         "Blobs: {} stored, {} objects free (~{} bytes available)",
-        stored, free, max_next_blob
+        stored, free, free_bytes
     );
 
     if warnings.is_empty() {
