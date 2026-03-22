@@ -250,36 +250,28 @@ YubiKey GENERAL AUTHENTICATE semantics.
 
 ## 5. Store Binary Format
 
-All integers are little-endian.  Every PIV object is exactly
-`object_size` bytes (default: 2048, range: 512–3052).  Up to 20 objects
-are addressable; default is 20.
+All integers are little-endian.  Each PIV object is written at exactly the
+size its content requires (9-byte sentinel for empty slots, up to 3,063 bytes
+for occupied slots).  Up to 20 objects are addressable; default is 20.
 
 Object IDs run from `0x5F_0000` (index 0) to `0x5F_0013` (index 19)
 for a 20-object default store.
 
-**Default sizing rationale.**  The YubiKey 5 PIV NVM pool is 51,200 bytes,
-shared across all data objects.  Standard-slot certificates (9A, 9C, 9D,
-9E, attestation) typically consume 3–5 KB, leaving roughly 46–48 KB for
-the yb store.  Blobs in practice range from small secrets (tokens, keys,
-~100–500 B) through medium (TLS certs, ~1–2 KB) to large (GPG exports,
-PKCS#12 bundles, ~4–8 KB).
+**Sizing rationale.**  The YubiKey 5 PIV NVM pool is 51,200 bytes, shared
+across all data objects.  Standard-slot certificates (9A, 9C, 9D, 9E,
+attestation) typically consume 3–5 KB, leaving roughly 46–48 KB for the yb
+store.
 
-Choosing 20 × 2,048 bytes (40,960 bytes gross) balances three competing
-forces:
+Each PIV object is written at the minimum size needed to hold its content
+(spec 0010 — dynamic object sizing).  `MAX_OBJECT_SIZE = 3,063` bytes is the
+physical maximum, derived from the YubiKey APDU buffer (3,072 bytes) minus
+9 bytes of BER-TLV framing.  An empty slot occupies only 9 bytes (sentinel).
+NVM is consumed incrementally as blobs are written; a freshly formatted
+20-object store uses just 20 × 9 = 180 bytes.
 
-- **Object count** — 20 slots accommodate a realistic mix without the
-  store filling up prematurely; the previous default of 12 was tight for
-  users storing several large blobs.
-- **Fragmentation** — each blob wastes on average half an object in its
-  last (partially filled) chunk.  At 2,048 bytes that waste is ~1,024 B
-  per blob vs. ~1,526 B at 3,052; meaningful for stores with many blobs.
-- **Write amplification** — each PIV write is a separate GENERAL
-  AUTHENTICATE + APDU round-trip.  Smaller objects increase chunk counts
-  for large blobs; 2,048 keeps large-blob chunk counts reasonable (an
-  8 KB blob needs 5 chunks vs. 3 at 3,052).
-
-20 × 2,048 = 40,960 bytes fits comfortably within the 51,200-byte pool
-while leaving ~10 KB for standard-slot certificates.
+NVM fragmentation is empirically zero with this scheme: each blob's last
+chunk is written at exactly `blob_size mod chunk_capacity` bytes rather than
+being padded to a fixed size (see `docs/yubikey-nvm-internals.md`).
 
 ### Object layout
 
@@ -360,7 +352,8 @@ panicking.
 `piv.write_object(...)` for each.  Progress is shown via an `indicatif`
 progress bar (`Writing objects: [=====>----] 3/7`) written to stderr;
 suppressed when `ctx.quiet` is true.
-Each object is serialized to exactly `object_size` bytes by `Object::to_bytes()`.
+Each object is serialized by `Object::to_bytes()` to the minimum size its
+content requires (9–3,063 bytes); no trailing padding is written.
 
 ---
 
@@ -439,9 +432,9 @@ Signature: `store_blob(store, piv, name, payload, encryption, compression, manag
 11. Fill continuation objects (payload only, no blob metadata).
 12. `store.sync(piv, management_key, pin)`.
 
-**Head payload capacity:** `object_size - (0x17 + name_len_bytes)`
+**Head payload capacity:** `MAX_OBJECT_SIZE - (0x17 + name_len_bytes)` = up to `3,063 - 23 - name_len` bytes
 
-**Continuation payload capacity:** `object_size - 0x0B`
+**Continuation payload capacity:** `MAX_OBJECT_SIZE - 0x0B` = 3,052 bytes
 
 ### `fetch_blob`
 
@@ -509,7 +502,7 @@ fixture's reader list when set).
 
 | Command | Alias | Key args | What it does |
 |---|---|---|---|
-| `format` | — | `--object-count` (def 20), `--object-size` (def 2048), `--key-slot` (def `0x82`), `-g/--generate`, `--subject` | Provisions PIV objects; optionally generates ECDH key |
+| `format` | — | `--object-count` (def 20), `--key-slot` (def `0x82`), `-g/--generate`, `--subject` | Provisions PIV objects; optionally generates ECDH key |
 | `store` | — | `[files…]` (stdin if empty), `-n/--name`, `-e/--encrypted`, `-u/--unencrypted`, `--no-compress` | Stores one or more blobs (compressed by default) |
 | `fetch` | — | `[patterns…]` (glob), `-p/--stdout`, `-o/--output`, `-O/--output-dir` | Retrieves blob(s); decompresses transparently |
 | `list` | `ls` | `[pattern]` (glob), `-l/--long`, `-1`, `-t/--sort-time`, `-r/--reverse` | Lists blobs |
@@ -726,9 +719,10 @@ wall-clock time but is not used for ordering.
 to the YubiKey only when `Store::sync` is called.  Progress is shown
 via an `indicatif` bar; suppressed when `--quiet` / `ctx.quiet` is set.
 
-**Object-count and object-size are stored in every object.** This makes
-any single object self-describing enough to reconstruct the full store
-layout, which is important for `fsck`.
+**Object count is stored in every object.** This makes any single object
+self-describing enough to reconstruct the full store layout, which is
+important for `fsck`.  Object sizes are inferred per-object from the
+`GET DATA` response length.
 
 **Blob name rules.** Only `\0` (C string terminator) and `/` (path
 separator convention) are forbidden.  All other UTF-8 is valid, including
@@ -774,26 +768,22 @@ by `yb format --generate`.
 
 ---
 
-## 14. Future Opportunities
+## 14. Implemented Design Decisions
 
-### Dynamic PIV object sizing
+### Dynamic PIV object sizing (spec 0010)
 
 See **[spec 0010](../docs/specs/0010-dynamic-object-sizing.md)** for the full
-specification.
+specification (status: implemented 2026-03-22).
 
-The current store writes every PIV object at a fixed `object_size`, padding
-the last chunk of every blob with zeros.  Average waste: `object_size / 2`
-bytes per blob.
+Each PIV object is written at **exactly the size its content requires** — no
+padding.  Empty reserved slots are 9-byte sentinels.
+`MAX_OBJECT_SIZE = 3,063` (the PIV slot maximum) is a build-time constant;
+`--object-size` has been removed from `yb format`.
 
-The proposed solution writes each object at **exactly the size its content
-requires** — no padding.  Empty reserved slots become 9-byte sentinels.
-`MAX_OBJECT_SIZE = 3052` (the PIV slot maximum) replaces `object_size` as a
-build-time constant; `--object-size` is removed from `yb format`.
-
-**Backward compatibility** is inherent in the existing design: `from_device`
-already infers each object's size from the `GET DATA` response length.  A
-uniform-size store is just a special case where all responses happen to be
-the same length.  No header changes are needed.
+**Backward compatibility** is inherent: `from_device` infers each object's
+size from the `GET DATA` response length.  A legacy uniform-size store is
+just a special case where all responses are the same length.  No header
+changes were needed.
 
 **Capacity reporting** splits into two independent resources:
 

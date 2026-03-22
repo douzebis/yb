@@ -6,29 +6,41 @@ SPDX-License-Identifier: MIT
 
 # 0016 — Pre-Allocated Tiered Store
 
-**Status:** draft
+**Status:** suspended
 **App:** yb
 **Implemented in:** <!-- YYYY-MM-DD, fill after implementation -->
 
-## Problem
+## Status note
+
+This spec is suspended.  The fragmentation problem that motivated it was based
+on a misread of the `frag-random` experiment: the apparent −13,601 byte loss
+was an accounting bug (residual sizes of stressed slots 14–19 were not counted
+in the baseline).  After correcting the accounting, the loss is zero.
+Subsequent experiments (`frag-shrink1`, `frag-delete`, `shrink0`+`free-nvm`,
+and a full instrumented `self-test` on a real YubiKey 5.4.3) all confirm zero
+fragmentation.  See `docs/yubikey-nvm-internals.md` for the full analysis.
+
+Spec 0010 (dynamic object sizing) is therefore correct and is the active
+target.  This spec is retained for reference only.
+
+## Problem (original, now known to be based on a false premise)
 
 Spec 0010 introduced dynamic object sizing: each PIV object is written at the
 minimum size required for its content.  After implementation and empirical
-testing on a YubiKey 5.4.3, this approach was found to cause severe and
+testing on a YubiKey 5.4.3, this approach was believed to cause severe and
 permanent NVM fragmentation (see spec 0010 — Why this approach was abandoned).
 
-In summary: the YubiKey 5 PIV applet uses dynamic NVM allocation.  Writing a
-3,052-byte object and then overwriting it with a 9-byte sentinel permanently
-wastes ~3,043 bytes of NVM.  After 100 random-size writes across 20 slots,
-27% of total capacity (13,601 of 50,225 bytes) was permanently lost.
+In summary: the YubiKey 5 PIV applet was believed to use dynamic NVM
+allocation such that writing a 3,063-byte object and then overwriting it with a
+9-byte sentinel permanently wastes ~3,054 bytes of NVM.  This premise is now
+known to be false — the YubiKey does not fragment NVM in practice.
 
-The underlying constraint is: **a PIV slot's NVM footprint is fixed at the
-size of its largest-ever write**.  Overwriting with a smaller value leaves
-dead NVM that is only reclaimed by a full PIV application reset.
+The underlying constraint that was hypothesized: **a PIV slot's NVM footprint
+is fixed at the size of its largest-ever write**.  This is not supported by
+experiment.
 
-The correct approach is to pre-allocate every slot at format time at a fixed
-size and always overwrite at exactly that size.  This reduces the firmware's
-NVM allocator to a static map — no fragmentation is possible.
+The approach that was proposed: pre-allocate every slot at format time at a
+fixed size and always overwrite at exactly that size.  This is unnecessary.
 
 ## Background — YubiKey NVM facts (measured)
 
@@ -37,7 +49,7 @@ NVM allocator to a static map — no fragmentation is possible.
 | Gross NVM (Yubico spec) | 51,200 bytes |
 | PIV applet overhead | 975 bytes |
 | Available for data objects | **50,225 bytes** |
-| Maximum single object size | 3,052 bytes (PIV APDU limit) |
+| Maximum single object payload | 3,063 bytes (YubiKey firmware APDU buffer 3,072 − 9 bytes TLV overhead) |
 | Addressable object IDs | 256 (`0x5F0000`–`0x5F00FF`) |
 
 The PIV applet overhead (975 bytes) is consumed by: management key (24 bytes

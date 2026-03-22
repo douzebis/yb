@@ -6,10 +6,9 @@ SPDX-License-Identifier: MIT
 
 # 0010 — Dynamic PIV Object Sizing
 
-**Status:** abandoned
+**Status:** implemented
 **App:** yb
-**Implemented in:** 2026-03-21
-**Abandoned:** 2026-03-22 — superseded by [spec 0016](0016-pre-allocated-tiered-store.md)
+**Implemented in:** 2026-03-22
 
 ## Problem
 
@@ -52,15 +51,16 @@ Each PIV object is written at the minimum size that holds its content:
 - **Empty (reserved) slot:** 9 bytes — the common header through `OBJECT_AGE`
   inclusive, with `OBJECT_AGE = 0`
 
-The maximum object size is capped at `MAX_OBJECT_SIZE = 3052` bytes (the PIV
-slot maximum).  This constant replaces the per-store `object_size` parameter
-and requires no configuration.
+The maximum object size is capped at `MAX_OBJECT_SIZE = 3063` bytes (the
+YubiKey firmware APDU buffer limit of 3,072 bytes minus 9 bytes of TLV
+framing overhead; empirically confirmed on firmware 5.4.3).  This constant
+replaces the per-store `object_size` parameter and requires no configuration.
 
 ### 3.2 Object sizing at read time
 
 `from_device` infers each object's size from the byte length returned by the
 PIV `GET DATA` command, exactly as today.  No header change is required.
-Objects of any size from 9 bytes to `MAX_OBJECT_SIZE` bytes are valid.
+Objects of any size from 9 bytes to `MAX_OBJECT_SIZE` (3,063) bytes are valid.
 
 Backward compatibility follows directly: a uniform-size store is a special
 case where all `GET DATA` responses happen to be the same length.
@@ -125,73 +125,55 @@ The format specification document (`docs/YBLOB_FORMAT.md`) must be updated to:
 - Remove the uniform-size assumption from section 2.
 - State that `object_size` is inferred per-object from `GET DATA` response length.
 - Add the 9-byte empty-slot sentinel layout.
-- Update section 7 (invariants) to reflect the new size range (9–3,052 bytes).
+- Update section 7 (invariants) to reflect the new size range (9–3,063 bytes).
 
-## Why this approach was abandoned — NVM fragmentation
+## NVM fragmentation — investigation and conclusion
 
-This spec was implemented and then reversed after empirical testing revealed a
-fundamental problem with dynamic object sizing on the YubiKey 5 PIV applet.
+After initial implementation, concerns arose about NVM fragmentation on the
+YubiKey 5.  An extensive empirical investigation was conducted using
+`rust/yb-core/src/bin/nvm_frag_test.rs` on firmware 5.4.3.  The full research
+notes are in `docs/yubikey-nvm-internals.md`.  Summary of findings:
 
-### The fragmentation problem
+### What was measured
 
-The YubiKey 5 PIV applet uses **dynamic NVM allocation** for data objects.
-When a `PUT DATA` command writes an object of size S, the firmware allocates
-exactly S bytes of NVM for that object.  When the same object is later
-overwritten at a smaller size S' < S, the firmware allocates a new S'-byte
-region and marks the original S-byte region as dead.  **The dead region cannot
-be reclaimed** without a full PIV application reset (`ykman piv reset`).
+- **NVM capacity after PIV reset:** 50,225 bytes available for data objects
+  (PIV applet overhead: 975 bytes; gross NVM per Yubico spec: 51,200 bytes).
+- **Maximum single object payload:** 3,063 bytes (firmware APDU buffer 3,072 −
+  9 bytes TLV framing; empirically confirmed, not firmware-specific).
+- **Per-object NVM overhead:** ~22 bytes per object (firmware-internal metadata
+  not returned by GET DATA; undocumented, inferred from experiment).
 
-This means that every time `yb` writes a blob that is smaller than the
-previous version of that blob's chunk, the freed NVM is permanently wasted
-for the lifetime of the store.  Repeated blob updates — which are the normal
-`yb set` use case — cause the store to accumulate dead regions that
-progressively reduce the available capacity.
+### What was initially misread
 
-### Experimental evidence
+The `frag-random` experiment (100 random-size writes across 20 slots, then
+fill MAX) appeared to show a permanent loss of 13,601 bytes (27% of capacity).
+This was an **accounting bug**: the residual sizes of stressed slots 14–19
+were not included in the baseline calculation.  After correcting the
+accounting, the unaccounted difference is zero — entirely explained by the
+partial last slot in the binary-search probe.
 
-An NVM fragmentation test program was written and run on a YubiKey 5.4.3:
+### Correct conclusion
 
-- **`rust/yb-core/src/bin/nvm_frag_test.rs`** — standalone binary that
-  measures capacity and applies a fragmentation stress test.
+The YubiKey 5 PIV applet **does not fragment NVM** in practice.  All
+experiments confirm this:
 
-**Experiment 1 — NVM capacity probe** confirmed:
-- Total NVM available for data objects: **50,225 bytes** (PIV applet overhead:
-  975 bytes; gross NVM per Yubico spec: 51,200 bytes).
-- The 975-byte overhead is consumed by the PIV applet's own state: management
-  key (24 bytes 3DES), PIN/PUK with retry counters, default CHUID and CCC
-  objects pre-written at reset, key-type metadata for certificate slots
-  9A/9C/9D/9E, and the internal object directory.
+| Experiment | Result |
+|---|---|
+| `frag-random` (corrected accounting) | Zero loss |
+| `frag-shrink1` (stress → shrink all to 1 byte → fill MAX) | Full capacity recovered |
+| `frag-delete` (stress → delete all → fill MAX) | Full capacity recovered |
+| `shrink0` + `free-nvm` | Full capacity transferred with no loss |
+| `self-test` (200 ops, real YubiKey, NVM instrumented) | +0 bytes delta after cleanup |
 
-**Experiment 2 — random-size fragmentation stress** confirmed permanent
-fragmentation:
-- After 100 random-size writes across 20 slots (random sizes 1–3052 bytes,
-  failures ignored), the store could only hold **36,624 bytes** of
-  MAX_OBJECT_SIZE objects — a permanent loss of **13,601 bytes (27%)** of
-  total capacity.
-- Fragmentation is monotonically increasing: every large→small→large cycle
-  on a slot consumes additional NVM.
+The firmware likely uses log-structured storage or a heap with garbage
+collection — it does not leave dead regions when objects are shrunk or deleted.
 
-### Conclusion
-
-Dynamic object sizing (writing each object at its minimum required size) is
-unsafe for a long-lived `yb` store.  The correct approach is to **pre-allocate
-each slot at a fixed size at `yb format` time** and always overwrite at
-exactly that size, so the firmware's NVM allocator sees each slot as a
-fixed-size region and can reuse it in-place.
-
-This is the approach specified in **[spec 0016](0016-pre-allocated-tiered-store.md)**.
-
-### Disposition of the implementation
-
-The code changes from this spec (dynamic `to_bytes`, 9-byte sentinel, payload
-trimming in `from_bytes`, removal of `--object-size`) remain in place as
-infrastructure.  Spec 0016 builds on them: it reintroduces fixed-size writes
-per slot, but the size is now per-slot (set at format time from a tiered table)
-rather than a single global `object_size` parameter.
+Dynamic object sizing is therefore safe.  Spec 0016 (pre-allocated tiered
+store) was based on the false fragmentation premise and has been suspended.
 
 ## Open questions
 
-*(All resolved — see spec 0016.)*
+*(Resolved — dynamic sizing is safe; spec 0016 suspended.)*
 
 ## References
 
@@ -200,6 +182,6 @@ rather than a single global `object_size` parameter.
 - [`rust/yb-core/src/store/constants.rs`](../../rust/yb-core/src/store/constants.rs) — current size constants
 - [`rust/yb-core/src/store/mod.rs`](../../rust/yb-core/src/store/mod.rs) — `from_device`, `Store::format`, `Object::to_bytes`
 - [`rust/yb-core/src/bin/nvm_frag_test.rs`](../../rust/yb-core/src/bin/nvm_frag_test.rs) — NVM fragmentation test program
-- [spec 0016](0016-pre-allocated-tiered-store.md) — superseding spec: pre-allocated tiered store
+- [`docs/yubikey-nvm-internals.md`](../../docs/yubikey-nvm-internals.md) — full NVM research notes
+- [spec 0016](0016-pre-allocated-tiered-store.md) — suspended spec (fragmentation premise was false)
 - YubiKey 5 NVM budget: 51,200 bytes gross; 50,225 bytes available for data objects (measured)
-- jemalloc size-class design: Evans 2006/2015 — 4 sub-bins per doubling, ~20% worst-case padding

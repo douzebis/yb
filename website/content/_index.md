@@ -31,10 +31,10 @@ Documentation for the `yb` command-line tool.
 | [0007](specs/0007-cli-improvements) | CLI Improvements | draft |
 | [0008](specs/0008-cli-tests) | CLI integration tests | implemented |
 | [0009](specs/0009-cli-subprocess-tests) | CLI subprocess tests | implemented |
-| [0010](specs/0010-dynamic-object-sizing) | Dynamic PIV Object Sizing | abandoned |
+| [0010](specs/0010-dynamic-object-sizing) | Dynamic PIV Object Sizing | implemented |
 | [0011](specs/0011-refactor-and-test-coverage) | Refactoring Opportunities and Test Coverage Gaps | implemented |
 | [0012](specs/0012-transparent-compression) | Transparent Compression | implemented |
 | [0013](specs/0013-interactive-device-selection) | Interactive Device Selection with LED Feedback | implemented |
 | [0014](specs/0014-operation-generator) | ToyFilesystem and OperationGenerator Test Primitives | implemented |
 | [0015](specs/0015-self-test-command) | `yb self-test` Command | implemented |
-| [0016](specs/0016-pre-allocated-tiered-store) | Pre-Allocated Tiered Store | draft |
+| [0016](specs/0016-pre-allocated-tiered-store) | Pre-Allocated Tiered Store | suspended |
