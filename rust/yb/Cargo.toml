@@ -5,7 +5,7 @@
 
 [package]
 name        = "yb"
-version     = "0.2.0"
+version     = "0.3.0"
 edition     = "2021"
 license     = "MIT"
 description = "Secure blob storage on a YubiKey"
@@ -31,7 +31,7 @@ path = "src/lib.rs"
 self-test = ["yb-core/test-utils"]
 
 [dependencies]
-yb-core       = { path = "../yb-core", version = "0.2.0", features = ["chrono", "virtual-piv"] }
+yb-core       = { path = "../yb-core", version = "0.3.0", features = ["chrono", "virtual-piv"] }
 clap          = { version = "4", features = ["derive", "env"] }
 clap_complete = { version = "4", features = ["unstable-dynamic"] }
 crossterm     = "0.27"
@@ -43,7 +43,7 @@ rpassword     = "7"
 atty          = "0.2"
 clap_mangen   = "0.2"
 [dev-dependencies]
-yb-core  = { path = "../yb-core", version = "0.2.0", features = ["chrono", "virtual-piv"] }
+yb-core  = { path = "../yb-core", version = "0.3.0", features = ["chrono", "virtual-piv"] }
 tempfile = "3"
 
 
