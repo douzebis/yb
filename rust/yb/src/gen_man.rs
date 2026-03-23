@@ -64,9 +64,10 @@ automatically split across multiple objects (chunk chaining); the number of
 objects can be tuned at format time (\fB\-\-object\-count\fR).
 .PP
 All write operations (\fBformat\fR, \fBstore\fR, \fBremove\fR) require both the
-PIV PIN and the PIV management key.  Read operations (\fBfetch\fR,
-\fBlist\fR, \fBfsck\fR) that decrypt data require the PIN; purely
-structural reads do not."#,
+PIV PIN and the PIV management key.  \fBfetch\fR requires the PIN for
+encrypted blobs.  \fBlist\fR and \fBfsck\fR never require a PIN — they
+verify blob integrity using only the public key from the store's
+X.509 certificate."#,
             r#".SH ENVIRONMENT
 .TP
 \fBYB_PIN\fR
@@ -82,7 +83,7 @@ Shell name (\fBbash\fR, \fBzsh\fR, \fBfish\fR).  When set, \fByb\fR emits shell
 completion code to stdout and exits.
 .SH EXAMPLES
 .PP
-Provision a new store (20 objects) and generate an ECDH key:
+Provision a new store (32 objects) and generate an ECDH key:
 .RS
 .nf
 yb format \-\-generate
@@ -280,7 +281,12 @@ An optional glob pattern filters the output.
 .PP
 The default output is one name per line, suitable for scripting.
 \fB\-\-long\fR adds an encryption flag, chunk count, modification time,
-and plaintext size."#,
+and plaintext size.
+.PP
+Every blob's ECDSA signature is verified automatically (no PIN required).
+If a blob is CORRUPTED the word \fBCORRUPTED\fR is appended to its output
+line and \fByb list\fR exits with status 1.  Unverified blobs (older
+yb0/yb1 format without a signature trailer) are listed normally."#,
             r#".SH LONG FORMAT
 In long format each line contains:
 .TP
@@ -297,7 +303,10 @@ Size
 Plaintext size in bytes.
 .TP
 Name
-Blob name.
+Blob name, followed by \fBCORRUPTED\fR if signature verification failed.
+Names containing characters outside the portable set
+\fBa\-z A\-Z 0\-9 . \- _ + , / :\fR are wrapped in POSIX single quotes
+so the marker is never ambiguous.
 .SH EXAMPLES
 .PP
 List all blobs:
@@ -320,8 +329,15 @@ Filter by glob:
 yb list '*.key'
 .fi
 .RE
+.PP
+Alert on corruption (for scripts):
+.RS
+.nf
+yb list || echo "WARNING: store corruption detected" >&2
+.fi
+.RE
 .SH SEE ALSO
-\fByb\fR(1), \fByb\-fetch\fR(1), \fByb\-remove\fR(1)"#,
+\fByb\fR(1), \fByb\-fsck\fR(1), \fByb\-fetch\fR(1), \fByb\-remove\fR(1)"#,
         ),
 
         "yb-remove" => (
@@ -361,41 +377,71 @@ yb remove \-\-ignore\-missing maybe.key
         "yb-fsck" => (
             r#".PP
 Read the store header and all PIV objects without decrypting any blob,
-then print a summary and check for structural anomalies.
+then verify every blob's ECDSA signature and print an integrity summary.
+No PIN is required.
 .PP
-\fBfsck\fR exits with status 0 if the store is clean and 1 if any warning
-is detected (duplicate blob names, orphaned continuation chunks).  It
-does not repair damage; use \fByb remove\fR to clean up corrupt blobs."#,
+\fBfsck\fR exits with status 0 if no blob is CORRUPTED and 1 if any
+blob's signature fails verification or the stored payload is truncated.
+It does not repair damage; use \fByb remove\fR to clean up corrupt blobs."#,
             r#".SH OUTPUT
-Without \fB\-\-verbose\fR, two summary lines are printed:
+Default output (no flags):
 .PP
 .RS
 .nf
-Store: <n> objects x <size> bytes, slot 0x<xx>, age <n>
-Blobs: <n> stored, <n> objects free (~<n> bytes available)
-Status: OK   (or a count of warnings)
+Store: <n> objects, slot 0x<xx>, age <n>
+Blobs: <n> stored, <n> objects free (~<n> bytes used by store)
+
+  blob-name-1          VERIFIED
+  blob-name-2          UNVERIFIED
+  old-blob             CORRUPTED
+
+Integrity: <n> verified, <n> unverified, <n> corrupted
 .fi
 .RE
 .PP
-With \fB\-\-verbose\fR, a per-object dump is prepended showing raw metadata
-fields for each PIV object (age, chunk position, blob name, size, etc.).
+Possible per-blob verdicts:
+.TP
+\fBVERIFIED\fR
+ECDSA signature is present and cryptographically valid.
+.TP
+\fBUNVERIFIED\fR
+No signature trailer (older yb0/yb1 format) or certificate unreadable.
+.TP
+\fBCORRUPTED\fR
+Signature present but verification failed, or payload is truncated.
+.PP
+With \fB\-\-nvm\fR, an additional NVM breakdown line is printed after the
+integrity summary, showing bytes attributed to the yb store, to other
+PIV objects, and the estimated free space.  This issues approximately
+290 read-only APDUs and may take a few seconds on real hardware.
+.PP
+With \fB\-\-verbose\fR, structural warnings (orphaned continuation chunks,
+duplicate blob names) are printed after the integrity summary, followed
+by a raw per-object dump showing all metadata fields.
 .SH EXAMPLES
 .PP
-Quick sanity check:
+Integrity audit:
 .RS
 .nf
 yb fsck
 .fi
 .RE
 .PP
-Full object dump:
+Audit with NVM breakdown:
+.RS
+.nf
+yb fsck \-\-nvm
+.fi
+.RE
+.PP
+Full object dump for debugging:
 .RS
 .nf
 yb fsck \-\-verbose
 .fi
 .RE
 .SH SEE ALSO
-\fByb\fR(1), \fByb\-format\fR(1), \fByb\-remove\fR(1)"#,
+\fByb\fR(1), \fByb\-list\fR(1), \fByb\-format\fR(1), \fByb\-remove\fR(1)"#,
         ),
 
         "yb-select" => (

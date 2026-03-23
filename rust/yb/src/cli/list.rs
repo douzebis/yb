@@ -7,9 +7,9 @@ use chrono::{DateTime, Duration, Local, Utc};
 use clap::Args;
 use clap_complete::engine::ArgValueCompleter;
 use globset::GlobBuilder;
-use yb_core::orchestrator;
-use yb_core::{store::Store, Context};
+use yb_core::{orchestrator, parse_ec_public_key_from_cert_der, store::Store, Context};
 
+use crate::cli::util::{check_blob_signature, quote_name, SigVerdict};
 use crate::complete::complete_blob_names;
 
 #[derive(Args, Debug)]
@@ -48,6 +48,27 @@ pub fn run(ctx: &Context, args: &ListArgs) -> Result<()> {
     };
 
     let store = Store::from_device(&ctx.reader, ctx.piv.as_ref())?;
+
+    // Fetch verifying key from the store's key slot certificate — no PIN needed.
+    let verifying_key = ctx
+        .piv
+        .read_certificate(&ctx.reader, store.store_key_slot)
+        .ok()
+        .and_then(|cert_der| parse_ec_public_key_from_cert_der(&cert_der).ok())
+        .map(|pk| {
+            use p256::ecdsa::VerifyingKey;
+            VerifyingKey::from(&pk)
+        });
+
+    // Build a verdict map keyed by blob name.
+    let heads: Vec<_> = store.objects.iter().filter(|o| o.is_head()).collect();
+    let mut verdict_map: std::collections::HashMap<&str, SigVerdict> =
+        std::collections::HashMap::new();
+    for head in &heads {
+        let v = check_blob_signature(head, &store, verifying_key.as_ref());
+        verdict_map.insert(head.blob_name.as_str(), v);
+    }
+
     let mut blobs = orchestrator::list_blobs(&store);
 
     // Filter.
@@ -65,17 +86,31 @@ pub fn run(ctx: &Context, args: &ListArgs) -> Result<()> {
         blobs.reverse();
     }
 
+    let mut any_corrupted = false;
     for b in &blobs {
+        let corrupted = verdict_map
+            .get(b.name.as_str())
+            .map(|v| *v == SigVerdict::Corrupted)
+            .unwrap_or(false);
+        if corrupted {
+            any_corrupted = true;
+        }
+        let displayed_name = quote_name(&b.name);
+        let suffix = if corrupted { "  CORRUPTED" } else { "" };
         if args.long {
             let enc_flag = if b.is_encrypted { '-' } else { 'P' };
             let date = format_mtime(b.mtime);
             println!(
-                "{enc_flag} {:2}  {}  {:6}  {}",
-                b.chunk_count, date, b.plain_size, b.name
+                "{enc_flag} {:2}  {}  {:6}  {displayed_name}{suffix}",
+                b.chunk_count, date, b.plain_size,
             );
         } else {
-            println!("{}", b.name);
+            println!("{displayed_name}{suffix}");
         }
+    }
+
+    if any_corrupted {
+        std::process::exit(1);
     }
 
     Ok(())

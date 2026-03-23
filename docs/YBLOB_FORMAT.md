@@ -43,7 +43,7 @@ Chunks are stored in consecutive PIV data object IDs starting at `0x5F_0000`:
 | …     | …             |
 | N−1   | `0x5F_00(N-1)`|
 
-The default store uses 20 objects (`0x5F_0000`–`0x5F_0013`).
+The default store uses 32 objects (`0x5F_0000`–`0x5F_001F`).
 
 ### Object size
 
@@ -66,10 +66,10 @@ inferred from the byte length returned by the PIV `GET DATA` command.
 The YubiKey 5 PIV application allocates 51,200 bytes of NVM shared across all
 data objects.  Standard-slot certificates (slots 9A, 9C, 9D, 9E, and the
 pre-loaded attestation certificate) typically consume 3–5 KB, leaving roughly
-46–48 KB for a yblob store.  A freshly formatted 20-object store occupies only
-20 × 9 = 180 bytes of NVM; objects grow as blobs are written.  In practice,
-20 fully occupied objects consume up to 20 × 3,063 ≈ 60 KB — the object-count
-limit (20 slots) is reached well before the NVM pool is exhausted.
+46–48 KB for a yblob store.  A freshly formatted 32-object store occupies only
+32 × 9 = 288 bytes of NVM; objects grow as blobs are written.  In practice,
+32 fully occupied objects consume up to 32 × 3,063 ≈ 98 KB — the NVM pool
+(51,200 bytes) is the binding constraint long before all slots are full.
 
 ---
 
@@ -157,9 +157,9 @@ To read a blob named `N`:
 2. Starting from that head chunk, follow the `NEXT_CHUNK` index chain,
    collecting payload bytes from each chunk in order, until a chunk whose
    `NEXT_CHUNK` equals its own index (end-of-chain sentinel).
-3. Concatenate all payload bytes.  The result is `BLOB_SIZE` bytes long
-   (trim if the last chunk's payload region extends beyond the blob boundary
-   due to zero-padding).
+3. Concatenate all payload bytes.  Trim the result to exactly `BLOB_SIZE`
+   bytes — bytes beyond that offset belong to the signature trailer
+   (section 6) and must not be passed to the decryption step.
 4. If `BLOB_KEY_SLOT != 0`, decrypt the concatenated bytes as described in
    section 5.
 
@@ -223,7 +223,63 @@ New implementations should write v2 only.
 
 ---
 
-## 6. Age Counter and Ordering
+## 6. Signature Trailer (yb2 format)
+
+Blobs written by `yb` version 0.3 and later (yb2 format) carry a
+65-byte ECDSA signature trailer appended immediately after the last
+payload byte at offset `BLOB_SIZE` within the assembled chunk chain.
+
+```
+Offset from BLOB_SIZE  Size  Field
+─────────────────────  ────  ────────────────────────────────────────
+0                        1   SIG_VERSION = 0x01
+1                       32   SIG_R — r component, raw big-endian u256
+33                      32   SIG_S — s component, raw big-endian u256
+```
+
+The trailer is **not** a separate chunk type.  It occupies unused bytes
+in the last slot's payload region.  If the last slot has fewer than 65
+bytes of free space after the payload, one additional continuation slot
+(a "spill slot") is allocated to hold the remainder.
+
+### Signed data
+
+The signature covers:
+
+```
+SHA-256( payload_bytes[0 .. BLOB_SIZE] )
+```
+
+where `payload_bytes` is the concatenation of all chunk payloads,
+trimmed to `BLOB_SIZE`.  For encrypted blobs this is the raw ciphertext
+(including the GCM tag and ephemeral public key).
+
+### Signing algorithm
+
+P-256 ECDSA.  The signing key is the private key in the PIV slot
+identified by `STORE_KEY_SLOT` (the same slot used for ECDH encryption).
+`SIG_R` and `SIG_S` are the raw 32-byte big-endian representations of
+the two ECDSA integers — not DER-encoded.
+
+### Verification
+
+To verify, reconstruct the DER `SEQUENCE { INTEGER r, INTEGER s }` from
+`SIG_R` and `SIG_S`, then verify against the SHA-256 digest using the
+P-256 public key from the X.509 certificate in `STORE_KEY_SLOT`.  No
+PIN or management key is required.
+
+### Backward compatibility
+
+Implementations that do not understand the trailer must trim the
+assembled chain to `BLOB_SIZE` bytes (step 3 of section 4) — they will
+never see the trailer bytes.  This is already required by the format.
+
+Older blobs (yb0/yb1 format) have no trailer; the assembled chain is
+exactly `BLOB_SIZE` bytes (or padded with zeros on yb0).
+
+---
+
+## 7. Age Counter and Ordering
 
 `OBJECT_AGE` is a store-wide monotonic counter.  Each new chunk written
 receives `max(all current ages) + 1`.  This allows detection of the most
@@ -234,13 +290,13 @@ The store age is the maximum `OBJECT_AGE` value across all chunks.
 
 ---
 
-## 7. Invariants and Constraints
+## 8. Invariants and Constraints
 
 | Property | Value |
 |----------|-------|
 | Magic | `0xF2ED5F0B` (LE u32 at offset 0x00) |
 | Object size range | 9–3,063 bytes (written at exact content size; no padding) |
-| Object count range | 1–20 |
+| Object count range | 1–32 |
 | Object IDs | `0x5F_0000` + index (contiguous) |
 | Blob name encoding | UTF-8, no NUL bytes, no `/`, length 1–255 bytes |
 | OBJECT_AGE = 0 | empty slot; all other fields are zero |
@@ -249,11 +305,12 @@ The store age is the maximum `OBJECT_AGE` value across all chunks.
 | NEXT_CHUNK = own index | end-of-chain sentinel (last chunk of a blob) |
 | BLOB_KEY_SLOT = 0 | unencrypted blob |
 | BLOB_KEY_SLOT ≠ 0 | encrypted; value is the PIV slot used for ECDH |
+| Bytes at offset BLOB_SIZE | signature trailer (section 6) if present; ignored by fetch |
 | All integers | little-endian |
 
 ---
 
-## 8. File Magic
+## 9. File Magic
 
 The yblob format is registered in the
 [`file` magic database](https://github.com/file/file)
@@ -273,7 +330,7 @@ yubikey_object_dump.bin: yblob object store image data
 
 ---
 
-## 9. Example: Reading a Store
+## 10. Example: Reading a Store
 
 ```
 1. Read PIV object 0x5F_0000.
