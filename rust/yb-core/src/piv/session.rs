@@ -114,7 +114,10 @@ impl PcscSession {
             let sw1 = resp[n - 2];
             let sw2 = resp[n - 1];
             if sw1 == 0x6A && sw2 == 0x82 {
-                return Ok(None);
+                return Ok(None); // object not found
+            }
+            if sw1 == 0x69 && sw2 == 0x82 {
+                return Ok(None); // security condition not met — skip silently
             }
             data.extend_from_slice(&resp[..n - 2]);
             if sw1 == 0x90 && sw2 == 0x00 {
