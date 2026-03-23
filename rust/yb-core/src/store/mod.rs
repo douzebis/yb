@@ -24,22 +24,23 @@ use crate::piv::PivBackend;
 #[derive(Debug, Clone)]
 pub struct Object {
     /// Index within the store (0 = object at OBJECT_ID_ZERO).
-    pub index: u8,
+    pub(crate) index: u8,
     /// Object size in bytes (same for all objects in a store).
-    pub object_size: usize,
+    pub(crate) object_size: usize,
 
     // -- fields present in every object --
-    pub yblob_magic: u32,
-    pub object_count: u8,
-    pub store_key_slot: u8,
+    pub(crate) yblob_magic: u32,
+    pub(crate) object_count: u8,
+    pub(crate) store_key_slot: u8,
     /// Age counter (0 = empty).
-    pub age: u32,
+    pub(crate) age: u32,
 
     // -- fields present when age != 0 --
-    pub chunk_pos: u8,
-    pub next_chunk: u8,
+    pub(crate) chunk_pos: u8,
+    pub(crate) next_chunk: u8,
 
     // -- fields present only in head chunks (chunk_pos == 0) --
+    /// Modification time as a Unix timestamp (seconds since epoch).
     pub blob_mtime: u32,
     /// Byte length of the (possibly encrypted) payload stored across all chunks.
     pub blob_size: u32,
@@ -52,10 +53,10 @@ pub struct Object {
     pub blob_name: String,
 
     /// Raw chunk payload bytes (excluding all header fields).
-    pub payload: Vec<u8>,
+    pub(crate) payload: Vec<u8>,
 
     /// Whether this object needs to be written back to the YubiKey.
-    pub dirty: bool,
+    pub(crate) dirty: bool,
 }
 
 impl Object {
@@ -290,6 +291,56 @@ impl Object {
     pub fn is_encrypted(&self) -> bool {
         self.blob_key_slot != 0
     }
+
+    // -- Accessors for internal fields --
+
+    /// Set the raw chunk payload.  Intended for test helpers that need to
+    /// construct synthetic objects via [`Store::make_object`].
+    pub fn set_payload(&mut self, payload: Vec<u8>) {
+        self.payload = payload;
+    }
+
+    pub fn index(&self) -> u8 {
+        self.index
+    }
+
+    pub fn age(&self) -> u32 {
+        self.age
+    }
+
+    pub fn chunk_pos(&self) -> u8 {
+        self.chunk_pos
+    }
+
+    pub fn next_chunk(&self) -> u8 {
+        self.next_chunk
+    }
+
+    /// Raw chunk payload bytes (read-only).
+    pub fn payload(&self) -> &[u8] {
+        &self.payload
+    }
+
+    /// Length of the raw chunk payload bytes.
+    pub fn payload_len(&self) -> usize {
+        self.payload.len()
+    }
+
+    pub fn object_size(&self) -> usize {
+        self.object_size
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ObjectParams
+// ---------------------------------------------------------------------------
+
+/// Named parameters for [`Store::make_object`].
+pub struct ObjectParams {
+    pub index: u8,
+    pub age: u32,
+    pub chunk_pos: u8,
+    pub next_chunk: u8,
 }
 
 // ---------------------------------------------------------------------------
@@ -357,35 +408,24 @@ impl Store {
         management_key: Option<&str>,
         pin: Option<&str>,
     ) -> Result<Self> {
-        let mut objects = Vec::with_capacity(object_count as usize);
-        for i in 0..object_count {
-            objects.push(Object {
-                index: i,
-                object_size: OBJECT_MIN_SIZE, // will produce 9-byte sentinel
-                yblob_magic: YBLOB_MAGIC,
-                object_count,
-                store_key_slot,
-                age: 0,
-                chunk_pos: 0,
-                next_chunk: 0,
-                blob_mtime: 0,
-                blob_size: 0,
-                blob_key_slot: 0,
-                blob_plain_size: 0,
-                is_compressed: false,
-                blob_name: String::new(),
-                payload: Vec::new(),
-                dirty: true,
-            });
-        }
+        // Build a temporary store (no objects yet) so we can use make_object.
         let mut store = Self {
             reader: reader.to_owned(),
             object_size: OBJECT_MIN_SIZE,
             object_count,
             store_key_slot,
-            objects,
+            objects: Vec::with_capacity(object_count as usize),
             store_age: 0,
         };
+        for i in 0..object_count {
+            // age == 0 produces a 9-byte empty-slot sentinel.
+            store.objects.push(store.make_object(ObjectParams {
+                index: i,
+                age: 0,
+                chunk_pos: 0,
+                next_chunk: 0,
+            }));
+        }
         store.sync(piv, management_key, pin)?;
         Ok(store)
     }
@@ -530,6 +570,32 @@ impl Store {
     pub fn next_age(&mut self) -> u32 {
         self.store_age += 1;
         self.store_age
+    }
+
+    /// Construct a new occupied `Object` for this store, filling all common
+    /// header fields from the store's own metadata.  Blob-specific fields
+    /// (`blob_mtime`, `blob_size`, `blob_key_slot`, `blob_plain_size`,
+    /// `is_compressed`, `blob_name`, `payload`) are left at their zero values
+    /// for the caller to set.
+    pub fn make_object(&self, p: ObjectParams) -> Object {
+        Object {
+            index: p.index,
+            object_size: self.object_size,
+            yblob_magic: crate::store::constants::YBLOB_MAGIC,
+            object_count: self.object_count,
+            store_key_slot: self.store_key_slot,
+            age: p.age,
+            chunk_pos: p.chunk_pos,
+            next_chunk: p.next_chunk,
+            blob_mtime: 0,
+            blob_size: 0,
+            blob_key_slot: 0,
+            blob_plain_size: 0,
+            is_compressed: false,
+            blob_name: String::new(),
+            payload: Vec::new(),
+            dirty: true,
+        }
     }
 }
 

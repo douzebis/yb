@@ -488,3 +488,47 @@ mod tests {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// ECDSA DER <-> raw conversion
+// ---------------------------------------------------------------------------
+
+/// Reconstruct a DER `SEQUENCE { INTEGER r, INTEGER s }` from 64 raw bytes.
+///
+/// Used to convert stored (r, s) back into a form the P-256 verifier accepts.
+pub fn raw_ecdsa_to_der(raw: &[u8; 64]) -> Vec<u8> {
+    let r_der = encode_integer(&raw[0..32]);
+    let s_der = encode_integer(&raw[32..64]);
+    let mut seq_body = Vec::with_capacity(r_der.len() + s_der.len());
+    seq_body.extend_from_slice(&r_der);
+    seq_body.extend_from_slice(&s_der);
+    encode_tlv_vec(0x30, &seq_body)
+}
+
+/// Encode a raw big-endian integer as a DER INTEGER, adding a 0x00 sign byte
+/// when the high bit is set.
+fn encode_integer(raw: &[u8]) -> Vec<u8> {
+    // Strip leading zero bytes (but keep at least one byte).
+    let trimmed = match raw.iter().position(|&b| b != 0) {
+        Some(i) => &raw[i..],
+        None => &raw[raw.len() - 1..],
+    };
+    let needs_pad = trimmed[0] & 0x80 != 0;
+    let len = trimmed.len() + usize::from(needs_pad);
+    let mut out = Vec::with_capacity(2 + len);
+    out.push(0x02);
+    out.push(len as u8);
+    if needs_pad {
+        out.push(0x00);
+    }
+    out.extend_from_slice(trimmed);
+    out
+}
+
+fn encode_tlv_vec(tag: u8, value: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(2 + value.len());
+    out.push(tag);
+    out.push(value.len() as u8);
+    out.extend_from_slice(value);
+    out
+}

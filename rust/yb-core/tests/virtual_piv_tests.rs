@@ -369,7 +369,7 @@ fn test_compression_brotli_path() {
     assert!(head.is_compressed, "expected C-bit set");
     // Stored bytes must start with brotli magic YBr\x01.
     assert!(
-        head.payload.starts_with(b"\x59\x42\x72\x01"),
+        head.payload().starts_with(b"\x59\x42\x72\x01"),
         "expected brotli magic"
     );
 
@@ -410,7 +410,7 @@ fn test_compression_xz_path() {
     assert!(head.is_compressed, "expected C-bit set");
     // Stored bytes must start with xz magic \xfd7zXZ\x00.
     assert!(
-        head.payload.starts_with(b"\xfd7zXZ\x00"),
+        head.payload().starts_with(b"\xfd7zXZ\x00"),
         "expected xz magic"
     );
 

@@ -40,7 +40,7 @@ pub fn run(ctx: &Context, args: &RemoveArgs) -> Result<()> {
     for name in &to_remove {
         let chain = store
             .find_head(name)
-            .map(|h| store.chunk_chain(h.index))
+            .map(|h| store.chunk_chain(h.index()))
             .unwrap_or_default();
         for idx in chain {
             store.objects[idx as usize].reset();
