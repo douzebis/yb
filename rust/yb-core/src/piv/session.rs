@@ -387,6 +387,16 @@ impl PcscSession {
         self.general_authenticate(slot, 0x11, 0x81, digest, "GENERAL AUTHENTICATE SIGN")
     }
 
+    /// GENERAL AUTHENTICATE SIGN — returns raw (r || s), each 32 bytes.
+    pub(crate) fn general_authenticate_sign_raw(
+        &mut self,
+        slot: u8,
+        digest: &[u8],
+    ) -> Result<[u8; 64]> {
+        let der = self.general_authenticate_sign(slot, digest)?;
+        der_ecdsa_to_raw(&der)
+    }
+
     /// GENERATE ASYMMETRIC KEY — generate an EC P-256 key in `slot`.
     /// Returns the uncompressed public key point (65 bytes).
     /// Caller must authenticate management key first.
@@ -466,4 +476,110 @@ pub(crate) fn version_from_reader(reader: &str) -> Option<String> {
         return None;
     }
     Some(format!("{}.{}.{}", resp[0], resp[1], resp[2]))
+}
+
+// ---------------------------------------------------------------------------
+// ECDSA DER ↔ raw helpers (pub(crate) so orchestrator can use them)
+// ---------------------------------------------------------------------------
+
+/// Parse a DER-encoded `SEQUENCE { INTEGER r, INTEGER s }` from the YubiKey
+/// and return the raw 64-byte `[r (32 bytes) || s (32 bytes)]` representation.
+///
+/// Each INTEGER is zero-padded or sign-stripped to exactly 32 bytes.
+pub(crate) fn der_ecdsa_to_raw(der: &[u8]) -> Result<[u8; 64]> {
+    // SEQUENCE tag 0x30
+    let (seq_body, _) = consume_tlv(der, 0x30, "ECDSA DER SEQUENCE")?;
+    let (r_bytes, rest) = consume_tlv(seq_body, 0x02, "ECDSA DER r")?;
+    let (s_bytes, _) = consume_tlv(rest, 0x02, "ECDSA DER s")?;
+    let mut out = [0u8; 64];
+    copy_integer_to_fixed(r_bytes, &mut out[0..32], "r")?;
+    copy_integer_to_fixed(s_bytes, &mut out[32..64], "s")?;
+    Ok(out)
+}
+
+/// Reconstruct a DER `SEQUENCE { INTEGER r, INTEGER s }` from 64 raw bytes.
+///
+/// Used by `fsck` to convert stored (r, s) back into a form the P-256 verifier
+/// accepts.
+pub fn raw_ecdsa_to_der(raw: &[u8; 64]) -> Vec<u8> {
+    let r_der = encode_integer(&raw[0..32]);
+    let s_der = encode_integer(&raw[32..64]);
+    let mut seq_body = Vec::with_capacity(r_der.len() + s_der.len());
+    seq_body.extend_from_slice(&r_der);
+    seq_body.extend_from_slice(&s_der);
+    encode_tlv_vec(0x30, &seq_body)
+}
+
+// ---------------------------------------------------------------------------
+// Private ASN.1 helpers
+// ---------------------------------------------------------------------------
+
+/// Read one TLV element (tag 1 byte, length 1 byte assumed < 128), return
+/// `(value_bytes, remainder)`.
+fn consume_tlv<'a>(data: &'a [u8], expected_tag: u8, label: &str) -> Result<(&'a [u8], &'a [u8])> {
+    if data.len() < 2 {
+        anyhow::bail!("{label}: truncated TLV");
+    }
+    if data[0] != expected_tag {
+        anyhow::bail!(
+            "{label}: expected tag 0x{expected_tag:02x}, got 0x{:02x}",
+            data[0]
+        );
+    }
+    let len = data[1] as usize;
+    if data.len() < 2 + len {
+        anyhow::bail!(
+            "{label}: truncated TLV value (need {len}, have {})",
+            data.len() - 2
+        );
+    }
+    Ok((&data[2..2 + len], &data[2 + len..]))
+}
+
+/// Copy a DER INTEGER value into a fixed 32-byte big-endian field.
+///
+/// DER INTEGERs are signed; a leading 0x00 byte is added when the high bit
+/// is set.  We strip that padding and left-pad with zeros to exactly 32 bytes.
+fn copy_integer_to_fixed(src: &[u8], dst: &mut [u8], label: &str) -> Result<()> {
+    // Strip the optional sign-padding zero.
+    let src = if src.first() == Some(&0x00) {
+        &src[1..]
+    } else {
+        src
+    };
+    if src.len() > dst.len() {
+        anyhow::bail!("ECDSA integer {label} too long ({} bytes)", src.len());
+    }
+    let pad = dst.len() - src.len();
+    dst[..pad].fill(0);
+    dst[pad..].copy_from_slice(src);
+    Ok(())
+}
+
+/// Encode a raw big-endian integer as a DER INTEGER, adding a 0x00 sign byte
+/// when the high bit is set.
+fn encode_integer(raw: &[u8]) -> Vec<u8> {
+    // Strip leading zero bytes (but keep at least one byte).
+    let trimmed = match raw.iter().position(|&b| b != 0) {
+        Some(i) => &raw[i..],
+        None => &raw[raw.len() - 1..],
+    };
+    let needs_pad = trimmed[0] & 0x80 != 0;
+    let len = trimmed.len() + usize::from(needs_pad);
+    let mut out = Vec::with_capacity(2 + len);
+    out.push(0x02);
+    out.push(len as u8);
+    if needs_pad {
+        out.push(0x00);
+    }
+    out.extend_from_slice(trimmed);
+    out
+}
+
+fn encode_tlv_vec(tag: u8, value: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(2 + value.len());
+    out.push(tag);
+    out.push(value.len() as u8);
+    out.extend_from_slice(value);
+    out
 }

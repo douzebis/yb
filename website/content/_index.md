@@ -38,3 +38,4 @@ Documentation for the `yb` command-line tool.
 | [0014](specs/0014-operation-generator) | ToyFilesystem and OperationGenerator Test Primitives | implemented |
 | [0015](specs/0015-self-test-command) | `yb self-test` Command | implemented |
 | [0016](specs/0016-pre-allocated-tiered-store) | Pre-Allocated Tiered Store | suspended |
+| [0017](specs/0017-blob-integrity-signature) | Blob Integrity Signature | implemented |

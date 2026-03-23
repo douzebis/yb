@@ -32,6 +32,8 @@ self-test = ["yb-core/test-utils"]
 
 [dependencies]
 yb-core       = { path = "../yb-core", version = "0.3.0", features = ["chrono", "virtual-piv"] }
+p256          = { version = "0.13", features = ["ecdsa"] }
+sha2          = "0.10"
 clap          = { version = "4", features = ["derive", "env"] }
 clap_complete = { version = "4", features = ["unstable-dynamic"] }
 crossterm     = "0.27"

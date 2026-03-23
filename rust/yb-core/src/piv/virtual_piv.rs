@@ -341,6 +341,32 @@ impl PivBackend for VirtualPiv {
         Ok(vec![])
     }
 
+    fn ecdsa_sign(
+        &self,
+        reader: &str,
+        slot: u8,
+        digest: &[u8],
+        pin: Option<&str>,
+    ) -> Result<[u8; 64]> {
+        use p256::ecdsa::{signature::hazmat::PrehashSigner, SigningKey};
+        let mut s = self.state.lock().unwrap();
+        check_reader(&s, reader)?;
+        if let Some(p) = pin {
+            do_verify_pin(&mut s, p)?;
+        }
+        let slot_key = s
+            .key_slots
+            .get(&slot)
+            .ok_or_else(|| anyhow!("virtual: no key in slot 0x{slot:02x}"))?;
+        let signing_key = SigningKey::from(slot_key.secret.clone());
+        // Sign the pre-computed SHA-256 digest directly (no double-hashing).
+        let sig: p256::ecdsa::Signature = signing_key
+            .sign_prehash(digest)
+            .map_err(|e| anyhow!("virtual: ECDSA sign: {e}"))?;
+        let sig_bytes = sig.to_bytes();
+        Ok(sig_bytes.into())
+    }
+
     fn ecdh(
         &self,
         reader: &str,

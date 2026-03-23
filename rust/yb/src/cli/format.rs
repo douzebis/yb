@@ -15,7 +15,7 @@ use yb_core::{
 
 #[derive(Args, Debug)]
 pub struct FormatArgs {
-    /// Number of PIV objects to allocate (1–20).
+    /// Number of PIV objects to allocate (1–32).
     #[arg(short = 'c', long = "object-count", default_value_t = DEFAULT_OBJECT_COUNT)]
     pub object_count: u8,
 
@@ -33,8 +33,8 @@ pub struct FormatArgs {
 }
 
 pub fn run(ctx: &Context, args: &FormatArgs) -> Result<()> {
-    if !(1..=20).contains(&args.object_count) {
-        bail!("object-count must be 1–20");
+    if !(1..=32).contains(&args.object_count) {
+        bail!("object-count must be 1–32");
     }
 
     let slot = parse_slot(&args.key_slot)?;

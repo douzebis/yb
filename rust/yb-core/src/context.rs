@@ -294,7 +294,7 @@ fn select_device(
 // ---------------------------------------------------------------------------
 
 /// Extract the EC P-256 public key from a DER-encoded X.509 certificate.
-fn parse_ec_public_key_from_cert_der(cert_der: &[u8]) -> Result<PublicKey> {
+pub fn parse_ec_public_key_from_cert_der(cert_der: &[u8]) -> Result<PublicKey> {
     use der::Decode;
     use p256::elliptic_curve::sec1::FromEncodedPoint;
     use x509_cert::Certificate;

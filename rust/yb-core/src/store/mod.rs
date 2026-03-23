@@ -138,20 +138,12 @@ impl Object {
             (0, 0, 0, 0, false, String::new(), CONTINUATION_PAYLOAD_O)
         };
 
-        // For head chunks: trim payload to the actual blob data bytes that
-        // belong to this chunk.  This removes trailing zero-padding from
-        // legacy fixed-size objects and ensures to_bytes() writes the minimum
-        // necessary size.  For multi-chunk blobs blob_size > head capacity, so
-        // the full remaining region is valid — min() leaves it untouched.
-        // For continuation chunks blob_size = 0 (not stored), so we always
-        // take the full remaining region.
+        // Read all remaining bytes as payload — both head and continuation.
+        // Consumers that want only the blob data (fetch_blob) truncate to
+        // blob_size themselves.  fsck uses the full bytes to locate the yb2
+        // signature trailer via collect_blob_chain.
         let raw_payload = &data[payload_start..];
-        let payload = if chunk_pos == 0 {
-            let cap = (blob_size as usize).min(raw_payload.len());
-            raw_payload[..cap].to_vec()
-        } else {
-            raw_payload.to_vec()
-        };
+        let payload = raw_payload.to_vec();
 
         Ok(Self {
             index,

@@ -44,10 +44,12 @@ pub mod orchestrator;
 pub mod piv;
 pub mod store;
 
-pub use context::{Context, ContextOptions, DevicePicker, OutputOptions};
+pub use context::{
+    parse_ec_public_key_from_cert_der, Context, ContextOptions, DevicePicker, OutputOptions,
+};
 pub use orchestrator::{
-    chunks_needed, fetch_blob, list_blobs, remove_blob, store_blob, BlobInfo, Compression,
-    Encryption, StoreOptions,
+    chunks_needed, collect_blob_chain, fetch_blob, list_blobs, remove_blob, store_blob, BlobInfo,
+    Compression, Encryption, StoreOptions,
 };
 pub use piv::hardware::HardwarePiv;
 pub use piv::{DeviceInfo, FlashHandle, PivBackend, VirtualPiv};

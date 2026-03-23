@@ -27,7 +27,7 @@ pub const OBJECT_MAX_SIZE: usize = 3_063;
 pub const YUBIKEY_NVM_BYTES: usize = 51_200;
 
 /// Default number of PIV objects allocated per store.
-pub const DEFAULT_OBJECT_COUNT: u8 = 20;
+pub const DEFAULT_OBJECT_COUNT: u8 = 32;
 
 /// First PIV object data-object ID (object index 0).
 pub const OBJECT_ID_ZERO: u32 = 0x5f_0000;
