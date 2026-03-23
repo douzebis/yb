@@ -28,7 +28,7 @@ test-utils       = []          # ToyFilesystem + OperationGenerator for self-tes
 
 [dependencies]
 # Cryptography (RustCrypto)
-p256    = { version = "0.13", features = ["ecdh", "pkcs8"] }
+p256    = { version = "0.13", features = ["ecdh", "ecdsa", "pkcs8"] }
 hkdf    = "0.12"
 sha2    = "0.10"
 aes     = "0.8"

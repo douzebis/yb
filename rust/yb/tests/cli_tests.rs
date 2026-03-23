@@ -611,6 +611,147 @@ fn fsck_detect_orphaned_continuation() {
 }
 
 // ---------------------------------------------------------------------------
+// fsck signature verification (spec 0017)
+// ---------------------------------------------------------------------------
+
+use yb::cli::fsck::{check_blob_signature, SigVerdict};
+use yb_core::store::constants::OBJECT_ID_ZERO;
+
+/// Helper: create a store with a key+cert in slot 0x82, store one plain blob,
+/// and return the ctx.  The blob has a valid yb2 signature trailer.
+fn setup_signed_store() -> Context {
+    let piv = with_key_piv();
+    let ctx = make_ctx(piv);
+    ctx.piv
+        .generate_certificate(&ctx.reader, 0x82, "CN=Test", Some(MGMT), None)
+        .unwrap();
+    format_store(&ctx);
+    store_plain(&ctx, "blob", b"the payload bytes");
+    ctx
+}
+
+/// Get the P-256 verifying key from the store's slot 0x82 cert.
+fn verifying_key(ctx: &Context) -> p256::ecdsa::VerifyingKey {
+    let cert_der = ctx.piv.read_certificate(&ctx.reader, 0x82).unwrap();
+    let pk = yb_core::parse_ec_public_key_from_cert_der(&cert_der).unwrap();
+    p256::ecdsa::VerifyingKey::from(&pk)
+}
+
+/// Read the raw PIV object bytes for store object at `index`.
+fn read_raw(ctx: &Context, index: u32) -> Vec<u8> {
+    ctx.piv
+        .read_object(&ctx.reader, OBJECT_ID_ZERO + index)
+        .unwrap()
+}
+
+/// Write raw PIV object bytes for store object at `index`.
+fn write_raw(ctx: &Context, index: u32, data: &[u8]) {
+    ctx.piv
+        .write_object(&ctx.reader, OBJECT_ID_ZERO + index, data, Some(MGMT), None)
+        .unwrap();
+}
+
+/// T-sig-1: a freshly stored blob has a valid yb2 signature (verdict OK).
+#[test]
+fn fsck_signature_ok_after_store() {
+    let ctx = setup_signed_store();
+    let vk = verifying_key(&ctx);
+
+    let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+    let head = store.objects.iter().find(|o| o.is_head()).unwrap();
+    let verdict = check_blob_signature(head, &store, Some(&vk));
+    assert_eq!(
+        verdict,
+        SigVerdict::Verified,
+        "fresh blob should have verdict VERIFIED"
+    );
+}
+
+/// T-sig-2: flipping a payload byte in the raw PIV object causes fsck CORRUPTED.
+#[test]
+fn fsck_signature_corrupted_on_tampered_payload() {
+    let ctx = setup_signed_store();
+    let vk = verifying_key(&ctx);
+
+    // The blob "blob" (4-byte name) is stored in object 0.
+    // Raw layout: 23 bytes header + 4 bytes name + payload bytes.
+    // Flip the first payload byte (offset 27).
+    let mut raw = read_raw(&ctx, 0);
+    raw[27] ^= 0xFF;
+    write_raw(&ctx, 0, &raw);
+
+    let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+    let head = store.objects.iter().find(|o| o.is_head()).unwrap();
+    let verdict = check_blob_signature(head, &store, Some(&vk));
+    assert_eq!(
+        verdict,
+        SigVerdict::Corrupted,
+        "tampered payload should yield CORRUPTED"
+    );
+}
+
+/// T-sig-3: flipping a byte in the signature trailer causes fsck CORRUPTED.
+#[test]
+fn fsck_signature_corrupted_on_tampered_signature() {
+    let ctx = setup_signed_store();
+    let vk = verifying_key(&ctx);
+
+    // Trailer starts at offset 27 + 17 = 44 (header + name + payload).
+    // SIG_VERSION is at 44, r starts at 45.  Flip the first byte of r.
+    let mut raw = read_raw(&ctx, 0);
+    raw[45] ^= 0xFF;
+    write_raw(&ctx, 0, &raw);
+
+    let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+    let head = store.objects.iter().find(|o| o.is_head()).unwrap();
+    let verdict = check_blob_signature(head, &store, Some(&vk));
+    assert_eq!(
+        verdict,
+        SigVerdict::Corrupted,
+        "tampered signature should yield CORRUPTED"
+    );
+}
+
+/// T-sig-4: a yb1-style blob (no trailer) is UNVERIFIED.
+#[test]
+fn fsck_signature_unverified_for_legacy_blob() {
+    let piv = with_key_piv();
+    let ctx = make_ctx(piv);
+    let cert_der = ctx
+        .piv
+        .generate_certificate(&ctx.reader, 0x82, "CN=Test", Some(MGMT), None)
+        .unwrap();
+    format_store(&ctx);
+
+    // Store a blob normally (gets a yb2 signature), then overwrite the raw
+    // PIV object with a truncated version that has no trailer — simulating
+    // a yb1 object written by an older yb.
+    store_plain(&ctx, "legacy", b"legacy data");
+
+    // Read the raw object, keep only the header + name + blob_size bytes,
+    // and write it back (dropping the 65-byte trailer).
+    let mut raw = read_raw(&ctx, 0);
+    // blob_size = 11 ("legacy data"), name = "legacy" (6 bytes).
+    // Payload starts at offset 23 + 6 = 29.  Keep up to 29 + 11 = 40 bytes.
+    raw.truncate(40);
+    write_raw(&ctx, 0, &raw);
+
+    let vk = {
+        let pk = yb_core::parse_ec_public_key_from_cert_der(&cert_der).unwrap();
+        p256::ecdsa::VerifyingKey::from(&pk)
+    };
+
+    let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+    let head = store.objects.iter().find(|o| o.is_head()).unwrap();
+    let verdict = check_blob_signature(head, &store, Some(&vk));
+    assert_eq!(
+        verdict,
+        SigVerdict::Unverified,
+        "legacy blob should be UNVERIFIED"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // format (--key-slot parsing)
 // ---------------------------------------------------------------------------
 

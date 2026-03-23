@@ -129,6 +129,19 @@ impl PivBackend for EmulatedPiv {
         bail!("emulated: ECDH not implemented (use VirtualPiv for crypto tests)")
     }
 
+    fn ecdsa_sign(
+        &self,
+        reader: &str,
+        _slot: u8,
+        _digest: &[u8],
+        _pin: Option<&str>,
+    ) -> Result<[u8; 64]> {
+        if reader != self.reader {
+            bail!("emulated: unknown reader '{reader}'");
+        }
+        bail!("emulated: ECDSA sign not implemented (use VirtualPiv for crypto tests)")
+    }
+
     fn read_certificate(&self, reader: &str, slot: u8) -> Result<Vec<u8>> {
         if reader != self.reader {
             bail!("emulated: unknown reader '{reader}'");

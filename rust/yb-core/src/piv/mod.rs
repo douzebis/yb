@@ -6,7 +6,7 @@
 
 pub mod emulated;
 pub mod hardware;
-pub(crate) mod session;
+pub mod session;
 pub(crate) mod tlv;
 pub mod virtual_piv;
 
@@ -76,6 +76,20 @@ pub trait PivBackend: Send + Sync {
     /// return the shared secret point (65 bytes).
     fn ecdh(&self, reader: &str, slot: u8, peer_point: &[u8], pin: Option<&str>)
         -> Result<Vec<u8>>;
+
+    /// ECDSA sign: compute SHA-256(`digest`) and sign it with the P-256 key in
+    /// `slot`.  Returns the raw 64-byte signature `[r (32 bytes) || s (32 bytes)]`.
+    /// PIN is required; pass `None` only if already verified in a prior call.
+    fn ecdsa_sign(
+        &self,
+        reader: &str,
+        slot: u8,
+        digest: &[u8],
+        pin: Option<&str>,
+    ) -> Result<[u8; 64]> {
+        let _ = (reader, slot, digest, pin);
+        anyhow::bail!("ecdsa_sign not implemented for this backend")
+    }
 
     /// Read the DER-encoded X.509 certificate from a PIV slot.
     fn read_certificate(&self, reader: &str, slot: u8) -> Result<Vec<u8>>;

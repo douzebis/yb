@@ -102,6 +102,20 @@ impl PivBackend for HardwarePiv {
         session.general_authenticate_ecdh(slot, peer_point)
     }
 
+    fn ecdsa_sign(
+        &self,
+        reader: &str,
+        slot: u8,
+        digest: &[u8],
+        pin: Option<&str>,
+    ) -> Result<[u8; 64]> {
+        let mut session = PcscSession::open(reader)?;
+        if let Some(p) = pin {
+            session.verify_pin(p)?;
+        }
+        session.general_authenticate_sign_raw(slot, digest)
+    }
+
     fn read_certificate(&self, reader: &str, slot: u8) -> Result<Vec<u8>> {
         let object_id = slot_to_object_id(slot)?;
         let mut session = PcscSession::open(reader)?;

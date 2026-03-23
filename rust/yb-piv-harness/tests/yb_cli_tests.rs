@@ -337,7 +337,8 @@ fn fsck_clean_store() {
     f.store_file("blob", b"data");
 
     let (stdout, _) = f.ok(&[], &["fsck"]);
-    assert!(stdout.contains("Status: OK"), "fsck output: {stdout}");
+    assert!(stdout.contains("Integrity:"), "fsck output: {stdout}");
+    assert!(stdout.contains("VERIFIED"), "fsck output: {stdout}");
 }
 
 #[test]
@@ -347,7 +348,6 @@ fn fsck_verbose() {
 
     let (stdout, _) = f.ok(&[], &["fsck", "-v"]);
     assert!(stdout.contains("Object 0:"), "fsck -v output: {stdout}");
-    assert!(stdout.contains("Status: OK"));
 }
 
 // ---------------------------------------------------------------------------
