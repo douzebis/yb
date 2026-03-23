@@ -6,11 +6,8 @@
 use anyhow::Result;
 use clap::Args;
 use yb_core::{
-    collect_blob_chain, parse_ec_public_key_from_cert_der,
-    store::{
-        constants::{OBJECT_MAX_SIZE, YUBIKEY_NVM_BYTES},
-        Object, Store,
-    },
+    collect_blob_chain, parse_ec_public_key_from_cert_der, scan_nvm,
+    store::{constants::OBJECT_ID_ZERO, Object, Store},
     Context,
 };
 
@@ -19,6 +16,11 @@ pub struct FsckArgs {
     /// Print full per-object dump in addition to the summary.
     #[arg(short = 'v', long = "verbose")]
     pub verbose: bool,
+
+    /// Scan all PIV objects to report NVM usage (store / other / free).
+    /// Issues ~290 read-only APDUs; may take a few seconds on real hardware.
+    #[arg(long = "nvm")]
+    pub nvm: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -81,17 +83,15 @@ pub fn run(ctx: &Context, args: &FsckArgs) -> Result<()> {
 
     // Store header.
     let free = store.free_count();
-    let nvm_used: usize = store.objects.iter().map(|o| o.object_size).sum();
-    let nvm_remaining = YUBIKEY_NVM_BYTES.saturating_sub(nvm_used);
-    let free_bytes = (free * OBJECT_MAX_SIZE).min(nvm_remaining);
+    let store_bytes_used: usize = store.objects.iter().map(|o| o.object_size).sum();
 
     println!(
         "Store: {} objects, slot 0x{:02x}, age {}",
         store.object_count, store.store_key_slot, store.store_age
     );
     println!(
-        "Blobs: {} stored, {} objects free (~{} bytes available)",
-        stored, free, free_bytes
+        "Blobs: {} stored, {} objects free (~{} bytes used by store)",
+        stored, free, store_bytes_used
     );
 
     // Per-blob table.
@@ -105,6 +105,20 @@ pub fn run(ctx: &Context, args: &FsckArgs) -> Result<()> {
             "Integrity: {} verified, {} unverified, {} corrupted",
             sig_verified, sig_unverified, sig_corrupted
         );
+    }
+
+    // NVM breakdown — only when --nvm is requested.
+    if args.nvm {
+        let store_ids: std::collections::HashSet<u32> = (0..store.object_count)
+            .map(|i| OBJECT_ID_ZERO + i as u32)
+            .collect();
+        match scan_nvm(&ctx.reader, ctx.piv.as_ref(), &store_ids) {
+            Ok(usage) => println!(
+                "NVM: ~{} bytes store  |  ~{} bytes other  |  ~{} bytes free (estimated)",
+                usage.store_bytes, usage.other_bytes, usage.free_bytes
+            ),
+            Err(e) => eprintln!("yb: warning: NVM scan failed: {e}"),
+        }
     }
 
     // Structural anomalies — verbose only.

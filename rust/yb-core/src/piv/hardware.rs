@@ -117,6 +117,11 @@ impl PivBackend for HardwarePiv {
         session.general_authenticate_sign_raw(slot, digest)
     }
 
+    fn object_size(&self, reader: &str, id: u32) -> Result<Option<usize>> {
+        let mut session = PcscSession::open(reader)?;
+        session.try_get_data_size(id)
+    }
+
     fn read_certificate(&self, reader: &str, slot: u8) -> Result<Vec<u8>> {
         let object_id = slot_to_object_id(slot)?;
         let mut session = PcscSession::open(reader)?;

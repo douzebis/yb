@@ -314,6 +314,12 @@ impl PivBackend for VirtualPiv {
             .ok_or_else(|| anyhow!("virtual: object 0x{id:06x} not found"))
     }
 
+    fn object_size(&self, reader: &str, id: u32) -> Result<Option<usize>> {
+        let s = self.state.lock().unwrap();
+        check_reader(&s, reader)?;
+        Ok(s.objects.get(&id).map(|v| v.len()))
+    }
+
     fn write_object(
         &self,
         reader: &str,

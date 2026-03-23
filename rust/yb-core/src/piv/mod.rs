@@ -118,6 +118,18 @@ pub trait PivBackend: Send + Sync {
     /// session to prevent the card from resetting PIN-verified state between calls.
     fn read_printed_object_with_pin(&self, reader: &str, pin: &str) -> Result<Vec<u8>>;
 
+    /// Return the size in bytes of a PIV data object, or `None` if the object
+    /// does not exist.  Used by `scan_nvm` to measure NVM usage without writes.
+    /// The default implementation attempts `read_object` and maps "not found"
+    /// errors to `None`; hardware backends should override with an efficient
+    /// implementation that issues a single GET DATA without reading the payload.
+    fn object_size(&self, reader: &str, id: u32) -> Result<Option<usize>> {
+        match self.read_object(reader, id) {
+            Ok(data) => Ok(Some(data.len())),
+            Err(_) => Ok(None),
+        }
+    }
+
     /// Persist state to a fixture file (no-op for hardware backends).
     ///
     /// `VirtualPiv` overrides this to serialize its in-memory state back to
