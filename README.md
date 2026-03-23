@@ -24,11 +24,13 @@ optionally encrypted with hardware-backed hybrid cryptography.
 - **Store** binary blobs under human-friendly names (files or stdin)
 - **Encrypt** data using hybrid ECDH + HKDF-SHA256 + AES-256-GCM, with the
   private key never leaving the YubiKey
+- **Sign** every stored blob with a P-256 ECDSA signature for tamper detection
+- **Integrity checking** in both `list` and `fsck` — CORRUPTED blobs are
+  flagged automatically, no PIN required
 - **List**, **fetch**, and **remove** blobs by exact name or glob pattern
 - **Multiple YubiKeys** supported via `--serial`
 - **PIN-protected management key** mode for convenience and security
 - **Shell completions** for bash, zsh, and fish (dynamic blob-name completion)
-- **Inspect** low-level store integrity with `fsck`
 - No runtime dependencies beyond PC/SC — a single static binary
 
 ---
@@ -127,7 +129,7 @@ completions are activated for the current session automatically.
 yb format --generate
 ```
 
-This writes 20 PIV object sentinels to the YubiKey and generates a P-256
+This writes 32 PIV object sentinels to the YubiKey and generates a P-256
 key in slot `0x82`.  Run once per YubiKey.
 
 ### 2. Store a blob
@@ -190,6 +192,35 @@ yb remove 'tmp-*'
 yb remove --ignore-missing old-token
 ```
 
+### 6. Check integrity
+
+```shell
+# Verify all blob signatures (no PIN needed)
+yb fsck
+
+# Full NVM breakdown (store / other PIV objects / free)
+yb fsck --nvm
+
+# Verbose: structural warnings + raw per-object dump
+yb fsck --verbose
+```
+
+`yb list` also checks signatures automatically. Corrupted blobs are
+flagged inline:
+
+```
+mysecret
+'my secret file'  CORRUPTED
+other-blob
+```
+
+Both commands exit with code 1 if any blob is CORRUPTED, making them
+suitable for use in scripts and monitoring:
+
+```shell
+yb list || alert "YubiKey store corruption detected"
+```
+
 ---
 
 ## Command Reference
@@ -229,6 +260,8 @@ yb resolves the PIN in this order:
 3. Interactive TTY prompt — deferred until a PIN is actually needed
 
 Commands that never need a PIN (`list`, `fsck`) never prompt.
+Both perform signature verification using only the public key from the
+store's X.509 certificate.
 
 > **Security note:** `YB_PIN` and `--pin-stdin` are convenient for
 > scripting but carry OS-level exposure risks.  `YB_PIN` is visible to
@@ -267,7 +300,7 @@ using a linked-chunk format.  Default store configuration:
 
 | Parameter | Default | Notes |
 |---|---|---|
-| Object count | 20 | Tunable at format time (`--object-count`) |
+| Object count | 32 | Tunable at format time (`--object-count`) |
 | Max object size | 3,063 bytes | Each PIV object is written at the size its content requires |
 | Gross capacity | up to ~61 KB | Shared with other PIV data; YubiKey 5 NVM pool is 51,200 bytes |
 | ECDH key slot | `0x82` | Tunable at format time (`--key-slot`) |

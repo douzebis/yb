@@ -9,7 +9,7 @@ SPDX-PackageSupplier = "Frederic Ruget <fred@atlant.is>"
 SPDX-PackageDownloadLocation = "https://github.com/douzebis/yb"
 
 [[annotations]]
-path = ["rust/Cargo.lock", "Cargo.lock", "rust/yb-core/tests/fixtures/**.yaml", "yb.1", ".gitignore", ".gitmodules", "LICENSE"]
+path = ["rust/Cargo.lock", "Cargo.lock", "rust/yb-core/tests/fixtures/**.yaml", ".gitignore", ".gitmodules", "LICENSE"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = ["2025 - 2026 Frederic Ruget <fred@atlant.is> <fred@s3ns.io> (GitHub: @douzebis)", "2025 - 2026 Thales Cloud Sécurisé"]
 SPDX-License-Identifier = "MIT"

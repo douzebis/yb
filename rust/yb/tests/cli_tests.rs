@@ -621,7 +621,7 @@ fn fsck_detect_orphaned_continuation() {
 // fsck signature verification (spec 0017)
 // ---------------------------------------------------------------------------
 
-use yb::cli::fsck::{check_blob_signature, SigVerdict};
+use yb::cli::util::{check_blob_signature, SigVerdict};
 use yb_core::store::constants::OBJECT_ID_ZERO;
 
 /// Helper: create a store with a key+cert in slot 0x82, store one plain blob,

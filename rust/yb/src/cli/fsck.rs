@@ -6,10 +6,12 @@
 use anyhow::Result;
 use clap::Args;
 use yb_core::{
-    collect_blob_chain, parse_ec_public_key_from_cert_der, scan_nvm,
+    parse_ec_public_key_from_cert_der, scan_nvm,
     store::{constants::OBJECT_ID_ZERO, Object, Store},
     Context,
 };
+
+use crate::cli::util::{check_blob_signature, quote_name, SigVerdict};
 
 #[derive(Args, Debug)]
 pub struct FsckArgs {
@@ -21,27 +23,6 @@ pub struct FsckArgs {
     /// Issues ~290 read-only APDUs; may take a few seconds on real hardware.
     #[arg(long = "nvm")]
     pub nvm: bool,
-}
-
-// ---------------------------------------------------------------------------
-// Signature verdict
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SigVerdict {
-    Verified,
-    Unverified,
-    Corrupted,
-}
-
-impl std::fmt::Display for SigVerdict {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SigVerdict::Verified => write!(f, "VERIFIED"),
-            SigVerdict::Unverified => write!(f, "UNVERIFIED"),
-            SigVerdict::Corrupted => write!(f, "CORRUPTED"),
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -111,7 +92,7 @@ pub fn run(ctx: &Context, args: &FsckArgs) -> Result<()> {
     if stored > 0 {
         println!();
         for (head, verdict) in &blob_verdicts {
-            println!("  {:<30} {}", head.blob_name, verdict);
+            println!("  {:<30} {}", quote_name(&head.blob_name), verdict);
         }
         println!();
         println!(
@@ -177,79 +158,6 @@ pub fn run(ctx: &Context, args: &FsckArgs) -> Result<()> {
     }
 
     Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Signature check (spec 0017 §4)
-// ---------------------------------------------------------------------------
-
-/// Evaluate the spec 0017 verdict for a single blob.
-pub fn check_blob_signature(
-    head: &Object,
-    store: &Store,
-    verifying_key: Option<&p256::ecdsa::VerifyingKey>,
-) -> SigVerdict {
-    use yb_core::piv::session::raw_ecdsa_to_der;
-
-    let blob_size = head.blob_size as usize;
-    let (payload, trailing, has_supernumerary) = collect_blob_chain(head, store);
-    let combined = payload.len() + trailing.len();
-
-    // Apply the verdict table (spec 0017 §4, if/elif order).
-    if combined < blob_size {
-        return SigVerdict::Corrupted;
-    }
-
-    if trailing.is_empty() {
-        return SigVerdict::Unverified;
-    }
-
-    if trailing.len() > 65 {
-        if has_supernumerary || !trailing.iter().all(|&b| b == 0) {
-            return SigVerdict::Corrupted;
-        }
-        return SigVerdict::Unverified;
-    }
-
-    if trailing.len() == 65 {
-        match trailing[0] {
-            0x00 => {
-                if has_supernumerary || !trailing.iter().all(|&b| b == 0) {
-                    return SigVerdict::Corrupted;
-                }
-                SigVerdict::Unverified
-            }
-            0x01 => {
-                let vk = match verifying_key {
-                    Some(k) => k,
-                    None => return SigVerdict::Unverified,
-                };
-                let mut raw = [0u8; 64];
-                raw.copy_from_slice(&trailing[1..65]);
-                let der = raw_ecdsa_to_der(&raw);
-
-                use p256::ecdsa::{signature::hazmat::PrehashVerifier, Signature};
-                use sha2::{Digest, Sha256};
-
-                let digest = Sha256::digest(&payload);
-                let sig = match Signature::from_der(&der) {
-                    Ok(s) => s,
-                    Err(_) => return SigVerdict::Corrupted,
-                };
-                match vk.verify_prehash(&digest, &sig) {
-                    Ok(()) => SigVerdict::Verified,
-                    Err(_) => SigVerdict::Corrupted,
-                }
-            }
-            _ => SigVerdict::Corrupted,
-        }
-    } else {
-        // trailing.len() in (0, 65) — partial trailer region.
-        if has_supernumerary || !trailing.iter().all(|&b| b == 0) {
-            return SigVerdict::Corrupted;
-        }
-        SigVerdict::Unverified
-    }
 }
 
 // ---------------------------------------------------------------------------
