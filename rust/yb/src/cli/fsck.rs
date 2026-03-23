@@ -64,18 +64,18 @@ pub fn run(ctx: &Context, args: &FsckArgs) -> Result<()> {
     // Store header — count only reachable (non-orphaned) objects as used.
     let reachable: std::collections::HashSet<u8> = heads
         .iter()
-        .flat_map(|h| store.chunk_chain(h.index))
+        .flat_map(|h| store.chunk_chain(h.index()))
         .collect();
     let free_count = store
         .objects
         .iter()
-        .filter(|o| o.is_empty() || !reachable.contains(&o.index))
+        .filter(|o| o.is_empty() || !reachable.contains(&o.index()))
         .count();
     let store_bytes_used: usize = store
         .objects
         .iter()
-        .filter(|o| reachable.contains(&o.index))
-        .map(|o| o.object_size)
+        .filter(|o| reachable.contains(&o.index()))
+        .map(|o| o.object_size())
         .sum();
 
     println!(
@@ -117,7 +117,7 @@ pub fn run(ctx: &Context, args: &FsckArgs) -> Result<()> {
     }
 
     // Structural anomalies — verbose only.
-    let has_anomalies = if args.verbose {
+    let has_anomalies = args.verbose && {
         let warnings = detect_anomalies(&store);
         for w in &warnings {
             println!("WARNING: {w}");
@@ -125,14 +125,14 @@ pub fn run(ctx: &Context, args: &FsckArgs) -> Result<()> {
 
         println!();
         for obj in &store.objects {
-            println!("Object {}:", obj.index);
-            println!("  age:        {}", obj.age);
-            if obj.age == 0 {
+            println!("Object {}:", obj.index());
+            println!("  age:        {}", obj.age());
+            if obj.age() == 0 {
                 println!("  (empty)");
             } else {
-                println!("  chunk_pos:  {}", obj.chunk_pos);
-                println!("  next_chunk: {}", obj.next_chunk);
-                if obj.chunk_pos == 0 {
+                println!("  chunk_pos:  {}", obj.chunk_pos());
+                println!("  next_chunk: {}", obj.next_chunk());
+                if obj.chunk_pos() == 0 {
                     println!("  blob_name:      {}", obj.blob_name);
                     println!("  blob_size:      {}", obj.blob_size);
                     println!("  blob_plain_sz:  {}", obj.blob_plain_size);
@@ -143,13 +143,11 @@ pub fn run(ctx: &Context, args: &FsckArgs) -> Result<()> {
                         if obj.is_encrypted() { "yes" } else { "no" }
                     );
                 }
-                println!("  payload_len: {}", obj.payload.len());
+                println!("  payload_len: {}", obj.payload_len());
             }
             println!();
         }
         !warnings.is_empty()
-    } else {
-        false
     };
 
     if sig_corrupted > 0 || has_anomalies {
@@ -174,7 +172,7 @@ pub fn detect_anomalies(store: &Store) -> Vec<String> {
         name_map
             .entry(obj.blob_name.as_str())
             .or_default()
-            .push(obj.index);
+            .push(obj.index());
     }
     for (name, indices) in &name_map {
         if indices.len() > 1 {
@@ -188,7 +186,7 @@ pub fn detect_anomalies(store: &Store) -> Vec<String> {
     // Collect reachable indices by following all head chains.
     let mut reachable: HashSet<u8> = HashSet::new();
     for obj in store.objects.iter().filter(|o| o.is_head()) {
-        let chain = store.chunk_chain(obj.index);
+        let chain = store.chunk_chain(obj.index());
         for idx in chain {
             reachable.insert(idx);
         }
@@ -196,10 +194,10 @@ pub fn detect_anomalies(store: &Store) -> Vec<String> {
 
     // Any occupied non-head object not in a reachable chain is an orphan.
     for obj in store.objects.iter().filter(|o| !o.is_empty()) {
-        if !reachable.contains(&obj.index) {
+        if !reachable.contains(&obj.index()) {
             warnings.push(format!(
                 "object {} is an orphaned continuation chunk (no reachable head)",
-                obj.index
+                obj.index()
             ));
         }
     }

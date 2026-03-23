@@ -125,7 +125,7 @@ pub fn run(ctx: &Context, args: &StoreArgs) -> Result<()> {
     let freed_chunks: usize = entries
         .iter()
         .filter_map(|(name, _)| store.find_head(name))
-        .map(|head| store.chunk_chain(head.index).len())
+        .map(|head| store.chunk_chain(head.index()).len())
         .sum();
 
     if store.free_count() + freed_chunks < total_chunks {

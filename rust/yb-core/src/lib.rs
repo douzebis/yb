@@ -52,7 +52,9 @@ pub use orchestrator::{
     Compression, Encryption, StoreOptions,
 };
 pub use piv::hardware::HardwarePiv;
-pub use piv::{DeviceInfo, FlashHandle, PivBackend, VirtualPiv};
+#[cfg(any(feature = "virtual-piv", feature = "test-utils"))]
+pub use piv::VirtualPiv;
+pub use piv::{DeviceInfo, FlashHandle, PivBackend};
 
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;

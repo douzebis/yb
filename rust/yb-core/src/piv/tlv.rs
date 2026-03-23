@@ -113,58 +113,68 @@ pub(crate) fn crypto_ecb(
             block_size
         );
     }
+    // Helper closure: init cipher from key, run one ECB block operation.
+    // Each arm is identical in structure; only the cipher type and
+    // encrypt/decrypt method differ — factored out to avoid repetition.
+    macro_rules! ecb_arm {
+        (des, $key:expr, $block:expr, encrypt) => {{
+            use des::cipher::{BlockEncrypt, KeyInit};
+            let c = des::TdesEde3::new_from_slice($key)
+                .map_err(|e| anyhow::anyhow!("3DES key: {e}"))?;
+            let mut b = des::cipher::generic_array::GenericArray::clone_from_slice($block);
+            c.encrypt_block(&mut b);
+            $block.copy_from_slice(&b);
+        }};
+        (des, $key:expr, $block:expr, decrypt) => {{
+            use des::cipher::{BlockDecrypt, KeyInit};
+            let c = des::TdesEde3::new_from_slice($key)
+                .map_err(|e| anyhow::anyhow!("3DES key: {e}"))?;
+            let mut b = des::cipher::generic_array::GenericArray::clone_from_slice($block);
+            c.decrypt_block(&mut b);
+            $block.copy_from_slice(&b);
+        }};
+        (aes128, $key:expr, $block:expr, encrypt) => {{
+            use aes::cipher::{BlockEncrypt, KeyInit};
+            let c = aes::Aes128::new_from_slice($key)
+                .map_err(|e| anyhow::anyhow!("AES-128 key: {e}"))?;
+            let mut b = aes::cipher::generic_array::GenericArray::clone_from_slice($block);
+            c.encrypt_block(&mut b);
+            $block.copy_from_slice(&b);
+        }};
+        (aes128, $key:expr, $block:expr, decrypt) => {{
+            use aes::cipher::{BlockDecrypt, KeyInit};
+            let c = aes::Aes128::new_from_slice($key)
+                .map_err(|e| anyhow::anyhow!("AES-128 key: {e}"))?;
+            let mut b = aes::cipher::generic_array::GenericArray::clone_from_slice($block);
+            c.decrypt_block(&mut b);
+            $block.copy_from_slice(&b);
+        }};
+        (aes256, $key:expr, $block:expr, encrypt) => {{
+            use aes::cipher::{BlockEncrypt, KeyInit};
+            let c = aes::Aes256::new_from_slice($key)
+                .map_err(|e| anyhow::anyhow!("AES-256 key: {e}"))?;
+            let mut b = aes::cipher::generic_array::GenericArray::clone_from_slice($block);
+            c.encrypt_block(&mut b);
+            $block.copy_from_slice(&b);
+        }};
+        (aes256, $key:expr, $block:expr, decrypt) => {{
+            use aes::cipher::{BlockDecrypt, KeyInit};
+            let c = aes::Aes256::new_from_slice($key)
+                .map_err(|e| anyhow::anyhow!("AES-256 key: {e}"))?;
+            let mut b = aes::cipher::generic_array::GenericArray::clone_from_slice($block);
+            c.decrypt_block(&mut b);
+            $block.copy_from_slice(&b);
+        }};
+    }
+
     let mut block = data.to_vec();
     match (key.len(), dir) {
-        (24, EcbDir::Decrypt) => {
-            use des::cipher::{BlockDecrypt, KeyInit};
-            use des::TdesEde3;
-            let cipher =
-                TdesEde3::new_from_slice(key).map_err(|e| anyhow::anyhow!("3DES key: {e}"))?;
-            let mut b = des::cipher::generic_array::GenericArray::clone_from_slice(&block);
-            cipher.decrypt_block(&mut b);
-            block.copy_from_slice(&b);
-        }
-        (24, EcbDir::Encrypt) => {
-            use des::cipher::{BlockEncrypt, KeyInit};
-            use des::TdesEde3;
-            let cipher =
-                TdesEde3::new_from_slice(key).map_err(|e| anyhow::anyhow!("3DES key: {e}"))?;
-            let mut b = des::cipher::generic_array::GenericArray::clone_from_slice(&block);
-            cipher.encrypt_block(&mut b);
-            block.copy_from_slice(&b);
-        }
-        (16, EcbDir::Decrypt) => {
-            use aes::cipher::{BlockDecrypt, KeyInit};
-            let cipher = aes::Aes128::new_from_slice(key)
-                .map_err(|e| anyhow::anyhow!("AES-128 key: {e}"))?;
-            let mut b = aes::cipher::generic_array::GenericArray::clone_from_slice(&block);
-            cipher.decrypt_block(&mut b);
-            block.copy_from_slice(&b);
-        }
-        (16, EcbDir::Encrypt) => {
-            use aes::cipher::{BlockEncrypt, KeyInit};
-            let cipher = aes::Aes128::new_from_slice(key)
-                .map_err(|e| anyhow::anyhow!("AES-128 key: {e}"))?;
-            let mut b = aes::cipher::generic_array::GenericArray::clone_from_slice(&block);
-            cipher.encrypt_block(&mut b);
-            block.copy_from_slice(&b);
-        }
-        (32, EcbDir::Decrypt) => {
-            use aes::cipher::{BlockDecrypt, KeyInit};
-            let cipher = aes::Aes256::new_from_slice(key)
-                .map_err(|e| anyhow::anyhow!("AES-256 key: {e}"))?;
-            let mut b = aes::cipher::generic_array::GenericArray::clone_from_slice(&block);
-            cipher.decrypt_block(&mut b);
-            block.copy_from_slice(&b);
-        }
-        (32, EcbDir::Encrypt) => {
-            use aes::cipher::{BlockEncrypt, KeyInit};
-            let cipher = aes::Aes256::new_from_slice(key)
-                .map_err(|e| anyhow::anyhow!("AES-256 key: {e}"))?;
-            let mut b = aes::cipher::generic_array::GenericArray::clone_from_slice(&block);
-            cipher.encrypt_block(&mut b);
-            block.copy_from_slice(&b);
-        }
+        (24, EcbDir::Encrypt) => ecb_arm!(des, key, &mut block, encrypt),
+        (24, EcbDir::Decrypt) => ecb_arm!(des, key, &mut block, decrypt),
+        (16, EcbDir::Encrypt) => ecb_arm!(aes128, key, &mut block, encrypt),
+        (16, EcbDir::Decrypt) => ecb_arm!(aes128, key, &mut block, decrypt),
+        (32, EcbDir::Encrypt) => ecb_arm!(aes256, key, &mut block, encrypt),
+        (32, EcbDir::Decrypt) => ecb_arm!(aes256, key, &mut block, decrypt),
         (n, _) => bail!("unsupported key length for ECB: {n}"),
     }
     Ok(block)

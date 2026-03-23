@@ -49,770 +49,798 @@ fn format_store(ctx: &Context) {
 // store
 // ---------------------------------------------------------------------------
 
-use yb::cli::store::{run as store_run, StoreArgs};
+mod store_tests {
+    use super::*;
+    use yb::cli::store::{run as store_run, StoreArgs};
 
-#[test]
-fn store_single_file_by_basename() {
-    let piv = with_key_piv();
-    let ctx = make_ctx(piv);
-    // Generate a certificate so the encrypted path can read the public key.
-    ctx.piv
-        .generate_certificate(&ctx.reader, 0x82, "CN=Test", Some(MGMT), None)
-        .unwrap();
-    format_store(&ctx);
+    #[test]
+    fn store_single_file_by_basename() {
+        let piv = with_key_piv();
+        let ctx = make_ctx(piv);
+        // Generate a certificate so the encrypted path can read the public key.
+        ctx.piv
+            .generate_certificate(&ctx.reader, 0x82, "CN=Test", Some(MGMT), None)
+            .unwrap();
+        format_store(&ctx);
 
-    let tmp = TempDir::new().unwrap();
-    let file = tmp.path().join("myblob.txt");
-    std::fs::write(&file, b"hello").unwrap();
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("myblob.txt");
+        std::fs::write(&file, b"hello").unwrap();
 
-    let args = StoreArgs {
-        files: vec![file],
-        name: None,
-        encrypted: true,
-        unencrypted: false,
-        no_compress: false,
-    };
-    store_run(&ctx, &args).unwrap();
+        let args = StoreArgs {
+            files: vec![file],
+            name: None,
+            encrypted: true,
+            unencrypted: false,
+            no_compress: false,
+        };
+        store_run(&ctx, &args).unwrap();
 
-    let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
-    let blobs = list_blobs(&store);
-    assert_eq!(blobs.len(), 1);
-    assert_eq!(blobs[0].name, "myblob.txt");
-    assert!(blobs[0].is_encrypted);
-}
+        let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+        let blobs = list_blobs(&store);
+        assert_eq!(blobs.len(), 1);
+        assert_eq!(blobs[0].name, "myblob.txt");
+        assert!(blobs[0].is_encrypted);
+    }
 
-#[test]
-fn store_single_file_with_name_override() {
-    let piv = with_key_piv();
-    let ctx = make_ctx(piv);
-    format_store(&ctx);
+    #[test]
+    fn store_single_file_with_name_override() {
+        let piv = with_key_piv();
+        let ctx = make_ctx(piv);
+        format_store(&ctx);
 
-    let tmp = TempDir::new().unwrap();
-    let file = tmp.path().join("original.txt");
-    std::fs::write(&file, b"data").unwrap();
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("original.txt");
+        std::fs::write(&file, b"data").unwrap();
 
-    let args = StoreArgs {
-        files: vec![file],
-        name: Some("renamed".to_owned()),
-        encrypted: false,
-        unencrypted: true,
-        no_compress: false,
-    };
-    store_run(&ctx, &args).unwrap();
+        let args = StoreArgs {
+            files: vec![file],
+            name: Some("renamed".to_owned()),
+            encrypted: false,
+            unencrypted: true,
+            no_compress: false,
+        };
+        store_run(&ctx, &args).unwrap();
 
-    let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
-    let blobs = list_blobs(&store);
-    assert_eq!(blobs.len(), 1);
-    assert_eq!(blobs[0].name, "renamed");
-}
+        let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+        let blobs = list_blobs(&store);
+        assert_eq!(blobs.len(), 1);
+        assert_eq!(blobs[0].name, "renamed");
+    }
 
-#[test]
-fn store_multiple_files() {
-    let piv = with_key_piv();
-    let ctx = make_ctx(piv);
-    format_store(&ctx);
+    #[test]
+    fn store_multiple_files() {
+        let piv = with_key_piv();
+        let ctx = make_ctx(piv);
+        format_store(&ctx);
 
-    let tmp = TempDir::new().unwrap();
-    let a = tmp.path().join("alpha.txt");
-    let b = tmp.path().join("beta.txt");
-    std::fs::write(&a, b"aaa").unwrap();
-    std::fs::write(&b, b"bbb").unwrap();
+        let tmp = TempDir::new().unwrap();
+        let a = tmp.path().join("alpha.txt");
+        let b = tmp.path().join("beta.txt");
+        std::fs::write(&a, b"aaa").unwrap();
+        std::fs::write(&b, b"bbb").unwrap();
 
-    let args = StoreArgs {
-        files: vec![a, b],
-        name: None,
-        encrypted: false,
-        unencrypted: true,
-        no_compress: false,
-    };
-    store_run(&ctx, &args).unwrap();
+        let args = StoreArgs {
+            files: vec![a, b],
+            name: None,
+            encrypted: false,
+            unencrypted: true,
+            no_compress: false,
+        };
+        store_run(&ctx, &args).unwrap();
 
-    let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
-    let mut names: Vec<_> = list_blobs(&store).into_iter().map(|b| b.name).collect();
-    names.sort();
-    assert_eq!(names, vec!["alpha.txt", "beta.txt"]);
-}
+        let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+        let mut names: Vec<_> = list_blobs(&store).into_iter().map(|b| b.name).collect();
+        names.sort();
+        assert_eq!(names, vec!["alpha.txt", "beta.txt"]);
+    }
 
-#[test]
-fn store_multiple_files_name_flag_rejected() {
-    let piv = with_key_piv();
-    let ctx = make_ctx(piv);
-    format_store(&ctx);
+    #[test]
+    fn store_multiple_files_name_flag_rejected() {
+        let piv = with_key_piv();
+        let ctx = make_ctx(piv);
+        format_store(&ctx);
 
-    let tmp = TempDir::new().unwrap();
-    let a = tmp.path().join("a.txt");
-    let b = tmp.path().join("b.txt");
-    std::fs::write(&a, b"a").unwrap();
-    std::fs::write(&b, b"b").unwrap();
+        let tmp = TempDir::new().unwrap();
+        let a = tmp.path().join("a.txt");
+        let b = tmp.path().join("b.txt");
+        std::fs::write(&a, b"a").unwrap();
+        std::fs::write(&b, b"b").unwrap();
 
-    let args = StoreArgs {
-        files: vec![a, b],
-        name: Some("clash".to_owned()),
-        encrypted: false,
-        unencrypted: true,
-        no_compress: false,
-    };
-    assert!(store_run(&ctx, &args).is_err());
-}
+        let args = StoreArgs {
+            files: vec![a, b],
+            name: Some("clash".to_owned()),
+            encrypted: false,
+            unencrypted: true,
+            no_compress: false,
+        };
+        assert!(store_run(&ctx, &args).is_err());
+    }
 
-#[test]
-fn store_duplicate_basename_rejected() {
-    let piv = with_key_piv();
-    let ctx = make_ctx(piv);
-    format_store(&ctx);
+    #[test]
+    fn store_duplicate_basename_rejected() {
+        let piv = with_key_piv();
+        let ctx = make_ctx(piv);
+        format_store(&ctx);
 
-    let tmp = TempDir::new().unwrap();
-    let d1 = tmp.path().join("d1");
-    let d2 = tmp.path().join("d2");
-    std::fs::create_dir_all(&d1).unwrap();
-    std::fs::create_dir_all(&d2).unwrap();
-    std::fs::write(d1.join("config"), b"one").unwrap();
-    std::fs::write(d2.join("config"), b"two").unwrap();
+        let tmp = TempDir::new().unwrap();
+        let d1 = tmp.path().join("d1");
+        let d2 = tmp.path().join("d2");
+        std::fs::create_dir_all(&d1).unwrap();
+        std::fs::create_dir_all(&d2).unwrap();
+        std::fs::write(d1.join("config"), b"one").unwrap();
+        std::fs::write(d2.join("config"), b"two").unwrap();
 
-    let args = StoreArgs {
-        files: vec![d1.join("config"), d2.join("config")],
-        name: None,
-        encrypted: false,
-        unencrypted: true,
-        no_compress: false,
-    };
-    let err = store_run(&ctx, &args).unwrap_err();
-    assert!(err.to_string().contains("duplicate blob name"));
+        let args = StoreArgs {
+            files: vec![d1.join("config"), d2.join("config")],
+            name: None,
+            encrypted: false,
+            unencrypted: true,
+            no_compress: false,
+        };
+        let err = store_run(&ctx, &args).unwrap_err();
+        assert!(err.to_string().contains("duplicate blob name"));
+    }
 }
 
 // ---------------------------------------------------------------------------
 // fetch
 // ---------------------------------------------------------------------------
 
-use yb::cli::fetch::{run as fetch_run, FetchArgs};
+mod fetch_tests {
+    use super::*;
+    use yb::cli::fetch::{run as fetch_run, FetchArgs};
+    use yb::cli::store::{run as store_run, StoreArgs};
 
-fn store_plain(ctx: &Context, name: &str, payload: &[u8]) {
-    let tmp = TempDir::new().unwrap();
-    let file = tmp.path().join(name);
-    std::fs::write(&file, payload).unwrap();
-    let args = StoreArgs {
-        files: vec![file],
-        name: Some(name.to_owned()),
-        encrypted: false,
-        unencrypted: true,
-        no_compress: false,
-    };
-    store_run(ctx, &args).unwrap();
-}
+    fn store_plain(ctx: &Context, name: &str, payload: &[u8]) {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join(name);
+        std::fs::write(&file, payload).unwrap();
+        let args = StoreArgs {
+            files: vec![file],
+            name: Some(name.to_owned()),
+            encrypted: false,
+            unencrypted: true,
+            no_compress: false,
+        };
+        store_run(ctx, &args).unwrap();
+    }
 
-#[test]
-fn fetch_to_file_default() {
-    let piv = with_key_piv();
-    let ctx = make_ctx(piv);
-    format_store(&ctx);
-    store_plain(&ctx, "myblob", b"contents");
+    #[test]
+    fn fetch_to_file_default() {
+        let piv = with_key_piv();
+        let ctx = make_ctx(piv);
+        format_store(&ctx);
+        store_plain(&ctx, "myblob", b"contents");
 
-    let out_dir = TempDir::new().unwrap();
-    let args = FetchArgs {
-        patterns: vec!["myblob".to_owned()],
-        stdout: false,
-        output: None,
-        output_dir: Some(out_dir.path().to_path_buf()),
-        extract: false,
-    };
-    fetch_run(&ctx, &args).unwrap();
+        let out_dir = TempDir::new().unwrap();
+        let args = FetchArgs {
+            patterns: vec!["myblob".to_owned()],
+            stdout: false,
+            output: None,
+            output_dir: Some(out_dir.path().to_path_buf()),
+            extract: false,
+        };
+        fetch_run(&ctx, &args).unwrap();
 
-    let result = std::fs::read(out_dir.path().join("myblob")).unwrap();
-    assert_eq!(result, b"contents");
-}
+        let result = std::fs::read(out_dir.path().join("myblob")).unwrap();
+        assert_eq!(result, b"contents");
+    }
 
-#[test]
-fn fetch_to_explicit_output() {
-    let piv = with_key_piv();
-    let ctx = make_ctx(piv);
-    format_store(&ctx);
-    store_plain(&ctx, "sec", b"secret");
+    #[test]
+    fn fetch_to_explicit_output() {
+        let piv = with_key_piv();
+        let ctx = make_ctx(piv);
+        format_store(&ctx);
+        store_plain(&ctx, "sec", b"secret");
 
-    let out_dir = TempDir::new().unwrap();
-    let out_file = out_dir.path().join("out.bin");
-    let args = FetchArgs {
-        patterns: vec!["sec".to_owned()],
-        stdout: false,
-        output: Some(out_file.clone()),
-        output_dir: None,
-        extract: false,
-    };
-    fetch_run(&ctx, &args).unwrap();
-    assert_eq!(std::fs::read(&out_file).unwrap(), b"secret");
-}
+        let out_dir = TempDir::new().unwrap();
+        let out_file = out_dir.path().join("out.bin");
+        let args = FetchArgs {
+            patterns: vec!["sec".to_owned()],
+            stdout: false,
+            output: Some(out_file.clone()),
+            output_dir: None,
+            extract: false,
+        };
+        fetch_run(&ctx, &args).unwrap();
+        assert_eq!(std::fs::read(&out_file).unwrap(), b"secret");
+    }
 
-#[test]
-fn fetch_glob_pattern() {
-    let piv = with_key_piv();
-    let ctx = make_ctx(piv);
-    format_store(&ctx);
-    store_plain(&ctx, "key-a", b"a");
-    store_plain(&ctx, "key-b", b"b");
-    store_plain(&ctx, "other", b"c");
+    #[test]
+    fn fetch_glob_pattern() {
+        let piv = with_key_piv();
+        let ctx = make_ctx(piv);
+        format_store(&ctx);
+        store_plain(&ctx, "key-a", b"a");
+        store_plain(&ctx, "key-b", b"b");
+        store_plain(&ctx, "other", b"c");
 
-    let out_dir = TempDir::new().unwrap();
-    let args = FetchArgs {
-        patterns: vec!["key-*".to_owned()],
-        stdout: false,
-        output: None,
-        output_dir: Some(out_dir.path().to_path_buf()),
-        extract: false,
-    };
-    fetch_run(&ctx, &args).unwrap();
+        let out_dir = TempDir::new().unwrap();
+        let args = FetchArgs {
+            patterns: vec!["key-*".to_owned()],
+            stdout: false,
+            output: None,
+            output_dir: Some(out_dir.path().to_path_buf()),
+            extract: false,
+        };
+        fetch_run(&ctx, &args).unwrap();
 
-    assert_eq!(std::fs::read(out_dir.path().join("key-a")).unwrap(), b"a");
-    assert_eq!(std::fs::read(out_dir.path().join("key-b")).unwrap(), b"b");
-    assert!(!out_dir.path().join("other").exists());
-}
+        assert_eq!(std::fs::read(out_dir.path().join("key-a")).unwrap(), b"a");
+        assert_eq!(std::fs::read(out_dir.path().join("key-b")).unwrap(), b"b");
+        assert!(!out_dir.path().join("other").exists());
+    }
 
-#[test]
-fn fetch_stdout_multi_match_rejected() {
-    let piv = with_key_piv();
-    let ctx = make_ctx(piv);
-    format_store(&ctx);
-    store_plain(&ctx, "x", b"x");
-    store_plain(&ctx, "y", b"y");
+    #[test]
+    fn fetch_stdout_multi_match_rejected() {
+        let piv = with_key_piv();
+        let ctx = make_ctx(piv);
+        format_store(&ctx);
+        store_plain(&ctx, "x", b"x");
+        store_plain(&ctx, "y", b"y");
 
-    let args = FetchArgs {
-        patterns: vec!["*".to_owned()],
-        stdout: true,
-        output: None,
-        output_dir: None,
-        extract: false,
-    };
-    assert!(fetch_run(&ctx, &args).is_err());
-}
+        let args = FetchArgs {
+            patterns: vec!["*".to_owned()],
+            stdout: true,
+            output: None,
+            output_dir: None,
+            extract: false,
+        };
+        assert!(fetch_run(&ctx, &args).is_err());
+    }
 
-#[test]
-fn fetch_missing_blob_errors() {
-    let piv = with_key_piv();
-    let ctx = make_ctx(piv);
-    format_store(&ctx);
+    #[test]
+    fn fetch_missing_blob_errors() {
+        let piv = with_key_piv();
+        let ctx = make_ctx(piv);
+        format_store(&ctx);
 
-    let args = FetchArgs {
-        patterns: vec!["ghost".to_owned()],
-        stdout: false,
-        output: None,
-        output_dir: None,
-        extract: false,
-    };
-    assert!(fetch_run(&ctx, &args).is_err());
-}
+        let args = FetchArgs {
+            patterns: vec!["ghost".to_owned()],
+            stdout: false,
+            output: None,
+            output_dir: None,
+            extract: false,
+        };
+        assert!(fetch_run(&ctx, &args).is_err());
+    }
 
-#[test]
-fn fetch_output_and_output_dir_mutually_exclusive() {
-    let piv = with_key_piv();
-    let ctx = make_ctx(piv);
-    format_store(&ctx);
-    store_plain(&ctx, "b", b"b");
+    #[test]
+    fn fetch_output_and_output_dir_mutually_exclusive() {
+        let piv = with_key_piv();
+        let ctx = make_ctx(piv);
+        format_store(&ctx);
+        store_plain(&ctx, "b", b"b");
 
-    let tmp = TempDir::new().unwrap();
-    let args = FetchArgs {
-        patterns: vec!["b".to_owned()],
-        stdout: false,
-        output: Some(tmp.path().join("out")),
-        output_dir: Some(tmp.path().to_path_buf()),
-        extract: false,
-    };
-    assert!(fetch_run(&ctx, &args).is_err());
+        let tmp = TempDir::new().unwrap();
+        let args = FetchArgs {
+            patterns: vec!["b".to_owned()],
+            stdout: false,
+            output: Some(tmp.path().join("out")),
+            output_dir: Some(tmp.path().to_path_buf()),
+            extract: false,
+        };
+        assert!(fetch_run(&ctx, &args).is_err());
+    }
 }
 
 // ---------------------------------------------------------------------------
 // list
 // ---------------------------------------------------------------------------
 
-use yb::cli::list::{run as list_run, ListArgs};
+mod list_tests {
+    use super::*;
+    use yb::cli::list::{run as list_run, ListArgs};
+    use yb::cli::store::{run as store_run, StoreArgs};
 
-#[test]
-fn list_empty_store() {
-    let piv = with_key_piv();
-    let ctx = make_ctx(piv);
-    format_store(&ctx);
+    fn store_plain(ctx: &Context, name: &str, payload: &[u8]) {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join(name);
+        std::fs::write(&file, payload).unwrap();
+        let args = StoreArgs {
+            files: vec![file],
+            name: Some(name.to_owned()),
+            encrypted: false,
+            unencrypted: true,
+            no_compress: false,
+        };
+        store_run(ctx, &args).unwrap();
+    }
 
-    let args = ListArgs {
-        pattern: None,
-        long: false,
-        one_per_line: false,
-        sort_time: false,
-        reverse: false,
-    };
-    // Should succeed with no output (empty store).
-    list_run(&ctx, &args).unwrap();
-}
+    #[test]
+    fn list_empty_store() {
+        let piv = with_key_piv();
+        let ctx = make_ctx(piv);
+        format_store(&ctx);
 
-#[test]
-fn list_glob_filter() {
-    let piv = with_key_piv();
-    let ctx = make_ctx(piv);
-    format_store(&ctx);
-    store_plain(&ctx, "foo-1", b"x");
-    store_plain(&ctx, "foo-2", b"x");
-    store_plain(&ctx, "bar", b"x");
+        let args = ListArgs {
+            pattern: None,
+            long: false,
+            one_per_line: false,
+            sort_time: false,
+            reverse: false,
+        };
+        // Should succeed with no output (empty store).
+        list_run(&ctx, &args).unwrap();
+    }
 
-    // We test that it runs without error; output goes to stdout in tests.
-    let args = ListArgs {
-        pattern: Some("foo-*".to_owned()),
-        long: false,
-        one_per_line: false,
-        sort_time: false,
-        reverse: false,
-    };
-    list_run(&ctx, &args).unwrap();
+    #[test]
+    fn list_glob_filter() {
+        let piv = with_key_piv();
+        let ctx = make_ctx(piv);
+        format_store(&ctx);
+        store_plain(&ctx, "foo-1", b"x");
+        store_plain(&ctx, "foo-2", b"x");
+        store_plain(&ctx, "bar", b"x");
+
+        // We test that it runs without error; output goes to stdout in tests.
+        let args = ListArgs {
+            pattern: Some("foo-*".to_owned()),
+            long: false,
+            one_per_line: false,
+            sort_time: false,
+            reverse: false,
+        };
+        list_run(&ctx, &args).unwrap();
+    }
 }
 
 // ---------------------------------------------------------------------------
 // remove
 // ---------------------------------------------------------------------------
 
-use yb::cli::remove::{run as remove_run, RemoveArgs};
+mod remove_tests {
+    use super::*;
+    use yb::cli::remove::{run as remove_run, RemoveArgs};
+    use yb::cli::store::{run as store_run, StoreArgs};
 
-#[test]
-fn remove_single_blob() {
-    let piv = with_key_piv();
-    let ctx = make_ctx(piv);
-    format_store(&ctx);
-    store_plain(&ctx, "target", b"data");
+    fn store_plain(ctx: &Context, name: &str, payload: &[u8]) {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join(name);
+        std::fs::write(&file, payload).unwrap();
+        let args = StoreArgs {
+            files: vec![file],
+            name: Some(name.to_owned()),
+            encrypted: false,
+            unencrypted: true,
+            no_compress: false,
+        };
+        store_run(ctx, &args).unwrap();
+    }
 
-    let args = RemoveArgs {
-        patterns: vec!["target".to_owned()],
-        ignore_missing: false,
-    };
-    remove_run(&ctx, &args).unwrap();
+    #[test]
+    fn remove_single_blob() {
+        let piv = with_key_piv();
+        let ctx = make_ctx(piv);
+        format_store(&ctx);
+        store_plain(&ctx, "target", b"data");
 
-    let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
-    assert_eq!(list_blobs(&store).len(), 0);
-}
+        let args = RemoveArgs {
+            patterns: vec!["target".to_owned()],
+            ignore_missing: false,
+        };
+        remove_run(&ctx, &args).unwrap();
 
-#[test]
-fn remove_glob_pattern() {
-    let piv = with_key_piv();
-    let ctx = make_ctx(piv);
-    format_store(&ctx);
-    store_plain(&ctx, "tmp-a", b"a");
-    store_plain(&ctx, "tmp-b", b"b");
-    store_plain(&ctx, "keep", b"k");
+        let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+        assert_eq!(list_blobs(&store).len(), 0);
+    }
 
-    let args = RemoveArgs {
-        patterns: vec!["tmp-*".to_owned()],
-        ignore_missing: false,
-    };
-    remove_run(&ctx, &args).unwrap();
+    #[test]
+    fn remove_glob_pattern() {
+        let piv = with_key_piv();
+        let ctx = make_ctx(piv);
+        format_store(&ctx);
+        store_plain(&ctx, "tmp-a", b"a");
+        store_plain(&ctx, "tmp-b", b"b");
+        store_plain(&ctx, "keep", b"k");
 
-    let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
-    let names: Vec<_> = list_blobs(&store).into_iter().map(|b| b.name).collect();
-    assert_eq!(names, vec!["keep"]);
-}
+        let args = RemoveArgs {
+            patterns: vec!["tmp-*".to_owned()],
+            ignore_missing: false,
+        };
+        remove_run(&ctx, &args).unwrap();
 
-#[test]
-fn remove_missing_errors_without_flag() {
-    let piv = with_key_piv();
-    let ctx = make_ctx(piv);
-    format_store(&ctx);
+        let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+        let names: Vec<_> = list_blobs(&store).into_iter().map(|b| b.name).collect();
+        assert_eq!(names, vec!["keep"]);
+    }
 
-    let args = RemoveArgs {
-        patterns: vec!["ghost".to_owned()],
-        ignore_missing: false,
-    };
-    assert!(remove_run(&ctx, &args).is_err());
-}
+    #[test]
+    fn remove_missing_errors_without_flag() {
+        let piv = with_key_piv();
+        let ctx = make_ctx(piv);
+        format_store(&ctx);
 
-#[test]
-fn remove_missing_ok_with_ignore_flag() {
-    let piv = with_key_piv();
-    let ctx = make_ctx(piv);
-    format_store(&ctx);
+        let args = RemoveArgs {
+            patterns: vec!["ghost".to_owned()],
+            ignore_missing: false,
+        };
+        assert!(remove_run(&ctx, &args).is_err());
+    }
 
-    let args = RemoveArgs {
-        patterns: vec!["ghost".to_owned()],
-        ignore_missing: true,
-    };
-    assert!(remove_run(&ctx, &args).is_ok());
-}
+    #[test]
+    fn remove_missing_ok_with_ignore_flag() {
+        let piv = with_key_piv();
+        let ctx = make_ctx(piv);
+        format_store(&ctx);
 
-#[test]
-fn remove_deduplicates_overlapping_patterns() {
-    let piv = with_key_piv();
-    let ctx = make_ctx(piv);
-    format_store(&ctx);
-    store_plain(&ctx, "x", b"x");
+        let args = RemoveArgs {
+            patterns: vec!["ghost".to_owned()],
+            ignore_missing: true,
+        };
+        assert!(remove_run(&ctx, &args).is_ok());
+    }
 
-    // Two patterns both match "x" — should still succeed (removed once).
-    let args = RemoveArgs {
-        patterns: vec!["x".to_owned(), "*".to_owned()],
-        ignore_missing: false,
-    };
-    remove_run(&ctx, &args).unwrap();
+    #[test]
+    fn remove_deduplicates_overlapping_patterns() {
+        let piv = with_key_piv();
+        let ctx = make_ctx(piv);
+        format_store(&ctx);
+        store_plain(&ctx, "x", b"x");
 
-    let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
-    assert_eq!(list_blobs(&store).len(), 0);
+        // Two patterns both match "x" — should still succeed (removed once).
+        let args = RemoveArgs {
+            patterns: vec!["x".to_owned(), "*".to_owned()],
+            ignore_missing: false,
+        };
+        remove_run(&ctx, &args).unwrap();
+
+        let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+        assert_eq!(list_blobs(&store).len(), 0);
+    }
 }
 
 // ---------------------------------------------------------------------------
 // fsck
 // ---------------------------------------------------------------------------
 
-use yb::cli::fsck::{run as fsck_run, FsckArgs};
+mod fsck_tests {
+    use super::*;
+    use yb::cli::fsck::{run as fsck_run, FsckArgs};
+    use yb::cli::store::{run as store_run, StoreArgs};
+    use yb::cli::util::{check_blob_signature, SigVerdict};
+    use yb_core::store::constants::OBJECT_ID_ZERO;
 
-#[test]
-fn fsck_clean_store() {
-    let piv = with_key_piv();
-    let ctx = make_ctx(piv);
-    format_store(&ctx);
-    store_plain(&ctx, "a", b"data");
+    fn store_plain(ctx: &Context, name: &str, payload: &[u8]) {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join(name);
+        std::fs::write(&file, payload).unwrap();
+        let args = StoreArgs {
+            files: vec![file],
+            name: Some(name.to_owned()),
+            encrypted: false,
+            unencrypted: true,
+            no_compress: false,
+        };
+        store_run(ctx, &args).unwrap();
+    }
 
-    // fsck on a clean store should succeed.
-    let args = FsckArgs {
-        verbose: false,
-        nvm: false,
-    };
-    fsck_run(&ctx, &args).unwrap();
-}
+    /// Helper: create a store with a key+cert in slot 0x82, store one plain blob,
+    /// and return the ctx.  The blob has a valid yb2 signature trailer.
+    fn setup_signed_store() -> Context {
+        let piv = with_key_piv();
+        let ctx = make_ctx(piv);
+        ctx.piv
+            .generate_certificate(&ctx.reader, 0x82, "CN=Test", Some(MGMT), None)
+            .unwrap();
+        format_store(&ctx);
+        store_plain(&ctx, "blob", b"the payload bytes");
+        ctx
+    }
 
-/// T9a: fsck verbose — run returns Ok on a store that has objects.
-#[test]
-fn fsck_verbose() {
-    let piv = with_key_piv();
-    let ctx = make_ctx(piv);
-    format_store(&ctx);
-    store_plain(&ctx, "verbose-blob", b"data");
-
-    let args = FsckArgs {
-        verbose: true,
-        nvm: false,
-    };
-    fsck_run(&ctx, &args).unwrap();
-}
-
-/// T9b: detect_anomalies finds duplicate-named heads.
-#[test]
-fn fsck_detect_duplicate_name_anomaly() {
-    use yb::cli::fsck::detect_anomalies;
-    use yb_core::store::{constants::YBLOB_MAGIC, Store};
-
-    let piv = with_key_piv();
-    let ctx = make_ctx(piv);
-    // Format a 4-object store.
-    Store::format(&ctx.reader, ctx.piv.as_ref(), 4, 0x82, Some(MGMT), None).unwrap();
-
-    // Write two head objects with the same name by manipulating the store
-    // in-memory and syncing.
-    let mut store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
-
-    // Manually set both objects 0 and 1 as heads named "dup".
-    use yb_core::store::Object;
-    store.objects[0] = Object {
-        index: 0,
-        object_size: yb_core::store::constants::OBJECT_MIN_SIZE,
-        yblob_magic: YBLOB_MAGIC,
-        object_count: 4,
-        store_key_slot: 0x82,
-        age: 1,
-        chunk_pos: 0,
-        next_chunk: 0,
-        blob_mtime: 0,
-        blob_size: 1,
-        blob_key_slot: 0,
-        blob_plain_size: 1,
-        is_compressed: false,
-        blob_name: "dup".to_owned(),
-        payload: vec![0],
-        dirty: true,
-    };
-    store.objects[1] = Object {
-        index: 1,
-        object_size: yb_core::store::constants::OBJECT_MIN_SIZE,
-        yblob_magic: YBLOB_MAGIC,
-        object_count: 4,
-        store_key_slot: 0x82,
-        age: 2,
-        chunk_pos: 0,
-        next_chunk: 1,
-        blob_mtime: 0,
-        blob_size: 1,
-        blob_key_slot: 0,
-        blob_plain_size: 1,
-        is_compressed: false,
-        blob_name: "dup".to_owned(),
-        payload: vec![0],
-        dirty: true,
-    };
-    store.sync(ctx.piv.as_ref(), Some(MGMT), None).unwrap();
-
-    // Re-read and run detect_anomalies.
-    let store2 = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
-    let warnings = detect_anomalies(&store2);
-    assert!(
-        !warnings.is_empty(),
-        "duplicate blob name should produce a warning"
-    );
-    assert!(
-        warnings.iter().any(|w| w.contains("duplicate")),
-        "warning should mention 'duplicate': {warnings:?}"
-    );
-}
-
-/// T9c: detect_anomalies finds an orphaned continuation chunk.
-#[test]
-fn fsck_detect_orphaned_continuation() {
-    use yb::cli::fsck::detect_anomalies;
-    use yb_core::store::{constants::YBLOB_MAGIC, Store};
-
-    let piv = with_key_piv();
-    let ctx = make_ctx(piv);
-    Store::format(&ctx.reader, ctx.piv.as_ref(), 4, 0x82, Some(MGMT), None).unwrap();
-
-    let mut store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
-
-    // Object 0: valid single-chunk head "solo".
-    use yb_core::store::Object;
-    store.objects[0] = Object {
-        index: 0,
-        object_size: yb_core::store::constants::OBJECT_MIN_SIZE,
-        yblob_magic: YBLOB_MAGIC,
-        object_count: 4,
-        store_key_slot: 0x82,
-        age: 1,
-        chunk_pos: 0,
-        next_chunk: 0,
-        blob_mtime: 0,
-        blob_size: 1,
-        blob_key_slot: 0,
-        blob_plain_size: 1,
-        is_compressed: false,
-        blob_name: "solo".to_owned(),
-        payload: vec![0],
-        dirty: true,
-    };
-    // Object 1: orphaned continuation (no head points to it).
-    store.objects[1] = Object {
-        index: 1,
-        object_size: yb_core::store::constants::OBJECT_MIN_SIZE,
-        yblob_magic: YBLOB_MAGIC,
-        object_count: 4,
-        store_key_slot: 0x82,
-        age: 2,
-        chunk_pos: 1,
-        next_chunk: 1,
-        blob_mtime: 0,
-        blob_size: 0,
-        blob_key_slot: 0,
-        blob_plain_size: 0,
-        is_compressed: false,
-        blob_name: String::new(),
-        payload: vec![0],
-        dirty: true,
-    };
-    store.sync(ctx.piv.as_ref(), Some(MGMT), None).unwrap();
-
-    let store2 = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
-    let warnings = detect_anomalies(&store2);
-    assert!(
-        !warnings.is_empty(),
-        "orphaned chunk should produce a warning"
-    );
-    assert!(
-        warnings.iter().any(|w| w.contains("orphaned")),
-        "warning should mention 'orphaned': {warnings:?}"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// fsck signature verification (spec 0017)
-// ---------------------------------------------------------------------------
-
-use yb::cli::util::{check_blob_signature, SigVerdict};
-use yb_core::store::constants::OBJECT_ID_ZERO;
-
-/// Helper: create a store with a key+cert in slot 0x82, store one plain blob,
-/// and return the ctx.  The blob has a valid yb2 signature trailer.
-fn setup_signed_store() -> Context {
-    let piv = with_key_piv();
-    let ctx = make_ctx(piv);
-    ctx.piv
-        .generate_certificate(&ctx.reader, 0x82, "CN=Test", Some(MGMT), None)
-        .unwrap();
-    format_store(&ctx);
-    store_plain(&ctx, "blob", b"the payload bytes");
-    ctx
-}
-
-/// Get the P-256 verifying key from the store's slot 0x82 cert.
-fn verifying_key(ctx: &Context) -> p256::ecdsa::VerifyingKey {
-    let cert_der = ctx.piv.read_certificate(&ctx.reader, 0x82).unwrap();
-    let pk = yb_core::parse_ec_public_key_from_cert_der(&cert_der).unwrap();
-    p256::ecdsa::VerifyingKey::from(&pk)
-}
-
-/// Read the raw PIV object bytes for store object at `index`.
-fn read_raw(ctx: &Context, index: u32) -> Vec<u8> {
-    ctx.piv
-        .read_object(&ctx.reader, OBJECT_ID_ZERO + index)
-        .unwrap()
-}
-
-/// Write raw PIV object bytes for store object at `index`.
-fn write_raw(ctx: &Context, index: u32, data: &[u8]) {
-    ctx.piv
-        .write_object(&ctx.reader, OBJECT_ID_ZERO + index, data, Some(MGMT), None)
-        .unwrap();
-}
-
-/// T-sig-1: a freshly stored blob has a valid yb2 signature (verdict OK).
-#[test]
-fn fsck_signature_ok_after_store() {
-    let ctx = setup_signed_store();
-    let vk = verifying_key(&ctx);
-
-    let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
-    let head = store.objects.iter().find(|o| o.is_head()).unwrap();
-    let verdict = check_blob_signature(head, &store, Some(&vk));
-    assert_eq!(
-        verdict,
-        SigVerdict::Verified,
-        "fresh blob should have verdict VERIFIED"
-    );
-}
-
-/// T-sig-2: flipping a payload byte in the raw PIV object causes fsck CORRUPTED.
-#[test]
-fn fsck_signature_corrupted_on_tampered_payload() {
-    let ctx = setup_signed_store();
-    let vk = verifying_key(&ctx);
-
-    // The blob "blob" (4-byte name) is stored in object 0.
-    // Raw layout: 23 bytes header + 4 bytes name + payload bytes.
-    // Flip the first payload byte (offset 27).
-    let mut raw = read_raw(&ctx, 0);
-    raw[27] ^= 0xFF;
-    write_raw(&ctx, 0, &raw);
-
-    let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
-    let head = store.objects.iter().find(|o| o.is_head()).unwrap();
-    let verdict = check_blob_signature(head, &store, Some(&vk));
-    assert_eq!(
-        verdict,
-        SigVerdict::Corrupted,
-        "tampered payload should yield CORRUPTED"
-    );
-}
-
-/// T-sig-3: flipping a byte in the signature trailer causes fsck CORRUPTED.
-#[test]
-fn fsck_signature_corrupted_on_tampered_signature() {
-    let ctx = setup_signed_store();
-    let vk = verifying_key(&ctx);
-
-    // Trailer starts at offset 27 + 17 = 44 (header + name + payload).
-    // SIG_VERSION is at 44, r starts at 45.  Flip the first byte of r.
-    let mut raw = read_raw(&ctx, 0);
-    raw[45] ^= 0xFF;
-    write_raw(&ctx, 0, &raw);
-
-    let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
-    let head = store.objects.iter().find(|o| o.is_head()).unwrap();
-    let verdict = check_blob_signature(head, &store, Some(&vk));
-    assert_eq!(
-        verdict,
-        SigVerdict::Corrupted,
-        "tampered signature should yield CORRUPTED"
-    );
-}
-
-/// T-sig-4: a yb1-style blob (no trailer) is UNVERIFIED.
-#[test]
-fn fsck_signature_unverified_for_legacy_blob() {
-    let piv = with_key_piv();
-    let ctx = make_ctx(piv);
-    let cert_der = ctx
-        .piv
-        .generate_certificate(&ctx.reader, 0x82, "CN=Test", Some(MGMT), None)
-        .unwrap();
-    format_store(&ctx);
-
-    // Store a blob normally (gets a yb2 signature), then overwrite the raw
-    // PIV object with a truncated version that has no trailer — simulating
-    // a yb1 object written by an older yb.
-    store_plain(&ctx, "legacy", b"legacy data");
-
-    // Read the raw object, keep only the header + name + blob_size bytes,
-    // and write it back (dropping the 65-byte trailer).
-    let mut raw = read_raw(&ctx, 0);
-    // blob_size = 11 ("legacy data"), name = "legacy" (6 bytes).
-    // Payload starts at offset 23 + 6 = 29.  Keep up to 29 + 11 = 40 bytes.
-    raw.truncate(40);
-    write_raw(&ctx, 0, &raw);
-
-    let vk = {
+    /// Get the P-256 verifying key from the store's slot 0x82 cert.
+    fn verifying_key(ctx: &Context) -> p256::ecdsa::VerifyingKey {
+        let cert_der = ctx.piv.read_certificate(&ctx.reader, 0x82).unwrap();
         let pk = yb_core::parse_ec_public_key_from_cert_der(&cert_der).unwrap();
         p256::ecdsa::VerifyingKey::from(&pk)
-    };
+    }
 
-    let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
-    let head = store.objects.iter().find(|o| o.is_head()).unwrap();
-    let verdict = check_blob_signature(head, &store, Some(&vk));
-    assert_eq!(
-        verdict,
-        SigVerdict::Unverified,
-        "legacy blob should be UNVERIFIED"
-    );
+    /// Read the raw PIV object bytes for store object at `index`.
+    fn read_raw(ctx: &Context, index: u32) -> Vec<u8> {
+        ctx.piv
+            .read_object(&ctx.reader, OBJECT_ID_ZERO + index)
+            .unwrap()
+    }
+
+    /// Write raw PIV object bytes for store object at `index`.
+    fn write_raw(ctx: &Context, index: u32, data: &[u8]) {
+        ctx.piv
+            .write_object(&ctx.reader, OBJECT_ID_ZERO + index, data, Some(MGMT), None)
+            .unwrap();
+    }
+
+    #[test]
+    fn fsck_clean_store() {
+        let piv = with_key_piv();
+        let ctx = make_ctx(piv);
+        format_store(&ctx);
+        store_plain(&ctx, "a", b"data");
+
+        // fsck on a clean store should succeed.
+        let args = FsckArgs {
+            verbose: false,
+            nvm: false,
+        };
+        fsck_run(&ctx, &args).unwrap();
+    }
+
+    /// T9a: fsck verbose — run returns Ok on a store that has objects.
+    #[test]
+    fn fsck_verbose() {
+        let piv = with_key_piv();
+        let ctx = make_ctx(piv);
+        format_store(&ctx);
+        store_plain(&ctx, "verbose-blob", b"data");
+
+        let args = FsckArgs {
+            verbose: true,
+            nvm: false,
+        };
+        fsck_run(&ctx, &args).unwrap();
+    }
+
+    /// T9b: detect_anomalies finds duplicate-named heads.
+    #[test]
+    fn fsck_detect_duplicate_name_anomaly() {
+        use yb::cli::fsck::detect_anomalies;
+        use yb_core::store::Store;
+
+        let piv = with_key_piv();
+        let ctx = make_ctx(piv);
+        // Format a 4-object store.
+        Store::format(&ctx.reader, ctx.piv.as_ref(), 4, 0x82, Some(MGMT), None).unwrap();
+
+        // Write two head objects with the same name by manipulating the store
+        // in-memory and syncing.
+        let mut store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+
+        // Manually set both objects 0 and 1 as heads named "dup".
+        let mut obj0 = store.make_object(yb_core::store::ObjectParams {
+            index: 0,
+            age: 1,
+            chunk_pos: 0,
+            next_chunk: 0,
+        });
+        obj0.blob_size = 1;
+        obj0.blob_plain_size = 1;
+        obj0.blob_name = "dup".to_owned();
+        obj0.set_payload(vec![0]);
+        store.objects[0] = obj0;
+
+        let mut obj1 = store.make_object(yb_core::store::ObjectParams {
+            index: 1,
+            age: 2,
+            chunk_pos: 0,
+            next_chunk: 1,
+        });
+        obj1.blob_size = 1;
+        obj1.blob_plain_size = 1;
+        obj1.blob_name = "dup".to_owned();
+        obj1.set_payload(vec![0]);
+        store.objects[1] = obj1;
+        store.sync(ctx.piv.as_ref(), Some(MGMT), None).unwrap();
+
+        // Re-read and run detect_anomalies.
+        let store2 = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+        let warnings = detect_anomalies(&store2);
+        assert!(
+            !warnings.is_empty(),
+            "duplicate blob name should produce a warning"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("duplicate")),
+            "warning should mention 'duplicate': {warnings:?}"
+        );
+    }
+
+    /// T9c: detect_anomalies finds an orphaned continuation chunk.
+    #[test]
+    fn fsck_detect_orphaned_continuation() {
+        use yb::cli::fsck::detect_anomalies;
+        use yb_core::store::Store;
+
+        let piv = with_key_piv();
+        let ctx = make_ctx(piv);
+        Store::format(&ctx.reader, ctx.piv.as_ref(), 4, 0x82, Some(MGMT), None).unwrap();
+
+        let mut store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+
+        // Object 0: valid single-chunk head "solo".
+        let mut obj0 = store.make_object(yb_core::store::ObjectParams {
+            index: 0,
+            age: 1,
+            chunk_pos: 0,
+            next_chunk: 0,
+        });
+        obj0.blob_size = 1;
+        obj0.blob_plain_size = 1;
+        obj0.blob_name = "solo".to_owned();
+        obj0.set_payload(vec![0]);
+        store.objects[0] = obj0;
+
+        // Object 1: orphaned continuation (no head points to it).
+        let mut obj1 = store.make_object(yb_core::store::ObjectParams {
+            index: 1,
+            age: 2,
+            chunk_pos: 1,
+            next_chunk: 1,
+        });
+        obj1.set_payload(vec![0]);
+        store.objects[1] = obj1;
+        store.sync(ctx.piv.as_ref(), Some(MGMT), None).unwrap();
+
+        let store2 = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+        let warnings = detect_anomalies(&store2);
+        assert!(
+            !warnings.is_empty(),
+            "orphaned chunk should produce a warning"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("orphaned")),
+            "warning should mention 'orphaned': {warnings:?}"
+        );
+    }
+
+    /// T-sig-1: a freshly stored blob has a valid yb2 signature (verdict OK).
+    #[test]
+    fn fsck_signature_ok_after_store() {
+        let ctx = setup_signed_store();
+        let vk = verifying_key(&ctx);
+
+        let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+        let head = store.objects.iter().find(|o| o.is_head()).unwrap();
+        let verdict = check_blob_signature(head, &store, Some(&vk));
+        assert_eq!(
+            verdict,
+            SigVerdict::Verified,
+            "fresh blob should have verdict VERIFIED"
+        );
+    }
+
+    /// T-sig-2: flipping a payload byte in the raw PIV object causes fsck CORRUPTED.
+    #[test]
+    fn fsck_signature_corrupted_on_tampered_payload() {
+        let ctx = setup_signed_store();
+        let vk = verifying_key(&ctx);
+
+        // The blob "blob" (4-byte name) is stored in object 0.
+        // Raw layout: 23 bytes header + 4 bytes name + payload bytes.
+        // Flip the first payload byte (offset 27).
+        let mut raw = read_raw(&ctx, 0);
+        raw[27] ^= 0xFF;
+        write_raw(&ctx, 0, &raw);
+
+        let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+        let head = store.objects.iter().find(|o| o.is_head()).unwrap();
+        let verdict = check_blob_signature(head, &store, Some(&vk));
+        assert_eq!(
+            verdict,
+            SigVerdict::Corrupted,
+            "tampered payload should yield CORRUPTED"
+        );
+    }
+
+    /// T-sig-3: flipping a byte in the signature trailer causes fsck CORRUPTED.
+    #[test]
+    fn fsck_signature_corrupted_on_tampered_signature() {
+        let ctx = setup_signed_store();
+        let vk = verifying_key(&ctx);
+
+        // Trailer starts at offset 27 + 17 = 44 (header + name + payload).
+        // SIG_VERSION is at 44, r starts at 45.  Flip the first byte of r.
+        let mut raw = read_raw(&ctx, 0);
+        raw[45] ^= 0xFF;
+        write_raw(&ctx, 0, &raw);
+
+        let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+        let head = store.objects.iter().find(|o| o.is_head()).unwrap();
+        let verdict = check_blob_signature(head, &store, Some(&vk));
+        assert_eq!(
+            verdict,
+            SigVerdict::Corrupted,
+            "tampered signature should yield CORRUPTED"
+        );
+    }
+
+    /// T-sig-4: a yb1-style blob (no trailer) is UNVERIFIED.
+    #[test]
+    fn fsck_signature_unverified_for_legacy_blob() {
+        let piv = with_key_piv();
+        let ctx = make_ctx(piv);
+        let cert_der = ctx
+            .piv
+            .generate_certificate(&ctx.reader, 0x82, "CN=Test", Some(MGMT), None)
+            .unwrap();
+        format_store(&ctx);
+
+        // Store a blob normally (gets a yb2 signature), then overwrite the raw
+        // PIV object with a truncated version that has no trailer — simulating
+        // a yb1 object written by an older yb.
+        store_plain(&ctx, "legacy", b"legacy data");
+
+        // Read the raw object, keep only the header + name + blob_size bytes,
+        // and write it back (dropping the 65-byte trailer).
+        let mut raw = read_raw(&ctx, 0);
+        // blob_size = 11 ("legacy data"), name = "legacy" (6 bytes).
+        // Payload starts at offset 23 + 6 = 29.  Keep up to 29 + 11 = 40 bytes.
+        raw.truncate(40);
+        write_raw(&ctx, 0, &raw);
+
+        let vk = {
+            let pk = yb_core::parse_ec_public_key_from_cert_der(&cert_der).unwrap();
+            p256::ecdsa::VerifyingKey::from(&pk)
+        };
+
+        let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+        let head = store.objects.iter().find(|o| o.is_head()).unwrap();
+        let verdict = check_blob_signature(head, &store, Some(&vk));
+        assert_eq!(
+            verdict,
+            SigVerdict::Unverified,
+            "legacy blob should be UNVERIFIED"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
 // format (--key-slot parsing)
 // ---------------------------------------------------------------------------
 
-use yb::cli::format::{run as format_run, FormatArgs};
-use yb_core::store::constants::{DEFAULT_OBJECT_COUNT, DEFAULT_SUBJECT};
+mod format_tests {
+    use super::*;
+    use yb::cli::format::{run as format_run, FormatArgs};
+    use yb_core::store::constants::{DEFAULT_OBJECT_COUNT, DEFAULT_SUBJECT};
 
-#[test]
-fn format_key_slot_hex_prefix() {
-    let piv = with_key_piv();
-    let ctx = make_ctx(piv);
-    // Pre-generate a cert in slot 0x82 so verify_certificate passes.
-    ctx.piv
-        .generate_certificate(&ctx.reader, 0x82, "CN=Test", Some(MGMT), None)
-        .unwrap();
+    #[test]
+    fn format_key_slot_hex_prefix() {
+        let piv = with_key_piv();
+        let ctx = make_ctx(piv);
+        // Pre-generate a cert in slot 0x82 so verify_certificate passes.
+        ctx.piv
+            .generate_certificate(&ctx.reader, 0x82, "CN=Test", Some(MGMT), None)
+            .unwrap();
 
-    let args = FormatArgs {
-        object_count: DEFAULT_OBJECT_COUNT,
+        let args = FormatArgs {
+            object_count: DEFAULT_OBJECT_COUNT,
 
-        key_slot: "0x82".to_owned(),
-        generate: false,
-        subject: DEFAULT_SUBJECT.to_owned(),
-    };
-    format_run(&ctx, &args).unwrap();
-}
+            key_slot: "0x82".to_owned(),
+            generate: false,
+            subject: DEFAULT_SUBJECT.to_owned(),
+        };
+        format_run(&ctx, &args).unwrap();
+    }
 
-#[test]
-fn format_key_slot_decimal() {
-    let piv = with_key_piv();
-    let ctx = make_ctx(piv);
-    // 130 decimal == 0x82.
-    ctx.piv
-        .generate_certificate(&ctx.reader, 0x82, "CN=Test", Some(MGMT), None)
-        .unwrap();
+    #[test]
+    fn format_key_slot_decimal() {
+        let piv = with_key_piv();
+        let ctx = make_ctx(piv);
+        // 130 decimal == 0x82.
+        ctx.piv
+            .generate_certificate(&ctx.reader, 0x82, "CN=Test", Some(MGMT), None)
+            .unwrap();
 
-    let args = FormatArgs {
-        object_count: DEFAULT_OBJECT_COUNT,
+        let args = FormatArgs {
+            object_count: DEFAULT_OBJECT_COUNT,
 
-        key_slot: "130".to_owned(),
-        generate: false,
-        subject: DEFAULT_SUBJECT.to_owned(),
-    };
-    format_run(&ctx, &args).unwrap();
-}
+            key_slot: "130".to_owned(),
+            generate: false,
+            subject: DEFAULT_SUBJECT.to_owned(),
+        };
+        format_run(&ctx, &args).unwrap();
+    }
 
-#[test]
-fn format_key_slot_invalid_rejected() {
-    let piv = with_key_piv();
-    let ctx = make_ctx(piv);
+    #[test]
+    fn format_key_slot_invalid_rejected() {
+        let piv = with_key_piv();
+        let ctx = make_ctx(piv);
 
-    let args = FormatArgs {
-        object_count: DEFAULT_OBJECT_COUNT,
+        let args = FormatArgs {
+            object_count: DEFAULT_OBJECT_COUNT,
 
-        key_slot: "notanumber".to_owned(),
-        generate: false,
-        subject: DEFAULT_SUBJECT.to_owned(),
-    };
-    assert!(format_run(&ctx, &args).is_err());
+            key_slot: "notanumber".to_owned(),
+            generate: false,
+            subject: DEFAULT_SUBJECT.to_owned(),
+        };
+        assert!(format_run(&ctx, &args).is_err());
+    }
 }

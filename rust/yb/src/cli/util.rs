@@ -39,7 +39,7 @@ pub fn check_blob_signature(
     store: &Store,
     verifying_key: Option<&p256::ecdsa::VerifyingKey>,
 ) -> SigVerdict {
-    use yb_core::piv::session::raw_ecdsa_to_der;
+    use yb_core::crypto::raw_ecdsa_to_der;
 
     let blob_size = head.blob_size as usize;
     let (payload, trailing, has_supernumerary) = collect_blob_chain(head, store);
@@ -104,8 +104,11 @@ pub fn check_blob_signature(
 // Name quoting (spec 0018)
 // ---------------------------------------------------------------------------
 
-/// Return true if `name` contains any character outside the safe set:
+/// Return true if `name` contains any byte outside the safe ASCII set:
 /// `a–z A–Z 0–9 . - _ + , / :`
+///
+/// All safe characters are ASCII, so iterating bytes is both correct and
+/// sufficient — any non-ASCII byte will fail the match and trigger quoting.
 fn needs_quoting(name: &str) -> bool {
     name.bytes().any(|b| !matches!(b, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'.' | b'-' | b'_' | b'+' | b',' | b'/' | b':'))
 }

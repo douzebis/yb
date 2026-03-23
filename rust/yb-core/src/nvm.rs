@@ -4,10 +4,16 @@
 
 //! NVM free-space measurement.
 //!
-//! [`measure_free_nvm`] is an idempotent probe: it fills every empty PIV slot
-//! to its maximum capacity via binary search, sums the totals, then restores
-//! all probe slots to empty.  The device is left in exactly the state it was
-//! found in (only empty slots are touched).
+//! This module contains two functions with very different risk profiles:
+//!
+//! - [`scan_nvm`] — **read-only**: reads every occupied PIV object once and
+//!   tallies store / other / free bytes.  Safe to call at any time.
+//!
+//! - [`measure_free_nvm`] — **destructive probe**: fills every empty PIV slot
+//!   to its maximum capacity via binary search, sums the totals, then restores
+//!   all probe slots to empty.  The device is left in exactly the state it was
+//!   found in, but the probe writes are real and count against YubiKey NVM
+//!   wear.  Never call this function in a tight loop or in production hot paths.
 
 use crate::piv::session::PcscSession;
 use crate::piv::PivBackend;
