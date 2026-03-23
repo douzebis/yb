@@ -46,6 +46,7 @@ pub mod store;
 pub use context::{
     parse_ec_public_key_from_cert_der, Context, ContextOptions, DevicePicker, OutputOptions,
 };
+pub use nvm::{scan_nvm, NvmUsage};
 pub use orchestrator::{
     chunks_needed, collect_blob_chain, fetch_blob, list_blobs, remove_blob, store_blob, BlobInfo,
     Compression, Encryption, StoreOptions,

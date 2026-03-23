@@ -461,7 +461,10 @@ fn fsck_clean_store() {
     store_plain(&ctx, "a", b"data");
 
     // fsck on a clean store should succeed.
-    let args = FsckArgs { verbose: false };
+    let args = FsckArgs {
+        verbose: false,
+        nvm: false,
+    };
     fsck_run(&ctx, &args).unwrap();
 }
 
@@ -473,7 +476,10 @@ fn fsck_verbose() {
     format_store(&ctx);
     store_plain(&ctx, "verbose-blob", b"data");
 
-    let args = FsckArgs { verbose: true };
+    let args = FsckArgs {
+        verbose: true,
+        nvm: false,
+    };
     fsck_run(&ctx, &args).unwrap();
 }
 
