@@ -80,9 +80,22 @@ pub fn run(ctx: &Context, args: &FsckArgs) -> Result<()> {
         blob_verdicts.push((head, verdict));
     }
 
-    // Store header.
-    let free = store.free_count();
-    let store_bytes_used: usize = store.objects.iter().map(|o| o.object_size).sum();
+    // Store header — count only reachable (non-orphaned) objects as used.
+    let reachable: std::collections::HashSet<u8> = heads
+        .iter()
+        .flat_map(|h| store.chunk_chain(h.index))
+        .collect();
+    let free_count = store
+        .objects
+        .iter()
+        .filter(|o| o.is_empty() || !reachable.contains(&o.index))
+        .count();
+    let store_bytes_used: usize = store
+        .objects
+        .iter()
+        .filter(|o| reachable.contains(&o.index))
+        .map(|o| o.object_size)
+        .sum();
 
     println!(
         "Store: {} objects, slot 0x{:02x}, age {}",
@@ -90,7 +103,7 @@ pub fn run(ctx: &Context, args: &FsckArgs) -> Result<()> {
     );
     println!(
         "Blobs: {} stored, {} objects free (~{} bytes used by store)",
-        stored, free, store_bytes_used
+        stored, free_count, store_bytes_used
     );
 
     // Per-blob table.
@@ -108,8 +121,10 @@ pub fn run(ctx: &Context, args: &FsckArgs) -> Result<()> {
 
     // NVM breakdown — only when --nvm is requested.
     if args.nvm {
-        let store_ids: std::collections::HashSet<u32> = (0..store.object_count)
-            .map(|i| OBJECT_ID_ZERO + i as u32)
+        // Only count reachable slots as store NVM — orphans are treated as free.
+        let store_ids: std::collections::HashSet<u32> = reachable
+            .iter()
+            .map(|&i| OBJECT_ID_ZERO + i as u32)
             .collect();
         match scan_nvm(&ctx.reader, ctx.piv.as_ref(), &store_ids) {
             Ok(usage) => println!(
