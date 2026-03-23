@@ -172,8 +172,11 @@ const KNOWN_PIV_OBJECTS: &[u32] = &[
 /// fixed set of well-known PIV object IDs.  No credentials required — only
 /// GET DATA (read-only) APDUs are issued.
 ///
-/// The `store_object_ids` set identifies which `0x5F_00xx` slots belong to
-/// the yb store; any occupied slot outside that set is counted as "other".
+/// `store_object_ids` identifies which `0x5F_00xx` slots are reachable yb
+/// store objects (counted as store bytes).  Any other occupied slot in the
+/// store range — i.e. orphaned chunks — is silently skipped so its bytes
+/// fall into the free estimate rather than polluting the "other" bucket.
+/// Occupied slots outside the store range go into the "other" bucket.
 pub fn scan_nvm(
     reader: &str,
     piv: &dyn PivBackend,
@@ -188,9 +191,9 @@ pub fn scan_nvm(
         if let Some(size) = piv.object_size(reader, id)? {
             if store_object_ids.contains(&id) {
                 store_bytes += size;
-            } else {
-                other_bytes += size;
             }
+            // Orphaned store slots (occupied but not reachable) are skipped:
+            // they are treated as free space, not as "other".
         }
     }
 
