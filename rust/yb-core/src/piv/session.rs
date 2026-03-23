@@ -442,7 +442,12 @@ impl PcscSession {
         }
         if let Some(p) = pin {
             self.verify_pin(p)?;
-            let raw = self.get_data(OBJ_PRINTED)?;
+            let raw = self.get_data(OBJ_PRINTED).map_err(|_| {
+                anyhow::anyhow!(
+                    "management key not found on device; \
+                     supply it via YB_MANAGEMENT_KEY or the --key flag"
+                )
+            })?;
             let key_hex = extract_pin_protected_key(&raw)?;
             self.authenticate_management_key(&key_hex)?;
             return Ok(key_hex);
