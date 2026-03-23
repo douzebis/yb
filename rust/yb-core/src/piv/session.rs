@@ -76,7 +76,10 @@ impl PcscSession {
                 resp = self.transmit_raw(&get_resp)?;
                 continue;
             }
-            bail!("{label} failed: SW={sw1:02x}{sw2:02x}");
+            bail!(
+                "{label} failed: SW={sw1:02x}{sw2:02x} ({})",
+                sw_description(sw1, sw2)
+            );
         }
 
         Ok(data)
@@ -127,7 +130,10 @@ impl PcscSession {
                 let get_resp = [0x00, 0xC0, 0x00, 0x00, le];
                 resp = self.transmit_raw(&get_resp)?;
             } else {
-                bail!("GET DATA failed: SW={sw1:02x}{sw2:02x}");
+                bail!(
+                    "GET DATA failed: SW={sw1:02x}{sw2:02x} ({})",
+                    sw_description(sw1, sw2)
+                );
             }
         }
         // data is 53 <len> <payload>; parse payload length.
@@ -195,12 +201,18 @@ impl PcscSession {
                 if (sw1 == 0x6A && sw2 == 0x84) || (sw1 == 0x67 && sw2 == 0x00) {
                     return Ok(false);
                 }
-                bail!("PUT DATA failed: SW={sw1:02x}{sw2:02x}");
+                bail!(
+                    "PUT DATA failed: SW={sw1:02x}{sw2:02x} ({})",
+                    sw_description(sw1, sw2)
+                );
             } else if (sw1 == 0x6A && sw2 == 0x84) || (sw1 == 0x67 && sw2 == 0x00) {
                 drop(tx);
                 return Ok(false);
             } else if sw1 != 0x90 || sw2 != 0x00 {
-                bail!("PUT DATA (chained) failed: SW={sw1:02x}{sw2:02x}");
+                bail!(
+                    "PUT DATA (chained) failed: SW={sw1:02x}{sw2:02x} ({})",
+                    sw_description(sw1, sw2)
+                );
             }
         }
     }
@@ -246,11 +258,17 @@ impl PcscSession {
             let sw2 = resp[n - 1];
             if is_last {
                 if sw1 != 0x90 || sw2 != 0x00 {
-                    bail!("PUT DATA failed: SW={sw1:02x}{sw2:02x}");
+                    bail!(
+                        "PUT DATA failed: SW={sw1:02x}{sw2:02x} ({})",
+                        sw_description(sw1, sw2)
+                    );
                 }
                 break;
             } else if sw1 != 0x90 || sw2 != 0x00 {
-                bail!("PUT DATA (chained) failed: SW={sw1:02x}{sw2:02x}");
+                bail!(
+                    "PUT DATA (chained) failed: SW={sw1:02x}{sw2:02x} ({})",
+                    sw_description(sw1, sw2)
+                );
             }
         }
 
@@ -478,6 +496,28 @@ pub(crate) fn version_from_reader(reader: &str) -> Option<String> {
         return None;
     }
     Some(format!("{}.{}.{}", resp[0], resp[1], resp[2]))
+}
+
+// ---------------------------------------------------------------------------
+// SW description helper
+// ---------------------------------------------------------------------------
+
+/// Return a short human-readable description for a PIV status word.
+fn sw_description(sw1: u8, sw2: u8) -> &'static str {
+    match (sw1, sw2) {
+        (0x63, _) => "wrong PIN",
+        (0x67, 0x00) => "wrong length (object too large?)",
+        (0x69, 0x82) => "security condition not met (PIN or management key required)",
+        (0x69, 0x83) => "PIN blocked",
+        (0x69, 0x84) => "referenced data invalidated (key slot empty?)",
+        (0x69, 0x85) => "conditions of use not satisfied",
+        (0x6A, 0x80) => "incorrect parameters in data field",
+        (0x6A, 0x82) => "object not found",
+        (0x6A, 0x84) => "not enough NVM space",
+        (0x6A, 0x86) => "incorrect parameters P1/P2",
+        (0x6D, 0x00) => "instruction not supported",
+        _ => "unexpected status",
+    }
 }
 
 // ---------------------------------------------------------------------------
