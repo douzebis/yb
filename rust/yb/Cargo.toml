@@ -4,7 +4,7 @@
 
 [package]
 name        = "yb"
-version     = "0.4.1"
+version     = "0.4.2"
 edition     = "2021"
 rust-version = "1.86"
 license     = "MIT"
@@ -31,7 +31,7 @@ path = "src/lib.rs"
 self-test = ["yb-core/test-utils"]
 
 [dependencies]
-yb-core       = { path = "../yb-core", version = "0.4.1", features = ["chrono", "virtual-piv"] }
+yb-core       = { path = "../yb-core", version = "0.4.2", features = ["chrono", "virtual-piv"] }
 p256          = { version = "0.13", features = ["ecdsa"] }
 sha2          = "0.10"
 clap          = { version = "4", features = ["derive", "env"] }
@@ -45,7 +45,7 @@ rpassword     = "7"
 atty          = "0.2"
 clap_mangen   = "0.2"
 [dev-dependencies]
-yb-core  = { path = "../yb-core", version = "0.4.1", features = ["chrono", "virtual-piv"] }
+yb-core  = { path = "../yb-core", version = "0.4.2", features = ["chrono", "virtual-piv"] }
 tempfile = "3"
 
 

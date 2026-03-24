@@ -72,8 +72,12 @@ sudo dnf install pkgconf pcsc-lite-devel
 Then:
 
 ```shell
-cargo install yb
+cargo install --locked yb
 ```
+
+`--locked` is required: it uses the dependency versions that were tested at
+release time.  Without it, Cargo may resolve newer transitive dependency
+versions that require a more recent Rust toolchain than the one you have.
 
 Runtime requirement: a PC/SC daemon must be running (`pcscd` on Linux).
 No other external tools are needed.
@@ -82,7 +86,7 @@ No other external tools are needed.
 > them locally, run:
 >
 > ```shell
-> cargo install --bin yb-gen-man yb
+> cargo install --locked --bin yb-gen-man yb
 > yb-gen-man /usr/local/share/man/man1
 > ```
 >
