@@ -568,6 +568,10 @@ fn test_with_backend_multiple_devices_errors() {
         fn read_printed_object_with_pin(&self, _r: &str, _pin: &str) -> anyhow::Result<Vec<u8>> {
             anyhow::bail!("stub")
         }
+
+        fn set_management_key(&self, _r: &str, _old: &str, _new: &str) -> anyhow::Result<()> {
+            anyhow::bail!("stub")
+        }
     }
 
     let result = Context::with_backend(Arc::new(TwoDevicePiv), None, false);

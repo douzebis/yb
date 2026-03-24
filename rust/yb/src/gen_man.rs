@@ -84,10 +84,10 @@ Shell name (\fBbash\fR, \fBzsh\fR, \fBfish\fR).  When set, \fByb\fR emits shell
 completion code to stdout and exits.
 .SH EXAMPLES
 .PP
-Provision a new store (32 objects) and generate an ECDH key:
+Provision a new store, generate an ECDH key, and enable PIN-protected mode:
 .RS
 .nf
-yb format \-\-generate
+yb format \-\-generate \-\-protect
 .fi
 .RE
 .PP
@@ -142,11 +142,25 @@ By default \fBformat\fR expects an ECDH key to already exist in the chosen
 PIV slot (verified via its X.509 certificate).  Pass \fB\-\-generate\fR to
 create a new P-256 key pair and a self-signed certificate on the card.
 .PP
+Pass \fB\-\-protect\fR to generate a random management key and store it in
+PIN-protected mode (the PRINTED PIV object).  After this, future write
+operations only require the PIN — no \fBYB_MANAGEMENT_KEY\fR or
+\fB\-\-key\fR needed.  The current management key is taken from
+\fBYB_MANAGEMENT_KEY\fR / \fB\-\-key\fR, or the factory default if neither
+is set.
+.PP
 \fBformat\fR must be run once before \fBstore\fR, \fBfetch\fR, or any other
 command that accesses the store."#,
             r#".SH EXAMPLES
 .PP
-First-time setup \(em generate a key and format with defaults:
+First-time setup \(em generate a key, format, and enable PIN-protected mode:
+.RS
+.nf
+yb format \-\-generate \-\-protect
+.fi
+.RE
+.PP
+First-time setup without PIN-protected mode:
 .RS
 .nf
 yb format \-\-generate

@@ -6,6 +6,9 @@
 use anyhow::{bail, Result};
 use clap::Args;
 use yb_core::{
+    auxiliaries::{
+        enable_pin_protected_management_key, generate_random_management_key, DEFAULT_MANAGEMENT_KEY,
+    },
     store::{
         constants::{DEFAULT_OBJECT_COUNT, DEFAULT_SUBJECT},
         Store,
@@ -30,6 +33,16 @@ pub struct FormatArgs {
     /// X.509 subject for the self-signed certificate (only with --generate).
     #[arg(short = 'n', long = "subject", default_value = DEFAULT_SUBJECT)]
     pub subject: String,
+
+    /// Set up PIN-protected management key mode.
+    ///
+    /// Generates a random management key, stores it in the PIN-protected
+    /// PRINTED object, and updates ADMIN DATA so that future write operations
+    /// only require the PIN (no explicit --key needed).
+    /// The current management key must be the factory default; supply it via
+    /// YB_MANAGEMENT_KEY or --key if it has already been changed.
+    #[arg(long = "protect")]
+    pub protect: bool,
 }
 
 pub fn run(ctx: &Context, args: &FormatArgs) -> Result<()> {
@@ -50,6 +63,29 @@ pub fn run(ctx: &Context, args: &FormatArgs) -> Result<()> {
         generate_certificate(ctx, slot, &args.subject)?;
     } else {
         verify_certificate(ctx, slot, &args.subject)?;
+    }
+
+    // --protect: generate a random management key and store it in
+    // PIN-protected mode so that future write operations only require the PIN.
+    if args.protect {
+        let old_key = ctx
+            .management_key
+            .as_deref()
+            .unwrap_or(DEFAULT_MANAGEMENT_KEY);
+        let pin = ctx.require_pin()?.ok_or_else(|| {
+            anyhow::anyhow!("PIN required to set up PIN-protected management key")
+        })?;
+        let new_key_hex = generate_random_management_key();
+        enable_pin_protected_management_key(
+            &ctx.reader,
+            ctx.piv.as_ref(),
+            old_key,
+            &new_key_hex,
+            &pin,
+        )?;
+        if !ctx.quiet {
+            eprintln!("PIN-protected management key configured.");
+        }
     }
 
     let mgmt_key = ctx.management_key_for_write()?;

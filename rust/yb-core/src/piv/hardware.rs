@@ -156,6 +156,21 @@ impl PivBackend for HardwarePiv {
         session.get_data(OBJ_PRINTED)
     }
 
+    fn set_management_key(&self, reader: &str, old_key_hex: &str, new_key_hex: &str) -> Result<()> {
+        let new_bytes = hex::decode(new_key_hex).context("decoding new management key")?;
+        if new_bytes.len() != 24 {
+            anyhow::bail!("set_management_key: new key must be 24 bytes (3DES)");
+        }
+        let mut session = PcscSession::open(reader)?;
+        session.authenticate_management_key(old_key_hex)?;
+        // SET MANAGEMENT KEY: INS=0xFF, P1=0xFF, P2=0xFF
+        // Data: 03 (3DES algorithm) 9B (management key tag) 18 (24 decimal) <24 bytes>
+        let mut apdu = vec![0x00, 0xFF, 0xFF, 0xFF, 27u8, 0x03, 0x9B, 0x18];
+        apdu.extend_from_slice(&new_bytes);
+        session.transmit_check(&apdu, "SET MANAGEMENT KEY")?;
+        Ok(())
+    }
+
     fn generate_certificate(
         &self,
         reader: &str,

@@ -118,6 +118,14 @@ pub trait PivBackend: Send + Sync {
     /// session to prevent the card from resetting PIN-verified state between calls.
     fn read_printed_object_with_pin(&self, reader: &str, pin: &str) -> Result<Vec<u8>>;
 
+    /// Replace the management key.
+    ///
+    /// `old_key_hex` is the current management key (48 hex chars for 3DES).
+    /// `new_key_hex` is the replacement key (same length).
+    /// The implementation must authenticate with `old_key_hex` first, then
+    /// issue SET MANAGEMENT KEY to install `new_key_hex`.
+    fn set_management_key(&self, reader: &str, old_key_hex: &str, new_key_hex: &str) -> Result<()>;
+
     /// Return the size in bytes of a PIV data object, or `None` if the object
     /// does not exist.  Used by `scan_nvm` to measure NVM usage without writes.
     /// The default implementation attempts `read_object` and maps "not found"

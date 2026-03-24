@@ -493,6 +493,14 @@ impl PivBackend for VirtualPiv {
             .ok_or_else(|| anyhow!("virtual: no PRINTED object stored"))
     }
 
+    fn set_management_key(&self, reader: &str, old_key_hex: &str, new_key_hex: &str) -> Result<()> {
+        let mut s = self.state.lock().unwrap();
+        check_reader(&s, reader)?;
+        do_authenticate_management_key(&mut s, old_key_hex)?;
+        s.management_key_hex = new_key_hex.to_owned();
+        Ok(())
+    }
+
     fn save_fixture(&self, path: &std::path::Path) -> Result<()> {
         self.do_save_fixture(path)
     }

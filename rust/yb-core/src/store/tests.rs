@@ -349,6 +349,10 @@ fn format_zero_objects() {
         fn read_printed_object_with_pin(&self, _r: &str, _pin: &str) -> anyhow::Result<Vec<u8>> {
             bail!("null")
         }
+
+        fn set_management_key(&self, _r: &str, _old: &str, _new: &str) -> anyhow::Result<()> {
+            bail!("null")
+        }
     }
 
     let piv = NullPiv;
