@@ -67,7 +67,13 @@ pub fn run(ctx: &Context, args: &FormatArgs) -> Result<()> {
 
     // --protect: generate a random management key and store it in
     // PIN-protected mode so that future write operations only require the PIN.
-    if args.protect {
+    //
+    // After this completes the card's management key has changed, so we must
+    // use pin-only auth for the Store::format call that follows — passing the
+    // new key explicitly would also work but would require keeping it in memory
+    // longer than necessary.  We set mgmt_key_override to signal which path
+    // to take below.
+    let pin_only_after_protect = if args.protect {
         let old_key = ctx
             .management_key
             .as_deref()
@@ -86,9 +92,21 @@ pub fn run(ctx: &Context, args: &FormatArgs) -> Result<()> {
         if !ctx.quiet {
             eprintln!("PIN-protected management key configured.");
         }
-    }
+        true
+    } else {
+        false
+    };
 
-    let mgmt_key = ctx.management_key_for_write()?;
+    // Resolve the management key for Store::format.
+    // If --protect just ran, PIN-protected mode is now active on the card even
+    // though ctx.pin_protected was set at startup (before the change).  Use
+    // pin-only auth (mgmt_key = None) so write_object retrieves the new key
+    // from the PRINTED object via PIN verification in the same session.
+    let mgmt_key = if pin_only_after_protect {
+        None
+    } else {
+        ctx.management_key_for_write()?
+    };
 
     let pin = ctx.require_pin()?;
     Store::format(
