@@ -49,6 +49,8 @@ pub struct Context {
     pub reader: String,
     pub serial: u32,
     pub management_key: Option<String>,
+    /// Which factory-default credentials were still active at startup.
+    pub defaults: auxiliaries::DefaultCredentials,
     /// Cached PIN.  Starts as `None` when no non-interactive source provided
     /// one; populated on the first call to `require_pin()`.
     /// Wrapped in `Zeroizing` so the bytes are overwritten on drop.
@@ -101,13 +103,32 @@ impl Context {
         )?;
 
         // Check for default credentials unless skipped by environment.
-        if std::env::var("YB_SKIP_DEFAULT_CHECK").is_err() {
+        let defaults = if std::env::var("YB_SKIP_DEFAULT_CHECK").is_err() {
             auxiliaries::check_for_default_credentials(
                 &selected_reader,
                 piv.as_ref(),
                 opts.allow_defaults,
-            )?;
-        }
+            )?
+        } else {
+            auxiliaries::DefaultCredentials::default()
+        };
+
+        // When --allow-defaults is set and credentials are still at factory
+        // defaults, inject them automatically so the user is not prompted.
+        let management_key = opts.management_key.or_else(|| {
+            if defaults.management_key {
+                Some(auxiliaries::DEFAULT_MANAGEMENT_KEY.to_owned())
+            } else {
+                None
+            }
+        });
+        let pin = opts.pin.or_else(|| {
+            if defaults.pin {
+                Some(auxiliaries::DEFAULT_PIN.to_owned())
+            } else {
+                None
+            }
+        });
 
         let (pin_protected, pin_derived) =
             auxiliaries::detect_pin_protected_mode(&selected_reader, piv.as_ref())
@@ -118,8 +139,9 @@ impl Context {
         Ok(Self {
             reader: selected_reader,
             serial: device.serial,
-            management_key: opts.management_key,
-            pin: RefCell::new(opts.pin.map(Zeroizing::new)),
+            management_key,
+            defaults,
+            pin: RefCell::new(pin.map(Zeroizing::new)),
             pin_fn,
             piv,
             debug,
@@ -162,6 +184,7 @@ impl Context {
             reader,
             serial: device.serial,
             management_key: None,
+            defaults: auxiliaries::DefaultCredentials::default(),
             pin: RefCell::new(pin.map(Zeroizing::new)),
             pin_fn: Box::new(|| Ok(None)),
             piv: backend,

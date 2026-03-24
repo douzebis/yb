@@ -281,6 +281,10 @@ mod tests {
         fn read_printed_object_with_pin(&self, _r: &str, _pin: &str) -> Result<Vec<u8>> {
             bail!("mock")
         }
+
+        fn set_management_key(&self, _r: &str, _old: &str, _new: &str) -> Result<()> {
+            bail!("mock")
+        }
     }
 
     // Mock whose ecdh() always errors (T4/T5 which never reach ECDH).
@@ -335,6 +339,10 @@ mod tests {
             bail!("mock")
         }
         fn read_printed_object_with_pin(&self, _r: &str, _pin: &str) -> Result<Vec<u8>> {
+            bail!("mock")
+        }
+
+        fn set_management_key(&self, _r: &str, _old: &str, _new: &str) -> Result<()> {
             bail!("mock")
         }
     }

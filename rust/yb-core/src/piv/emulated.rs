@@ -187,4 +187,16 @@ impl PivBackend for EmulatedPiv {
             .cloned()
             .ok_or_else(|| anyhow!("emulated: no PRINTED object stored"))
     }
+
+    fn set_management_key(
+        &self,
+        reader: &str,
+        _old_key_hex: &str,
+        _new_key_hex: &str,
+    ) -> Result<()> {
+        if reader != self.reader {
+            bail!("emulated: unknown reader '{reader}'");
+        }
+        Ok(())
+    }
 }

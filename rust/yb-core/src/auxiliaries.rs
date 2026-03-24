@@ -13,6 +13,10 @@ use std::collections::HashMap;
 pub const OBJ_ADMIN_DATA: u32 = 0x5F_FF00;
 pub const OBJ_PRINTED: u32 = 0x5F_C109;
 
+/// Factory-default credentials.
+pub const DEFAULT_PIN: &str = "123456";
+pub const DEFAULT_MANAGEMENT_KEY: &str = "010203040506070801020304050607080102030405060708";
+
 // APDU bytes for GET_METADATA (YubiKey firmware 5.3+).
 const GET_METADATA_PIN: [u8; 5] = [0x00, 0xF7, 0x00, 0x80, 0x00];
 const GET_METADATA_PUK: [u8; 5] = [0x00, 0xF7, 0x00, 0x81, 0x00];
@@ -104,50 +108,69 @@ pub(crate) fn parse_subject_dn(subject: &str) -> rcgen::DistinguishedName {
 // Default-credential check
 // ---------------------------------------------------------------------------
 
+/// Which factory-default credentials are still active on the device.
+#[derive(Debug, Default)]
+pub struct DefaultCredentials {
+    pub pin: bool,
+    pub management_key: bool,
+}
+
+impl DefaultCredentials {
+    pub fn any(&self) -> bool {
+        self.pin || self.management_key
+    }
+}
+
 /// Check whether the YubiKey still has default (insecure) credentials.
 ///
 /// Uses GET_METADATA APDU (firmware 5.3+).  On older firmware the check is
-/// skipped with a warning.  If `allow_defaults` is false and defaults are
-/// found, returns Err.
+/// skipped with a warning.  If `allow_defaults` is false and any defaults are
+/// found, returns Err.  Otherwise returns which credentials are still default.
 pub fn check_for_default_credentials(
     reader: &str,
     piv: &dyn PivBackend,
     allow_defaults: bool,
-) -> Result<()> {
-    let mut defaults_found = Vec::new();
+) -> Result<DefaultCredentials> {
+    let mut result = DefaultCredentials::default();
+    let mut labels = Vec::new();
 
-    for (label, apdu) in [
-        ("PIN", GET_METADATA_PIN.as_ref()),
-        ("PUK", GET_METADATA_PUK.as_ref()),
-        ("management key", GET_METADATA_MGMT.as_ref()),
+    for (label, apdu, field) in [
+        ("PIN", GET_METADATA_PIN.as_ref(), 0u8),
+        ("PUK", GET_METADATA_PUK.as_ref(), 1u8),
+        ("management key", GET_METADATA_MGMT.as_ref(), 2u8),
     ] {
         match piv.send_apdu(reader, apdu) {
             Err(_) => {
                 // Firmware < 5.3 or APDU not supported — skip silently.
-                return Ok(());
+                return Ok(DefaultCredentials::default());
             }
             Ok(resp) => {
                 let tlv = parse_tlv_flat(&resp);
                 if tlv.get(&TAG_IS_DEFAULT).map(|v| v.first()) == Some(Some(&0x01)) {
-                    defaults_found.push(label);
+                    labels.push(label);
+                    match field {
+                        0 => result.pin = true,
+                        2 => result.management_key = true,
+                        _ => {}
+                    }
                 }
             }
         }
     }
 
-    if defaults_found.is_empty() {
-        return Ok(());
+    if labels.is_empty() {
+        return Ok(result);
     }
 
     let msg = format!(
         "YubiKey has default credentials: {}. \
          This is insecure. Use --allow-defaults to override.",
-        defaults_found.join(", ")
+        labels.join(", ")
     );
 
     if allow_defaults {
         eprintln!("Warning: {msg}");
-        Ok(())
+        Ok(result)
     } else {
         bail!("{msg}")
     }
@@ -212,6 +235,74 @@ pub fn get_pin_protected_management_key(
 ) -> Result<String> {
     let raw = piv.read_printed_object_with_pin(reader, pin)?;
     extract_pin_protected_key(&raw)
+}
+
+/// Generate a random 24-byte 3DES management key, returned as a hex string.
+pub fn generate_random_management_key() -> String {
+    let bytes: [u8; 24] = rand::random();
+    hex::encode(bytes)
+}
+
+/// Store `new_key_hex` in PIN-protected mode on the device.
+///
+/// Steps:
+/// 1. Issue SET MANAGEMENT KEY to replace the current key with `new_key_hex`.
+/// 2. Write the new key into the PRINTED object (0x5FC109) wrapped in the
+///    `88 <n> [ 89 <24> <key_bytes> ]` TLV structure that
+///    `extract_pin_protected_key` expects.
+/// 3. Write ADMIN DATA (0x5FFF00) with the `mgmt_key_stored` bit set so that
+///    `detect_pin_protected_mode` recognises PIN-protected mode.
+///
+/// The caller must have already verified `pin` is correct for this device.
+pub fn enable_pin_protected_management_key(
+    reader: &str,
+    piv: &dyn PivBackend,
+    old_key_hex: &str,
+    new_key_hex: &str,
+    pin: &str,
+) -> Result<()> {
+    // Step 1 — swap the management key on the card.
+    piv.set_management_key(reader, old_key_hex, new_key_hex)?;
+
+    // Step 2 — encode the new key in the PRINTED object.
+    // Format: 88 <outer_len> [ 89 <24> <24 key bytes> ]
+    let key_bytes = hex::decode(new_key_hex).map_err(|e| anyhow::anyhow!("key hex: {e}"))?;
+    let inner_value: Vec<u8> = {
+        let mut v = vec![0x89u8, key_bytes.len() as u8];
+        v.extend_from_slice(&key_bytes);
+        v
+    };
+    let printed_payload: Vec<u8> = {
+        let mut v = vec![0x88u8, inner_value.len() as u8];
+        v.extend(inner_value);
+        v
+    };
+    piv.write_object(
+        reader,
+        OBJ_PRINTED,
+        &printed_payload,
+        Some(new_key_hex),
+        None,
+    )?;
+
+    // Step 3 — write ADMIN DATA: tag 0x80 [ tag 0x81 <1 byte: flags> ]
+    // Bit 0x01 = mgmt key stored in PRINTED object (PIN-protected mode).
+    let admin_inner = [0x81u8, 0x01, 0x01];
+    let admin_payload: Vec<u8> = {
+        let mut v = vec![0x80u8, admin_inner.len() as u8];
+        v.extend_from_slice(&admin_inner);
+        v
+    };
+    piv.write_object(
+        reader,
+        OBJ_ADMIN_DATA,
+        &admin_payload,
+        Some(new_key_hex),
+        None,
+    )?;
+
+    let _ = pin; // caller-supplied PIN acknowledged; no additional round-trip needed
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

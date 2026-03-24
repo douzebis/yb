@@ -36,7 +36,40 @@ optionally encrypted with hardware-backed hybrid cryptography.
 
 ## Installation
 
-### cargo install
+### NixOS / nix-shell
+
+Build and install from the repo:
+
+```shell
+nix-build
+result/bin/yb --help
+```
+
+Or enter a development shell with `yb` on `PATH` and shell completions
+activated automatically:
+
+```shell
+nix-shell
+```
+
+### cargo install (Debian, Arch, Fedora, macOS, …)
+
+First, install the PC/SC development library for your distribution:
+
+```shell
+# Debian / Ubuntu
+sudo apt install pkgconf libpcsclite-dev
+
+# Arch
+sudo pacman -S pkgconf pcsclite
+
+# Fedora
+sudo dnf install pkgconf pcsc-lite-devel
+
+# macOS — PC/SC is built into the OS; no extra library needed
+```
+
+Then:
 
 ```shell
 cargo install yb
@@ -58,22 +91,6 @@ No other external tools are needed.
 > ```shell
 > cargo run --manifest-path rust/Cargo.toml --bin yb-gen-man -- /usr/local/share/man/man1
 > ```
-
-### Nix (NixOS / nix-shell)
-
-Build and install from the repo:
-
-```shell
-nix-build
-result/bin/yb --help
-```
-
-Or enter a development shell with `yb` on `PATH` and shell completions
-activated automatically:
-
-```shell
-nix-shell
-```
 
 ### Build from source
 
@@ -121,132 +138,24 @@ completions are activated for the current session automatically.
 
 ## Quick Start
 
-### 1. Provision the YubiKey store
-
 ```shell
-# Generate a new ECDH key pair and initialise the blob store
-yb format --generate
-```
+# One-time setup: generate a P-256 key and enable PIN-protected management key
+yb format --generate --protect
 
-This writes 32 PIV object sentinels to the YubiKey and generates a P-256
-key in slot `0x82`.  Run once per YubiKey.
+# Stash a secret
+echo "s3cr3t" | yb store -n api-token
 
-### 2. Store a blob
+# Retrieve it
+yb fetch -p api-token
 
-```shell
-# Store a file (blob name defaults to the file's basename)
-yb store secret.txt
+# See what's there — signatures verified automatically, no PIN needed
+yb ls -l
 
-# Store a file under a specific name
-yb store --name my-key secret.txt
-
-# Read from stdin
-echo "s3cr3t" | yb store --name api-token
-
-# Store unencrypted
-yb store --unencrypted public-cert.pem
-```
-
-### 3. Fetch a blob
-
-```shell
-# Save to a file in the current directory (filename = blob name)
-yb fetch my-key
-
-# Write to stdout
-yb fetch --stdout api-token
-
-# Write to a specific file
-yb fetch --output recovered.txt my-key
-
-# Fetch multiple blobs matching a glob
-yb fetch 'ssh-*'
-```
-
-### 4. List blobs
-
-```shell
-# Names only
-yb list
-
-# Long format (encrypted flag, chunk count, date, size, name)
-yb list --long
-
-# Filter by glob
-yb list 'ssh-*'
-
-# Sort by date, newest first
-yb list --long --sort-time
-```
-
-### 5. Remove blobs
-
-```shell
-yb remove my-key
-
-# Glob pattern
-yb remove 'tmp-*'
-
-# Ignore if not found
-yb remove --ignore-missing old-token
-```
-
-### 6. Check integrity
-
-```shell
-# Verify all blob signatures (no PIN needed)
-yb fsck
-
-# Full NVM breakdown (store / other PIV objects / free)
+# Something feels off? Check the store
 yb fsck --nvm
-
-# Verbose: structural warnings + raw per-object dump
-yb fsck --verbose
 ```
 
-`yb list` also checks signatures automatically. Corrupted blobs are
-flagged inline:
-
-```
-mysecret
-'my secret file'  CORRUPTED
-other-blob
-```
-
-Both commands exit with code 1 if any blob is CORRUPTED, making them
-suitable for use in scripts and monitoring:
-
-```shell
-yb list || alert "YubiKey store corruption detected"
-```
-
----
-
-## Command Reference
-
-```
-yb [OPTIONS] <COMMAND>
-
-Options:
-  -s, --serial <SERIAL>   YubiKey serial number (required with multiple keys)
-  -r, --reader <READER>   PC/SC reader name (legacy; prefer --serial)
-  -q, --quiet             Suppress informational output
-      --pin-stdin         Read PIN from stdin (one line, for scripting)
-      --allow-defaults    Allow insecure default credentials (not recommended)
-      --debug             Enable debug output
-```
-
-| Command | Alias | Description |
-|---|---|---|
-| `format` | — | Provision PIV objects; optionally generate ECDH key |
-| `store` | — | Store a blob (file or stdin) |
-| `fetch` | — | Retrieve blob(s) by name or glob |
-| `list` | `ls` | List blobs with optional glob filter |
-| `remove` | `rm` | Remove blob(s) by name or glob |
-| `fsck` | — | Check store integrity and print summary |
-| `list-readers` | — | List available PC/SC readers |
-
-Use `yb <command> --help` for full option details.
+For full option details: `yb <command> --help` or `man yb`.
 
 ---
 
@@ -326,20 +235,31 @@ the available serials and exits.
 
 yb checks for factory-default credentials (PIN `123456`, PUK `12345678`,
 management key `010203...`) and refuses to operate if any are detected.
-Change them with:
+Change the PIN and PUK with:
 
 ```shell
 ykman piv access change-pin
 ykman piv access change-puk
+```
+
+For the management key, the recommended approach is **PIN-protected mode**:
+the management key is replaced with a random value stored on the YubiKey
+itself, protected by your PIN.  yb detects this automatically — no `--key`
+flag is needed for write operations.
+
+Enable it in one step at format time:
+
+```shell
+yb format --generate --protect
+```
+
+Or, if you have already formatted and want to enable it separately:
+
+```shell
 ykman piv access change-management-key --generate --protect
 ```
 
-The last command enables **PIN-protected management key mode**: the
-management key is stored on the YubiKey itself, encrypted by your PIN.
-yb detects this automatically — no `--key` flag is needed for write
-operations.
-
-To bypass the check (testing only): `--allow-defaults` or
+To bypass the default-credential check (testing only): `--allow-defaults` or
 `YB_SKIP_DEFAULT_CHECK=1`.
 
 Requires YubiKey firmware 5.3 or later for credential detection.

@@ -34,7 +34,7 @@
 //! Private key material on the YubiKey is never extracted. ECDH key
 //! agreement is performed on-card via the PIV GENERAL AUTHENTICATE command.
 
-pub(crate) mod auxiliaries;
+pub mod auxiliaries;
 pub mod crypto;
 
 pub mod context;

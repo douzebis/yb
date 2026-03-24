@@ -806,6 +806,7 @@ mod format_tests {
             key_slot: "0x82".to_owned(),
             generate: false,
             subject: DEFAULT_SUBJECT.to_owned(),
+            protect: false,
         };
         format_run(&ctx, &args).unwrap();
     }
@@ -825,6 +826,7 @@ mod format_tests {
             key_slot: "130".to_owned(),
             generate: false,
             subject: DEFAULT_SUBJECT.to_owned(),
+            protect: false,
         };
         format_run(&ctx, &args).unwrap();
     }
@@ -840,6 +842,7 @@ mod format_tests {
             key_slot: "notanumber".to_owned(),
             generate: false,
             subject: DEFAULT_SUBJECT.to_owned(),
+            protect: false,
         };
         assert!(format_run(&ctx, &args).is_err());
     }
