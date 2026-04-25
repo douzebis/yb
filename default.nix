@@ -3,7 +3,11 @@
 #
 # SPDX-License-Identifier: MIT
 
-{ pkgs ? import <nixpkgs> {} }:
+{ pkgs ? import (fetchTarball {
+    url    = "https://channels.nixos.org/nixos-25.11/nixexprs.tar.xz";
+    sha256 = "1849z3492d6wi1y67hnh1b88abvi092clnv9awbfj4rilh70hc62";
+  }) {}
+}:
 
 let
   # ---------------------------------------------------------------------------
@@ -167,7 +171,7 @@ let
       gh
       usbutils
       mandoc
-      poppler_utils
+      poppler-utils
     ];
 
     shellHook = ''
