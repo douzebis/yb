@@ -16,4 +16,7 @@
 /website/public/
 /man/man1/
 /man/mandoc.db
+/.vscode/settings.json
+/rust/.vscode/settings.json
+/rust/rust-toolchain.toml
 
