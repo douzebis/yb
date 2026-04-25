@@ -162,6 +162,7 @@ let
       llvmPackages.libclang
       # Project tooling
       reuse
+      ruff
       gh
       usbutils
       mandoc
@@ -200,6 +201,18 @@ let
           -e '/^\s*) )$/a\    compopt -o filenames 2>/dev/null' \
           -e 's|words\[COMP_CWORD\]="$2"|local _cur="''${COMP_LINE:0:''${COMP_POINT}}"; _cur="''${_cur##* }"; words[COMP_CWORD]="''${_cur}"|')
       fi
+
+      # Generate rust/rust-toolchain.toml so rust-analyzer uses the same
+      # rustc version as the nix-shell build.  The file is gitignored and
+      # regenerated on each nix-shell entry.  rustup installs the toolchain
+      # on first entry; subsequent entries are instant (already installed).
+      rustup toolchain install ${pkgs.rustc.unwrapped.version} \
+        --component rust-src --no-self-update 2>/dev/null || true
+      cat > rust/rust-toolchain.toml <<EOF
+[toolchain]
+channel = "${pkgs.rustc.unwrapped.version}"
+components = ["rust-src", "rustfmt", "clippy"]
+EOF
 
       echo "Development environment ready."
       echo "  Rust: $(cargo --version)"
