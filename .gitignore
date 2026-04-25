@@ -18,4 +18,5 @@
 /.vscode/settings.json
 /rust/.vscode/settings.json
 /rust/rust-toolchain.toml
+/pyrightconfig.json
 
