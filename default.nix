@@ -215,10 +215,22 @@ channel = "${pkgs.rustc.unwrapped.version}"
 components = ["rust-src", "rustfmt", "clippy"]
 EOF
 
+      # Generate pyrightconfig.json so Pylance excludes the attic/ directory.
+      # The file is gitignored — regenerated on each nix-shell entry.
+      cat > pyrightconfig.json <<'EOF'
+{
+  "exclude": [
+    "attic"
+  ]
+}
+EOF
+
       echo "Development environment ready."
       echo "  Rust: $(cargo --version)"
 
-      eval "$old_opts"
+      [[ "$old_opts" == *"set -o errexit"*  ]] && set -e || set +e
+      [[ "$old_opts" == *"set -o nounset"*  ]] && set -u || set +u
+      [[ "$old_opts" == *"set -o pipefail"* ]] && set -o pipefail || set +o pipefail
     '';
   };
 
