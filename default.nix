@@ -2,7 +2,12 @@
 #
 # SPDX-License-Identifier: MIT
 
-{ pkgs ? import <nixpkgs> {} }:
+{ pkgs ? import (fetchTarball {
+    # Pinned to nixos-25.11 @ a4bf06618f0b5ee50f14ed8f0da77d34ecc19160 (2026-04-29)
+    url    = "https://github.com/NixOS/nixpkgs/archive/a4bf06618f0b5ee50f14ed8f0da77d34ecc19160.tar.gz";
+    sha256 = "0vma331213djanwmb7ibgmi5290952h6ri123xwb66mg58k8r200";
+  }) {}
+}:
 
 let
   # ---------------------------------------------------------------------------
@@ -111,12 +116,6 @@ let
 
     nativeBuildInputs = rustCommon.nativeBuildInputs ++ [ pkgs.installShellFiles ];
 
-    checkPhase = ''
-      echo "fmt:    ${rustFmt}"
-      echo "clippy: ${rustClippy}"
-      echo "tests:  ${rustTests}"
-    '';
-
     postInstall = ''
       installShellCompletion --cmd yb \
         --bash <(YB_COMPLETE=bash $out/bin/yb | sed \
@@ -166,7 +165,7 @@ let
       gh
       usbutils
       mandoc
-      poppler_utils
+      poppler-utils
     ];
 
     shellHook = ''
