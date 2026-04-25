@@ -215,14 +215,18 @@ channel = "${pkgs.rustc.unwrapped.version}"
 components = ["rust-src", "rustfmt", "clippy"]
 EOF
 
-      # Generate pyrightconfig.json so Pylance excludes the attic/ directory.
-      # The file is gitignored — regenerated on each nix-shell entry.
+      # Generate pyrightconfig.json and ruff.toml so Pylance and ruff exclude
+      # the attic/ directory.  Both files are gitignored — regenerated on each
+      # nix-shell entry.
       cat > pyrightconfig.json <<'EOF'
 {
   "exclude": [
     "attic"
   ]
 }
+EOF
+      cat > ruff.toml <<'EOF'
+exclude = ["attic/"]
 EOF
 
       echo "Development environment ready."
