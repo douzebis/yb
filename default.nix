@@ -115,12 +115,6 @@ let
 
     nativeBuildInputs = rustCommon.nativeBuildInputs ++ [ pkgs.installShellFiles ];
 
-    checkPhase = ''
-      echo "fmt:    ${rustFmt}"
-      echo "clippy: ${rustClippy}"
-      echo "tests:  ${rustTests}"
-    '';
-
     postInstall = ''
       installShellCompletion --cmd yb \
         --bash <(YB_COMPLETE=bash $out/bin/yb | sed \
