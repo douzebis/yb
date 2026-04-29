@@ -3,8 +3,9 @@
 # SPDX-License-Identifier: MIT
 
 { pkgs ? import (fetchTarball {
-    url    = "https://channels.nixos.org/nixos-25.11/nixexprs.tar.xz";
-    sha256 = "1849z3492d6wi1y67hnh1b88abvi092clnv9awbfj4rilh70hc62";
+    # Pinned to nixos-25.11 @ a4bf06618f0b5ee50f14ed8f0da77d34ecc19160 (2026-04-29)
+    url    = "https://github.com/NixOS/nixpkgs/archive/a4bf06618f0b5ee50f14ed8f0da77d34ecc19160.tar.gz";
+    sha256 = "0vma331213djanwmb7ibgmi5290952h6ri123xwb66mg58k8r200";
   }) {}
 }:
 
