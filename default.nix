@@ -32,15 +32,19 @@ let
   rustCommon = {
     src        = rustSrc;
     pname      = "yb";
-    version    = "0.1.0";
+    version    = "0.4.2";
     strictDeps = true;
     nativeBuildInputs = [ pkgs.cargo pkgs.rustc pkgs.pkg-config ];
-    buildInputs = [ pkgs.pcsclite ];
+    # pcsclite is needed on Linux by all derivations that compile the crate.
+    # On macOS, pcsc-sys links against PCSC.framework via the SDK sysroot
+    # automatically — no explicit buildInputs entry required.
+    buildInputs = pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.pcsclite ];
   };
 
   # Shared dependency cache — rebuilt only when Cargo.lock or dep sources change.
   rustDeps = crane.buildDepsOnly (rustCommon // {
-    pname = "yb-deps";
+    pname   = "yb-deps";
+    doCheck = false;
   });
 
   # ---------------------------------------------------------------------------
@@ -76,28 +80,21 @@ let
       in "-I${clangInclude}/${version}/include";
   };
 
-  harnessDeps = crane.buildDepsOnly (harnessCommon // {
-    pname          = "yb-harness-deps";
-    cargoArtifacts = rustDeps;
-    cargoExtraArgs = "-p yb-piv-harness --features integration-tests";
-  });
-
   # Build the tier-2 test binary using crane's cargoTest with --no-run, then
   # extract the compiled binary from the cargo artifact output.
+  # Inherit from rustDeps (not a harness-specific deps derivation) to avoid
+  # stale test binaries appearing in the inherited target/ cache.
   harnessTestBin = crane.cargoTest (harnessCommon // {
     pname              = "yb-harness-test-bin";
-    cargoArtifacts     = harnessDeps;
+    cargoArtifacts     = rustDeps;
     cargoExtraArgs     = "-p yb-piv-harness --features integration-tests";
     cargoTestExtraArgs = "--no-run";
-    # Instead of running tests, install the compiled binary.
     installPhase = ''
       mkdir -p $out/bin
       for name in hardware_piv_tests yb_cli_tests; do
-        bin=$(find target -name "$name-*" -executable -type f \
-                ! -name '*.d' ! -name '*.rmeta' \
-                -printf '%T@ %p\n' | sort -rn | head -1 | cut -d' ' -f2-)
-        if [ -z "$bin" ]; then
-          echo "ERROR: $name binary not found under target/" >&2
+        bin=$(find target/release/deps -maxdepth 1 -name "$name-*" ! -name "*.d" -type f)
+        if [ -z "$bin" ] || [ ! -f "$bin" ]; then
+          echo "ERROR: could not find $name binary" >&2
           exit 1
         fi
         echo "Installing $bin -> $out/bin/$name"
@@ -154,18 +151,19 @@ let
       rustfmt
       clippy
       pkg-config
+      # Project tooling
+      reuse
+      ruff
+      gh
+      mandoc
+      poppler-utils
+    ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
       pcsclite
       ccid
       # Tier-2 test harness (vsmartcard + piv-authenticator)
       vsmartcard-vpcd
       llvmPackages.libclang
-      # Project tooling
-      reuse
-      ruff
-      gh
       usbutils
-      mandoc
-      poppler-utils
     ];
 
     shellHook = ''
