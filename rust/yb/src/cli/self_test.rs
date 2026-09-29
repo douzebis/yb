@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use yb_core::{
     test_utils::{OpType, OperationGenerator, ToyFilesystem},
-    Context,
+    Context, SecretOp,
 };
 
 #[derive(Args, Debug)]
@@ -161,6 +161,7 @@ enum StoreResult {
 // ---------------------------------------------------------------------------
 
 pub fn run(ctx: &mut Context, args: &SelfTestArgs) -> Result<()> {
+    ctx.enforce_default_policy(SecretOp::SelfTest)?;
     let serial = ctx.serial;
     let version = {
         let devices = ctx.piv.list_devices()?;

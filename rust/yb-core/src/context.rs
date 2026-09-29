@@ -9,6 +9,7 @@ use crate::piv::VirtualPiv;
 use crate::{
     auxiliaries::{self, ProtectionMode},
     piv::{hardware::HardwarePiv, DeviceInfo, PivBackend},
+    policy::{self, SecretOp},
 };
 use anyhow::{bail, Context as _, Result};
 use p256::PublicKey;
@@ -49,8 +50,7 @@ pub struct ContextOptions {
 /// step 4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeySource {
-    /// `YB_MANAGEMENT_KEY` (or the deprecated `--key`, or the factory key
-    /// injected by `--allow-defaults`).
+    /// `YB_MANAGEMENT_KEY` (or the deprecated `--key`).
     Explicit,
     /// PRINTED tag `89`.
     Printed,
@@ -123,6 +123,9 @@ pub struct Context {
     pub management_key: Option<String>,
     /// Which factory-default credentials were still active at startup.
     pub defaults: auxiliaries::DefaultCredentials,
+    /// `--allow-defaults`: the default-credential policy warns instead of
+    /// refusing (spec 0024 §3).
+    pub allow_defaults: bool,
     /// Cached PIN.  Starts as `None` when no non-interactive source provided
     /// one; populated on the first call to `require_pin()`.
     /// Wrapped in `Zeroizing` so the bytes are overwritten on drop.
@@ -178,44 +181,15 @@ impl Context {
             &*device_picker,
         )?;
 
-        // Check for default credentials unless skipped by environment.
-        let defaults = if std::env::var("YB_SKIP_DEFAULT_CHECK").is_err() {
-            auxiliaries::check_for_default_credentials(
-                &selected_reader,
-                piv.as_ref(),
-                opts.allow_defaults,
-            )?
-        } else {
-            auxiliaries::DefaultCredentials::default()
-        };
-
-        // When --allow-defaults is set and credentials are still at factory
-        // defaults, inject them automatically so the user is not prompted.
-        let management_key = opts.management_key.or_else(|| {
-            if defaults.management_key {
-                Some(auxiliaries::DEFAULT_MANAGEMENT_KEY.to_owned())
-            } else {
-                None
-            }
-        });
-        let pin = opts.pin.or_else(|| {
-            if defaults.pin {
-                Some(auxiliaries::DEFAULT_PIN.to_owned())
-            } else {
-                None
-            }
-        });
-
-        // Unsupported modes (PIN-derived, unparseable) are refused only when
-        // a management key is needed, so read-only commands keep working.
-        let protection = auxiliaries::detect_protection_mode(&selected_reader, piv.as_ref());
+        let (defaults, protection) = probe_card(&selected_reader, piv.as_ref());
 
         Ok(Self {
             reader: selected_reader,
             serial: device.serial,
-            management_key,
+            management_key: opts.management_key,
             defaults,
-            pin: RefCell::new(pin.map(Zeroizing::new)),
+            allow_defaults: opts.allow_defaults,
+            pin: initial_pin(opts.pin, &defaults),
             pin_fn,
             piv,
             debug,
@@ -232,8 +206,8 @@ impl Context {
     /// custom `PivBackend` implementation.  The backend must expose exactly
     /// one device; if it exposes none or more than one, an error is returned.
     ///
-    /// Default-credential checks are skipped (the caller controls the
-    /// backend and is assumed to have configured it correctly).
+    /// The card is probed exactly as by [`Context::new`] (default
+    /// credentials, protection mode).  `allow_defaults` starts false.
     pub fn with_backend(
         backend: Arc<dyn PivBackend>,
         pin: Option<String>,
@@ -248,15 +222,15 @@ impl Context {
             _ => bail!("multiple devices in backend — use Context::new with --serial"),
         };
         let reader = device.reader.clone();
-
-        let protection = auxiliaries::detect_protection_mode(&reader, backend.as_ref());
+        let (defaults, protection) = probe_card(&reader, backend.as_ref());
 
         Ok(Self {
             reader,
             serial: device.serial,
             management_key: None,
-            defaults: auxiliaries::DefaultCredentials::default(),
-            pin: RefCell::new(pin.map(Zeroizing::new)),
+            defaults,
+            allow_defaults: false,
+            pin: initial_pin(pin, &defaults),
             pin_fn: Box::new(|| Ok(None)),
             piv: backend,
             debug,
@@ -282,6 +256,19 @@ impl Context {
         let resolved = (self.pin_fn)()?;
         *self.pin.borrow_mut() = resolved.as_deref().map(|s| Zeroizing::new(s.to_owned()));
         Ok(resolved)
+    }
+
+    /// Apply the default-credential policy for `op` (spec 0024): refuse
+    /// with `Err`, or return the warnings that apply, printed unless
+    /// `--quiet`.  Call once per command, before its first card write.
+    pub fn enforce_default_policy(&self, op: SecretOp) -> Result<Vec<String>> {
+        let warnings = policy::default_policy(op, &self.defaults, self.allow_defaults)?;
+        if !self.quiet {
+            for warning in &warnings {
+                eprintln!("{warning}");
+            }
+        }
+        Ok(warnings)
     }
 
     /// Fail if the card's management key protection is one yb cannot write
@@ -510,6 +497,37 @@ impl Context {
 }
 
 // ---------------------------------------------------------------------------
+// Card probe shared by both constructors
+// ---------------------------------------------------------------------------
+
+/// Read-only state probed when a `Context` is built: which credentials are
+/// still at their factory values (unless `YB_SKIP_DEFAULT_CHECK` is set),
+/// and how the management key is protected.  Nothing is enforced here:
+/// unsupported protection modes are refused only when a management key is
+/// needed, and default credentials per command (spec 0024).
+fn probe_card(
+    reader: &str,
+    piv: &dyn PivBackend,
+) -> (auxiliaries::DefaultCredentials, ProtectionMode) {
+    let defaults = if std::env::var("YB_SKIP_DEFAULT_CHECK").is_ok() {
+        auxiliaries::DefaultCredentials::default()
+    } else {
+        auxiliaries::detect_default_credentials(reader, piv)
+    };
+    (defaults, auxiliaries::detect_protection_mode(reader, piv))
+}
+
+/// The PIN a `Context` starts with: an explicit one always wins; otherwise
+/// the factory PIN when the card reports it (spec 0024 §2a).
+fn initial_pin(
+    explicit: Option<String>,
+    defaults: &auxiliaries::DefaultCredentials,
+) -> RefCell<Option<Zeroizing<String>>> {
+    let pin = explicit.or_else(|| defaults.pin.then(|| auxiliaries::DEFAULT_PIN.to_owned()));
+    RefCell::new(pin.map(Zeroizing::new))
+}
+
+// ---------------------------------------------------------------------------
 // Device selection
 // ---------------------------------------------------------------------------
 
@@ -580,4 +598,36 @@ pub fn parse_ec_public_key_from_cert_der(cert_der: &[u8]) -> Result<PublicKey> {
         .map_err(|e| anyhow::anyhow!("parsing EC point from SPKI: {e}"))?;
     let pk: Option<p256::PublicKey> = p256::PublicKey::from_encoded_point(&encoded).into();
     pk.ok_or_else(|| anyhow::anyhow!("EC point in certificate is not on P-256 curve"))
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(all(test, feature = "virtual-piv"))]
+mod tests {
+    use super::*;
+
+    /// `YB_SKIP_DEFAULT_CHECK` disables detection in both constructors
+    /// (spec 0024 §3).  This is the only test in this binary that builds a
+    /// `Context`, so setting the process-wide variable cannot race.
+    #[test]
+    fn skip_default_check_disables_detection() {
+        // VirtualPiv::new() keeps every factory credential.
+        let piv: Arc<dyn PivBackend> = Arc::new(VirtualPiv::new());
+        let ctx = Context::with_backend(piv.clone(), None, false).unwrap();
+        assert!(ctx.defaults.any());
+        assert_eq!(ctx.require_pin().unwrap().as_deref(), Some("123456"));
+
+        std::env::set_var("YB_SKIP_DEFAULT_CHECK", "1");
+        let ctx = Context::with_backend(piv, None, false);
+        std::env::remove_var("YB_SKIP_DEFAULT_CHECK");
+        let ctx = ctx.unwrap();
+        assert!(!ctx.defaults.any());
+        assert_eq!(ctx.require_pin().unwrap(), None, "no PIN filled in");
+        assert!(ctx
+            .enforce_default_policy(SecretOp::Store)
+            .unwrap()
+            .is_empty());
+    }
 }

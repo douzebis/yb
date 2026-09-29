@@ -18,7 +18,9 @@ use yb_core::{list_blobs, store::Store, Context, VirtualPiv};
 // ---------------------------------------------------------------------------
 
 const MGMT: &str = "010203040506070801020304050607080102030405060708";
-const PIN: &str = "123456";
+/// PIN of the `with_key.yaml` and `aes192.yaml` fixtures (not the factory
+/// PIN: they represent a card that has been set up, spec 0024 §4a).
+const PIN: &str = "654321";
 
 fn fixture(name: &str) -> std::path::PathBuf {
     // Fixtures live in yb-core's test directory.
@@ -1422,5 +1424,241 @@ mod format_safety_tests {
         assert!(text.contains("YB_MANAGEMENT_KEY"), "{text}");
         assert!(text.contains("nothing was changed"), "{text}");
         assert_eq!(blob_names(&ctx), vec!["precious"]);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// default-credential policy wiring (spec 0024)
+// ---------------------------------------------------------------------------
+
+mod default_policy_tests {
+    use super::*;
+    use yb::cli::fetch::{run as fetch_run, FetchArgs};
+    use yb::cli::format::{run as format_run, FormatArgs};
+    use yb::cli::fsck::{run as fsck_run, FsckArgs};
+    use yb::cli::list::{run as list_run, ListArgs};
+    use yb::cli::remove::{run as remove_run, RemoveArgs};
+    use yb_core::auxiliaries::{detect_default_credentials, DefaultCredentials};
+    use yb_core::store::constants::DEFAULT_SUBJECT;
+    use yb_core::{
+        parse_ec_public_key_from_cert_der, store_blob, Compression, Encryption, KeySource,
+        MgmtAlgo, PivBackend, SecretOp, StoreOptions,
+    };
+
+    const FACTORY_PIN: &str = "123456";
+    const FACTORY_PUK: &str = "12345678";
+
+    /// A formatted card holding blob "kept", whose PIN, PUK and management
+    /// key are each at the factory value or not, as requested.  The
+    /// context gets no PIN and no management key: both must come from the
+    /// policy (factory PIN filled in) and the resolver.
+    fn card(pin: bool, puk: bool, mgmt: bool) -> (Arc<VirtualPiv>, Context, TempDir) {
+        let tmp = TempDir::new().unwrap();
+        let yaml = format!(
+            "credentials:\n  pin: \"{}\"\n  puk: \"{}\"\n  management_key: \"{}\"\n\
+             slots:\n  \"82\":\n    private_key_hex: \
+             \"64055b21eefa9776a601bd99b0a5aa45c9d29d8ac0106b83844871bc4a9c748c\"\n",
+            if pin { FACTORY_PIN } else { PIN },
+            if puk { FACTORY_PUK } else { "87654321" },
+            if mgmt { MGMT } else { cards::OTHER_KEY },
+        );
+        let path = tmp.path().join("card.yaml");
+        std::fs::write(&path, yaml).unwrap();
+        let piv = Arc::new(VirtualPiv::from_fixture(&path).unwrap());
+        let key = if mgmt { MGMT } else { cards::OTHER_KEY };
+        let reader = piv.reader_name();
+        let user_pin = if pin { FACTORY_PIN } else { PIN };
+        // Set the card up directly on the backend, bypassing the policy.
+        piv.generate_certificate(&reader, 0x82, "CN=Test", key, Some(user_pin))
+            .unwrap();
+        let mut store = Store::format(&reader, piv.as_ref(), 8, 0x82, key).unwrap();
+        // Encrypted, so that fetching it needs (and checks) the PIN.
+        let cert = piv.read_certificate(&reader, 0x82).unwrap();
+        let public_key = parse_ec_public_key_from_cert_der(&cert).unwrap();
+        let options = StoreOptions {
+            encryption: Encryption::Encrypted(&public_key),
+            compression: Compression::None,
+        };
+        store_blob(
+            &mut store,
+            piv.as_ref(),
+            "kept",
+            b"x",
+            options,
+            key,
+            Some(user_pin),
+        )
+        .unwrap();
+
+        // A factory PIN must be filled in by the policy, so it is not given.
+        let explicit_pin = (!pin).then(|| PIN.to_owned());
+        let mut ctx = Context::with_backend(piv.clone(), explicit_pin, false).unwrap();
+        ctx.quiet = true;
+        if !mgmt {
+            ctx.management_key = Some(cards::OTHER_KEY.to_owned());
+        }
+        (piv, ctx, tmp)
+    }
+
+    fn fmt(protect: bool) -> FormatArgs {
+        FormatArgs {
+            object_count: 8,
+            key_slot: "0x82".to_owned(),
+            generate: false,
+            subject: DEFAULT_SUBJECT.to_owned(),
+            protect,
+        }
+    }
+
+    fn fetch_args() -> FetchArgs {
+        FetchArgs {
+            patterns: vec!["kept".to_owned()],
+            stdout: false,
+            output: None,
+            output_dir: Some(std::env::temp_dir()),
+            extract: false,
+        }
+    }
+
+    #[test]
+    fn truthful_default_reporting() {
+        let (piv, ctx, _t) = card(true, false, true);
+        assert_eq!(
+            ctx.defaults,
+            DefaultCredentials {
+                pin: true,
+                puk: false,
+                management_key: true
+            }
+        );
+        // Changing the management key clears its flag.
+        piv.set_management_key(&ctx.reader, MGMT, cards::OTHER_KEY, MgmtAlgo::Tdes)
+            .unwrap();
+        assert!(!detect_default_credentials(&ctx.reader, piv.as_ref()).management_key);
+    }
+
+    #[test]
+    fn default_pin_or_puk_refuses_store_but_not_reads() {
+        for (pin, puk) in [(true, false), (false, true)] {
+            let case = format!("pin={pin} puk={puk}");
+            let (piv, ctx, _t) = card(pin, puk, false);
+            let before = piv.write_count();
+
+            let err = cards::store_one(&ctx, "new").unwrap_err();
+            assert!(err.to_string().contains("factory-default"), "{case}: {err}");
+            assert_eq!(piv.write_count(), before, "{case}: store wrote");
+
+            // Reads and removals only warn.
+            list_run(
+                &ctx,
+                &ListArgs {
+                    pattern: None,
+                    long: false,
+                    one_per_line: false,
+                    sort_time: false,
+                    reverse: false,
+                },
+            )
+            .unwrap_or_else(|e| panic!("{case}: ls: {e:#}"));
+            fsck_run(
+                &ctx,
+                &FsckArgs {
+                    verbose: false,
+                    nvm: false,
+                },
+            )
+            .unwrap_or_else(|e| panic!("{case}: fsck: {e:#}"));
+            fetch_run(&ctx, &fetch_args()).unwrap_or_else(|e| panic!("{case}: fetch: {e:#}"));
+            remove_run(
+                &ctx,
+                &RemoveArgs {
+                    patterns: vec!["kept".to_owned()],
+                    ignore_missing: false,
+                },
+            )
+            .unwrap_or_else(|e| panic!("{case}: rm: {e:#}"));
+        }
+    }
+
+    #[test]
+    fn format_protect_refusal_writes_nothing() {
+        let (piv, ctx, _t) = card(true, false, true);
+        let before = piv.write_count();
+        let err = format_run(&ctx, &fmt(true)).unwrap_err();
+        let text = format!("{err:#}");
+        assert!(text.contains("nothing was changed"), "{text}");
+        assert!(text.contains("factory-default PIN"), "{text}");
+        assert_eq!(piv.write_count(), before);
+
+        // Without --protect it only warns.
+        format_run(&ctx, &fmt(false)).unwrap();
+    }
+
+    #[test]
+    fn allow_defaults_turns_refusals_into_warnings() {
+        let (_piv, mut ctx, _t) = card(true, true, true);
+        ctx.allow_defaults = true;
+        cards::store_one(&ctx, "new").unwrap();
+        let warnings = ctx.enforce_default_policy(SecretOp::Store).unwrap();
+        assert_eq!(
+            warnings,
+            ["Warning: this YubiKey uses the factory-default PIN, PUK and management key."]
+        );
+    }
+
+    #[test]
+    fn default_management_key_only_warns_on_store() {
+        let (_piv, ctx, _t) = card(false, false, true);
+        cards::store_one(&ctx, "new").unwrap();
+        assert_eq!(
+            ctx.enforce_default_policy(SecretOp::Store).unwrap(),
+            ["Warning: this YubiKey uses the factory-default management key."]
+        );
+    }
+
+    #[test]
+    fn quiet_still_returns_warnings() {
+        let (_piv, ctx, _t) = card(true, false, false);
+        assert!(ctx.quiet);
+        assert_eq!(
+            ctx.enforce_default_policy(SecretOp::Fetch).unwrap().len(),
+            1
+        );
+    }
+
+    #[test]
+    fn factory_pin_is_filled_in() {
+        let (piv, _ctx, _t) = card(true, false, false);
+        // No PIN source at all.
+        let ctx = Context::with_backend(piv.clone(), None, false).unwrap();
+        assert_eq!(ctx.require_pin().unwrap().as_deref(), Some(FACTORY_PIN));
+        fetch_run(&ctx, &fetch_args()).unwrap();
+
+        // An explicit PIN wins, even a wrong one.
+        let ctx = Context::with_backend(piv.clone(), Some("000000".to_owned()), false).unwrap();
+        assert!(fetch_run(&ctx, &fetch_args()).is_err());
+    }
+
+    #[test]
+    fn factory_management_key_is_resolved_not_injected() {
+        let (_piv, mut ctx, _t) = card(false, false, true);
+        ctx.allow_defaults = true;
+        assert_eq!(ctx.management_key, None);
+        cards::store_one(&ctx, "new").unwrap();
+        assert_eq!(ctx.management_key_source(), Some(KeySource::FactoryDefault));
+        remove_run(
+            &ctx,
+            &RemoveArgs {
+                patterns: vec!["new".to_owned()],
+                ignore_missing: false,
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn self_test_policy_refuses_any_default() {
+        let (_piv, ctx, _t) = card(false, false, true);
+        assert!(ctx.enforce_default_policy(SecretOp::SelfTest).is_err());
     }
 }

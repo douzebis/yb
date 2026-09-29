@@ -8,7 +8,7 @@ use clap_complete::engine::{ArgValueCompleter, PathCompleter};
 use std::io::Write as _;
 use std::path::PathBuf;
 use yb_core::orchestrator;
-use yb_core::{store::Store, Context};
+use yb_core::{store::Store, Context, SecretOp};
 
 use crate::cli::util::resolve_patterns;
 use crate::complete::complete_blob_names;
@@ -37,6 +37,7 @@ pub struct FetchArgs {
 }
 
 pub fn run(ctx: &Context, args: &FetchArgs) -> Result<()> {
+    ctx.enforce_default_policy(SecretOp::Fetch)?;
     // Validate mutually exclusive output flags.
     if args.stdout && args.output.is_some() {
         bail!("--stdout and --output are mutually exclusive");

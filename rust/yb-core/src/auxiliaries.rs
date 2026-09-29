@@ -163,70 +163,45 @@ pub(crate) fn parse_subject_dn(subject: &str) -> rcgen::DistinguishedName {
 // ---------------------------------------------------------------------------
 
 /// Which factory-default credentials are still active on the device.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DefaultCredentials {
     pub pin: bool,
+    pub puk: bool,
     pub management_key: bool,
 }
 
 impl DefaultCredentials {
     pub fn any(&self) -> bool {
-        self.pin || self.management_key
+        self.pin || self.puk || self.management_key
     }
 }
 
-/// Check whether the YubiKey still has default (insecure) credentials.
-///
-/// Uses GET_METADATA APDU (firmware 5.3+).  On older firmware the check is
-/// skipped with a warning.  If `allow_defaults` is false and any defaults are
-/// found, returns Err.  Otherwise returns which credentials are still default.
-pub fn check_for_default_credentials(
-    reader: &str,
-    piv: &dyn PivBackend,
-    allow_defaults: bool,
-) -> Result<DefaultCredentials> {
-    let mut result = DefaultCredentials::default();
-    let mut labels = Vec::new();
-
-    for (label, apdu, field) in [
-        ("PIN", GET_METADATA_PIN.as_ref(), 0u8),
-        ("PUK", GET_METADATA_PUK.as_ref(), 1u8),
-        ("management key", GET_METADATA_MGMT.as_ref(), 2u8),
-    ] {
-        match piv.send_apdu(reader, apdu) {
-            Err(_) => {
-                // Firmware < 5.3 or APDU not supported — skip silently.
-                return Ok(DefaultCredentials::default());
-            }
-            Ok(resp) => {
-                let tlv = parse_tlv_flat(&resp);
-                if tlv.get(&TAG_IS_DEFAULT).map(|v| v.first()) == Some(Some(&0x01)) {
-                    labels.push(label);
-                    match field {
-                        0 => result.pin = true,
-                        2 => result.management_key = true,
-                        _ => {}
-                    }
-                }
-            }
-        }
-    }
-
-    if labels.is_empty() {
-        return Ok(result);
-    }
-
-    let msg = format!(
-        "YubiKey has default credentials: {}. \
-         This is insecure. Use --allow-defaults to override.",
-        labels.join(", ")
-    );
-
-    if allow_defaults {
-        eprintln!("Warning: {msg}");
-        Ok(result)
-    } else {
-        bail!("{msg}")
+/// Detect which credentials are still at their factory values, with GET
+/// METADATA (firmware 5.3+).  Enforces nothing: the policy is applied per
+/// command (spec 0024).  On firmware without GET METADATA nothing can be
+/// detected, and every credential is reported as not default.
+pub fn detect_default_credentials(reader: &str, piv: &dyn PivBackend) -> DefaultCredentials {
+    let is_default = |apdu: &[u8]| -> Option<bool> {
+        let resp = piv.send_apdu(reader, apdu).ok()?;
+        Some(
+            parse_tlv_flat(&resp)
+                .get(&TAG_IS_DEFAULT)
+                .map(Vec::as_slice)
+                == Some(&[0x01]),
+        )
+    };
+    match (
+        is_default(&GET_METADATA_PIN),
+        is_default(&GET_METADATA_PUK),
+        is_default(&GET_METADATA_MGMT),
+    ) {
+        (Some(pin), Some(puk), Some(management_key)) => DefaultCredentials {
+            pin,
+            puk,
+            management_key,
+        },
+        // Firmware < 5.3 or APDU not supported — skip silently.
+        _ => DefaultCredentials::default(),
     }
 }
 

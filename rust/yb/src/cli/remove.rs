@@ -5,7 +5,7 @@
 use anyhow::Result;
 use clap::Args;
 use clap_complete::engine::ArgValueCompleter;
-use yb_core::{list_blobs, store::Store, Context};
+use yb_core::{list_blobs, store::Store, Context, SecretOp};
 
 use crate::cli::util::resolve_patterns;
 use crate::complete::complete_blob_names;
@@ -22,6 +22,7 @@ pub struct RemoveArgs {
 }
 
 pub fn run(ctx: &Context, args: &RemoveArgs) -> Result<()> {
+    ctx.enforce_default_policy(SecretOp::Remove)?;
     let mut store = Store::from_device(&ctx.reader, ctx.piv.as_ref())?;
     store.sanitize();
 

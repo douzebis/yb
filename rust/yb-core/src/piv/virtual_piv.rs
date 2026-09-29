@@ -115,6 +115,10 @@ struct VirtualState {
     // Injected faults, and whether the card is "lost" (see `Fault`).
     faults: Vec<Fault>,
     card_lost: bool,
+
+    // Number of card-changing operations (object writes, SET MANAGEMENT
+    // KEY, key generation), for tests asserting "nothing was written".
+    writes: usize,
 }
 
 impl VirtualState {
@@ -163,6 +167,7 @@ impl VirtualState {
             objects: HashMap::new(),
             faults: Vec::new(),
             card_lost: false,
+            writes: 0,
         }
     }
 }
@@ -316,6 +321,12 @@ impl VirtualPiv {
         self.state.lock().unwrap().faults.push(fault);
     }
 
+    /// Number of card-changing operations so far (object writes, SET
+    /// MANAGEMENT KEY, key generation).
+    pub fn write_count(&self) -> usize {
+        self.state.lock().unwrap().writes
+    }
+
     /// Drop pending faults and "reconnect" a lost card.
     pub fn clear_faults(&self) {
         let mut s = self.state.lock().unwrap();
@@ -418,6 +429,7 @@ impl PivBackend for VirtualPiv {
         } else {
             s.objects.insert(id, data.to_vec());
         }
+        s.writes += 1;
         Ok(())
     }
 
@@ -434,20 +446,40 @@ impl PivBackend for VirtualPiv {
     }
 
     /// Emulates GET METADATA (INS 0xF7) for the management key (9B) and the
-    /// PIN/PUK (80/81); every other APDU returns empty data.
-    ///
-    /// The "is default" flag (tag 0x05) is deliberately never reported, so
-    /// that the default-credential check stays silent on virtual devices.
+    /// PIN/PUK (80/81), including a truthful "is default" flag (tag 0x05);
+    /// every other APDU returns empty data.
     fn send_apdu(&self, reader: &str, apdu: &[u8]) -> Result<Vec<u8>> {
         let s = self.state.lock().unwrap();
         check_reader(&s, reader)?;
+        let is_default = |current: &str, factory: &str| u8::from(current == factory);
         match apdu {
             [0x00, 0xF7, 0x00, 0x9B, ..] => {
-                // Algorithm; policy (PIN n/a, touch never).
-                Ok(vec![0x01, 0x01, s.mgmt_algo.id(), 0x02, 0x02, 0x00, 0x01])
+                let default = is_default(
+                    &s.management_key_hex.to_ascii_lowercase(),
+                    &default_mgmt_key(),
+                );
+                // Algorithm; policy (PIN n/a, touch never); default flag.
+                Ok(vec![
+                    0x01,
+                    0x01,
+                    s.mgmt_algo.id(),
+                    0x02,
+                    0x02,
+                    0x00,
+                    0x01,
+                    0x05,
+                    0x01,
+                    default,
+                ])
             }
-            [0x00, 0xF7, 0x00, 0x80, ..] => Ok(vec![0x06, 0x02, 3, s.pin_retries]),
-            [0x00, 0xF7, 0x00, 0x81, ..] => Ok(vec![0x06, 0x02, 3, s.puk_retries]),
+            [0x00, 0xF7, 0x00, 0x80, ..] => {
+                let default = is_default(&s.pin, &default_pin());
+                Ok(vec![0x05, 0x01, default, 0x06, 0x02, 3, s.pin_retries])
+            }
+            [0x00, 0xF7, 0x00, 0x81, ..] => {
+                let default = is_default(&s.puk, &default_puk());
+                Ok(vec![0x05, 0x01, default, 0x06, 0x02, 3, s.puk_retries])
+            }
             _ => Ok(vec![]),
         }
     }
@@ -529,6 +561,7 @@ impl PivBackend for VirtualPiv {
         let key = SlotKey::generate();
         let point = key.public_point.clone();
         s.key_slots.insert(slot, key);
+        s.writes += 1;
         Ok(point)
     }
 
@@ -562,6 +595,7 @@ impl PivBackend for VirtualPiv {
             let mut replaced = slot_key;
             replaced.cert_der = old_cert;
             s.key_slots.insert(slot, replaced);
+            s.writes += 1;
             bail!("virtual: injected failure writing the certificate for slot 0x{slot:02x}");
         }
         // Export as PKCS#8 DER so rcgen can build a KeyPair from it.
@@ -591,6 +625,7 @@ impl PivBackend for VirtualPiv {
         let mut stored_key = slot_key;
         stored_key.cert_der = Some(cert_der.clone());
         s.key_slots.insert(slot, stored_key);
+        s.writes += 1;
 
         Ok(cert_der)
     }
@@ -640,6 +675,7 @@ impl PivBackend for VirtualPiv {
         );
         if apply {
             s.management_key_hex = new_key_hex.to_owned();
+            s.writes += 1;
             s.mgmt_algo = algo;
         }
         if let Some(Fault::CardLostDuringSetManagementKey { .. }) = fault {

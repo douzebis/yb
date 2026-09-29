@@ -290,7 +290,9 @@ would do, run bare `yb format` and answer no at the confirmation.
 ### 8. Hints in flag-driven mode
 
 - Default-credential errors from any command add: `Tip: run `yb format`
-  in a terminal for guided setup.`
+  in a terminal for guided setup.`  Default-credential warnings add
+  "run `yb fsck` for details".  Both replace the interim wording of spec
+  0024 §2, which cannot point to features this spec introduces.
 - When an existing store is about to be erased, the blobs are listed as
   specified in spec 0022 §1 step 6 (printed even with `--quiet`).  There
   is no prompt, so scripts and `yb self-test` are unaffected.

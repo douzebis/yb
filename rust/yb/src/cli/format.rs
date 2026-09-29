@@ -18,7 +18,7 @@ use yb_core::{
         constants::{DEFAULT_OBJECT_COUNT, DEFAULT_SUBJECT, OBJECT_ID_ZERO},
         Store,
     },
-    Context, SlotKeyCheck,
+    Context, SecretOp, SlotKeyCheck,
 };
 
 use crate::cli::util::quote_name;
@@ -81,9 +81,13 @@ fn preflight(ctx: &Context, args: &FormatArgs) -> Result<Plan> {
         eprintln!("Warning: slot 0x{slot:02x} is not a standard PIV key slot");
     }
 
-    // 2. Card state: refuse PIN-derived or unparseable ADMIN DATA.  The
-    //    management key algorithm is detected by the authentication in 4.
+    // 2. Card state: refuse PIN-derived or unparseable ADMIN DATA, and apply
+    //    the default-credential policy (spec 0024).  The management key
+    //    algorithm is detected by the authentication in 4.
     ctx.ensure_supported_protection()?;
+    ctx.enforce_default_policy(SecretOp::Format {
+        protect: args.protect,
+    })?;
 
     // 3. PIN.
     let pin = ctx

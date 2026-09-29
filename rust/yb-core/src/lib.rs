@@ -41,6 +41,7 @@ pub mod context;
 pub mod nvm;
 pub mod orchestrator;
 pub mod piv;
+pub mod policy;
 pub mod store;
 
 pub use context::{
@@ -56,6 +57,7 @@ pub use piv::hardware::HardwarePiv;
 pub use piv::{DeviceInfo, FlashHandle, MgmtAlgo, PivBackend};
 #[cfg(any(feature = "virtual-piv", feature = "test-utils"))]
 pub use piv::{Fault, VirtualPiv};
+pub use policy::SecretOp;
 
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;

@@ -23,7 +23,8 @@ use tempfile::TempDir;
 // ---------------------------------------------------------------------------
 
 const MGMT: &str = "010203040506070801020304050607080102030405060708";
-const PIN: &str = "123456";
+/// PIN of the `with_key.yaml` fixture (not the factory PIN, spec 0024 §4a).
+const PIN: &str = "654321";
 
 /// Path to the `with_key.yaml` fixture file.
 ///

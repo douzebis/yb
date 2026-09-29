@@ -10,7 +10,7 @@ use std::io::Read;
 use std::path::PathBuf;
 use yb_core::orchestrator::{self, Compression, Encryption, StoreOptions};
 use yb_core::store::{constants::MAX_NAME_LEN, Store};
-use yb_core::{Context, SlotKeyCheck};
+use yb_core::{Context, SecretOp, SlotKeyCheck};
 
 #[derive(Args, Debug)]
 pub struct StoreArgs {
@@ -42,6 +42,7 @@ pub struct StoreArgs {
 }
 
 pub fn run(ctx: &Context, args: &StoreArgs) -> Result<()> {
+    ctx.enforce_default_policy(SecretOp::Store)?;
     let encrypted = !args.unencrypted;
     let compression = match args.no_compress {
         true => Compression::None,

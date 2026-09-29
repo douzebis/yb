@@ -13,8 +13,8 @@ identity:
   reader: "Virtual YubiKey 00 01"
 
 credentials:
-  pin: "123456"
-  puk: "12345678"
+  pin: "654321"
+  puk: "87654321"
   management_key: "010203040506070801020304050607080102030405060708"
 
 slots:

@@ -34,6 +34,9 @@ fn default_piv() -> VirtualPiv {
     VirtualPiv::from_fixture(&fixture("default.yaml")).unwrap()
 }
 
+/// PIN of the `with_key.yaml` fixture (not the factory PIN, spec 0024 §4a).
+const WITH_KEY_PIN: &str = "654321";
+
 fn with_key_piv() -> VirtualPiv {
     VirtualPiv::from_fixture(&fixture("with_key.yaml")).unwrap()
 }
@@ -162,7 +165,9 @@ fn test_ecdh() {
     let epk: PublicKey = (&ephemeral).into();
     let epk_bytes = epk.to_encoded_point(false).as_bytes().to_vec();
 
-    let secret = piv.ecdh(&reader, 0x82, &epk_bytes, Some("123456")).unwrap();
+    let secret = piv
+        .ecdh(&reader, 0x82, &epk_bytes, Some(WITH_KEY_PIN))
+        .unwrap();
     assert_eq!(secret.len(), 32);
 }
 
@@ -297,7 +302,7 @@ fn test_store_fetch_encrypted() {
     assert_eq!(blobs[0].is_encrypted, true);
 
     let reader = piv.reader_name();
-    let fetched = fetch_blob(&store, &piv, &reader, "secret", Some("123456"), false)
+    let fetched = fetch_blob(&store, &piv, &reader, "secret", Some(WITH_KEY_PIN), false)
         .unwrap()
         .unwrap();
     assert_eq!(fetched, payload);
@@ -458,9 +463,9 @@ fn test_compression_raw_path() {
 #[test]
 fn test_context_with_backend() {
     let piv = Arc::new(with_key_piv());
-    let ctx = Context::with_backend(piv, Some("123456".to_owned()), false).unwrap();
+    let ctx = Context::with_backend(piv, Some(WITH_KEY_PIN.to_owned()), false).unwrap();
     assert_eq!(ctx.serial, 88_888_888);
-    assert_eq!(ctx.require_pin().unwrap().as_deref(), Some("123456"));
+    assert_eq!(ctx.require_pin().unwrap().as_deref(), Some(WITH_KEY_PIN));
 }
 
 /// T8: from_device with a mismatched object count — first object claims N

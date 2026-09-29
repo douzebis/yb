@@ -7,7 +7,7 @@ use clap::Args;
 use yb_core::{
     parse_ec_public_key_from_cert_der, scan_nvm,
     store::{constants::OBJECT_ID_ZERO, Object, Store},
-    Context,
+    Context, SecretOp,
 };
 
 use crate::cli::util::{check_blob_signature, quote_name, SigVerdict};
@@ -29,6 +29,7 @@ pub struct FsckArgs {
 // ---------------------------------------------------------------------------
 
 pub fn run(ctx: &Context, args: &FsckArgs) -> Result<()> {
+    ctx.enforce_default_policy(SecretOp::Fsck)?;
     let store = Store::from_device(&ctx.reader, ctx.piv.as_ref())?;
 
     // Fetch public key from the store's key slot certificate — no PIN needed.
