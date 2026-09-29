@@ -150,7 +150,23 @@ Costs:
   named in the CTAP 2.1 text; either way, `hmac-secret` never runs
   without a touch.  The credential was not resident (nothing stored on
   the key).
-- **The PIN is bound into the output.**  The authenticator keeps two
+
+  **PIN, tested on hardware** (same key, FIDO2 PIN set, 2026-09-29; one
+  seed throughout):
+
+  | Request | Result |
+  |---|---|
+  | credential 1, `hmac-secret` with the PIN | touch; 32-byte output, UV flag set |
+  | credential 1, `hmac-secret` without the PIN | touch; 32-byte output, UV flag clear, **different** from the one with the PIN |
+  | credential 2 (`credProtect` 3), without the PIN | touch, then refused: `CTAP2_ERR_NO_CREDENTIALS` |
+  | credential 2 (`credProtect` 3), with the PIN | touch; 32-byte output |
+
+  So the PIN is bound into the output (yb always uses the PIN, so a
+  request without it yields a useless value), and with `credProtect` 3
+  the credential is unusable without the PIN: the key behaves as if it
+  did not exist.  Note that the refused request still asked for a touch
+  first.
+- **The PIN is bound into the output** (confirmed on hardware, below).  The authenticator keeps two
   HMAC keys per credential, `CredRandomWithUV` and `CredRandomWithoutUV`,
   and uses one or the other depending on whether user verification (the
   FIDO2 PIN) was performed.  If yb always verifies the PIN, a request
@@ -247,8 +263,6 @@ a decryption failure.
   other software), or both, one as a backup?
 - Option C: which CTAP HID implementation (a Rust crate, or libfido2)?
   How does the guided format set up the FIDO2 PIN and the credential?
-  Confirm the PIN behavior (outputs with and without the FIDO2 PIN
-  differ; `credProtect` level 3) on hardware, with a FIDO2 PIN set.
 - Option C on Linux: `/dev/hidraw*` must be accessible to the user
   (udev `uaccess` rules, e.g. from libfido2); on the test VM they are
   root-only (mode 0600).
