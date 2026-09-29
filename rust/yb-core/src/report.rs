@@ -201,12 +201,16 @@ impl CardReport {
             None => "unknown algorithm (firmware < 5.3)".to_owned(),
         };
         let (protection, mut severity) = match self.protection {
-            ProtectionMode::Standard => ("PIN-protected", Severity::Ok),
+            ProtectionMode::Standard => ("kept on the YubiKey, unlocked by the PIN", Severity::Ok),
             ProtectionMode::LegacyOrPukBlocked => (
-                "ADMIN DATA flag 0x01 (PIN-protected by yb ≤ 0.4.x, or blocked PUK)",
+                "ADMIN DATA flag 0x01 (key kept on the YubiKey by yb ≤ 0.4.x, or blocked PUK)",
                 Severity::Warning,
             ),
-            ProtectionMode::None => ("not protected", Severity::Ok),
+            // The factory key needs no storing: "factory default" says it all.
+            ProtectionMode::None if self.management_key.is_some_and(|md| md.is_default) => {
+                ("", Severity::Ok)
+            }
+            ProtectionMode::None => ("not stored on the YubiKey", Severity::Ok),
             ProtectionMode::Derived => {
                 return item(
                     LABEL,
@@ -222,7 +226,10 @@ impl CardReport {
                 )
             }
         };
-        let mut parts = vec![algo, protection.to_owned()];
+        let mut parts = vec![algo];
+        if !protection.is_empty() {
+            parts.push(protection.to_owned());
+        }
         if let Some(md) = self.management_key {
             if md.is_default {
                 parts.push("factory default".to_owned());
@@ -350,7 +357,7 @@ mod tests {
             "YubiKey 99999999 — firmware 5.4.3\n\
              \x20 PIN              warning: factory default (3/3 tries left)\n\
              \x20 PUK              warning: factory default (3/3 tries left)\n\
-             \x20 Management key   warning: 3DES, not protected, factory default\n\
+             \x20 Management key   warning: 3DES, factory default\n\
              \x20 Slot 0x82        empty\n\
              \x20 Key/certificate  not checked (use --check-key)\n"
         );

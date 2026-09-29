@@ -147,7 +147,8 @@ sentinel for empty slots, up to 3,063 bytes for occupied slots).
 Run without format options from a terminal, \fBformat\fR is \fBguided\fR:
 it shows the state of the YubiKey (as \fByb fsck\fR does), changes a
 factory-default PIN and PUK, keeps or replaces the key in slot 0x82,
-always leaves the management key PIN-protected, shows the plan, and asks
+always keeps the management key on the YubiKey, unlocked by the PIN (so
+that writes need only the PIN), shows the plan, and asks
 for confirmation before writing anything.  When the plan destroys blobs or
 an existing key, the confirmation is the YubiKey's serial number.  Any
 format option, or \fB\-\-yes\fR, selects the flag-driven mode described
@@ -159,9 +160,11 @@ PIV slot, and checks that it matches the slot's X.509 certificate.  Pass
 \fB\-\-generate\fR to create a new P-256 key pair and a self-signed
 certificate on the card.
 .PP
-Pass \fB\-\-protect\fR to make sure the management key is PIN-protected.
-If it is not, it is replaced with a random key stored in PIN-protected
-mode (the PRINTED PIV object); if it already is, it is kept.  After this,
+Pass \fB\-\-protect\fR to keep the management key on the YubiKey,
+unlocked by the PIN.  If it is not kept there, it is replaced with a random
+key stored in the PRINTED PIV object, which only the PIN unlocks; if it
+already is, it is kept.  This is a convenience: you no longer need to keep
+the management key yourself.  After this,
 future write operations only require the PIN — no \fBYB_MANAGEMENT_KEY\fR
 or \fB\-\-key\fR needed.  The current management key is taken from
 \fBYB_MANAGEMENT_KEY\fR / \fB\-\-key\fR, else from PRINTED if the card is
@@ -189,8 +192,8 @@ yb format
 .fi
 .RE
 .PP
-First-time setup from a script \(em generate a key, format, and enable
-PIN-protected mode:
+First-time setup from a script \(em generate a key, format, and keep
+the management key on the YubiKey:
 .RS
 .nf
 yb format \-\-generate \-\-protect
@@ -204,7 +207,7 @@ yb format \-\-generate \-\-protect \-\-plan
 .fi
 .RE
 .PP
-First-time setup without PIN-protected mode:
+First-time setup, keeping the management key yourself:
 .RS
 .nf
 yb format \-\-generate
@@ -456,7 +459,7 @@ Default output (no flags):
 YubiKey <serial> \(em firmware <version>
   PIN              ok (3/3 tries left)
   PUK              ok (3/3 tries left)
-  Management key   3DES, PIN-protected
+  Management key   3DES, kept on the YubiKey, unlocked by the PIN
   Slot 0x82        EC P-256, generated on card, certificate CN=YBLOB ECCP256
   Key/certificate  not checked (use \-\-check\-key)
 

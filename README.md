@@ -28,7 +28,8 @@ optionally encrypted with hardware-backed hybrid cryptography.
   flagged automatically, no PIN required
 - **List**, **fetch**, and **remove** blobs by exact name or glob pattern
 - **Multiple YubiKeys** supported via `--serial`
-- **PIN-protected management key** mode for convenience and security
+- **Management key kept on the YubiKey**, unlocked by the PIN: writes need
+  only the PIN
 - **Shell completions** for bash, zsh, and fish (dynamic blob-name completion)
 - No runtime dependencies beyond PC/SC — a single static binary
 
@@ -144,7 +145,7 @@ completions are activated for the current session automatically.
 
 ```shell
 # One-time setup, guided: changes a factory PIN/PUK, generates a P-256 key,
-# and enables the PIN-protected management key
+# and keeps the management key on the YubiKey, unlocked by the PIN
 yb format
 
 # Stash a secret
@@ -250,13 +251,15 @@ ykman piv access change-pin
 ykman piv access change-puk
 ```
 
-For the management key, the recommended approach is **PIN-protected mode**:
-the management key is replaced with a random value stored on the YubiKey
-itself, protected by your PIN.  yb detects this automatically — no `--key`
-flag is needed for write operations.
+For the management key, the convenient approach is to **keep it on the
+YubiKey**: it is replaced with a random value stored on the YubiKey itself,
+which only your PIN unlocks.  You then never need to keep or type the
+management key: yb reads it when a write needs it (no `YB_MANAGEMENT_KEY`).
+This is a convenience, not extra security.  ykman calls this "PIN-protected"
+mode.
 
-The guided `yb format` always enables it.  From a script, at format time
-(`--protect` keeps a key that is already PIN-protected):
+The guided `yb format` always sets it up.  From a script, at format time
+(`--protect` keeps a key that is already stored on the YubiKey):
 
 ```shell
 yb format --generate --protect

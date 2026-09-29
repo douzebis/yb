@@ -501,16 +501,18 @@ fn summary(
     ];
     match management {
         ManagementStep::Protect(algo) => {
-            lines.push(format!("  Management key: PIN-protected ({algo}), new."));
             lines.push(format!(
-                "  It is stored behind the PIN; to read it back if ever needed: \
+                "  Management key: new ({algo}), kept on the YubiKey, unlocked by your PIN."
+            ));
+            lines.push(format!(
+                "  To read it back if ever needed: \
                  yubico-piv-tool -a verify-pin -a read-object --id 0x{:06x}",
                 auxiliaries::OBJ_PRINTED
             ));
         }
-        ManagementStep::KeepProtected(algo) => {
-            lines.push(format!("  Management key: PIN-protected ({algo})."))
-        }
+        ManagementStep::KeepProtected(algo) => lines.push(format!(
+            "  Management key ({algo}): kept on the YubiKey, unlocked by your PIN."
+        )),
         ManagementStep::Keep => {}
     }
     let kept_factory_puk = ctx.defaults.puk;

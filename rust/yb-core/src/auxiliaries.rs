@@ -386,7 +386,10 @@ pub fn admin_data_with_stored_key(
 pub fn pin_derived_unsupported() -> crate::errors::YbError {
     crate::errors::YbError::new("this YubiKey's management key is PIN-derived")
         .why("that mode is deprecated, and yb does not support it")
-        .fix("switch to PIN-protected mode: `ykman piv access change-management-key --protect`")
+        .fix(
+            "have the YubiKey keep a random management key instead, unlocked by the PIN: \
+             `ykman piv access change-management-key --generate --protect`",
+        )
 }
 
 /// Generate a random management key for `algo`, returned as a hex string.

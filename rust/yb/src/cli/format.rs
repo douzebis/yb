@@ -50,11 +50,11 @@ pub struct FormatArgs {
     #[arg(short = 'n', long = "subject")]
     pub subject: Option<String>,
 
-    /// Make sure the management key is PIN-protected.
+    /// Keep the management key on the YubiKey, unlocked by the PIN.
     ///
-    /// If it is not, replace it with a random key stored in the
-    /// PIN-protected PRINTED object, so that future write operations only
-    /// require the PIN.  If it already is, keep it.
+    /// If it is not kept there, replace it with a random key stored in the
+    /// PRINTED object, which only the PIN unlocks, so that future write
+    /// operations only require the PIN.  If it already is, keep it.
     /// The current management key is taken from YB_MANAGEMENT_KEY, else from
     /// PRINTED if the YubiKey is already protected, else the factory default.
     #[arg(long = "protect")]
@@ -286,12 +286,15 @@ impl FormatPlan {
             steps.push("Change PUK".to_owned());
         }
         steps.push(match self.management {
-            ManagementStep::Keep => "Keep the management key (not PIN-protected)".to_owned(),
-            ManagementStep::Protect(algo) => {
-                format!("Replace the management key with a random PIN-protected key ({algo})")
+            ManagementStep::Keep => {
+                "Keep the management key (not stored on the YubiKey)".to_owned()
             }
+            ManagementStep::Protect(algo) => format!(
+                "Replace the management key with a random one ({algo}), kept on the YubiKey \
+                 and unlocked by the PIN"
+            ),
             ManagementStep::KeepProtected(algo) => {
-                format!("Keep the PIN-protected management key ({algo})")
+                format!("Keep the management key stored on the YubiKey ({algo})")
             }
         });
         match &self.erase {
@@ -433,7 +436,7 @@ pub(crate) fn apply(
         // Keep the card's current algorithm (spec 0021 §3).
         let algo = piv.management_key_algorithm(reader)?;
         let new_key = generate_random_management_key(algo);
-        phase.run("setting up the PIN-protected management key", "", || {
+        phase.run("storing a new management key on the YubiKey", "", || {
             enable_pin_protected_management_key(
                 reader,
                 piv,
@@ -448,11 +451,11 @@ pub(crate) fn apply(
         })?;
         management_key = new_key;
         if !ctx.quiet {
-            eprintln!("PIN-protected management key configured ({algo}).");
+            eprintln!("New management key ({algo}) kept on the YubiKey, unlocked by the PIN.");
         }
     } else if settings.protect && !ctx.quiet {
         let algo = piv.management_key_algorithm(reader)?;
-        eprintln!("The management key is already PIN-protected ({algo}); keeping it.");
+        eprintln!("The management key ({algo}) is already kept on the YubiKey; keeping it.");
     }
 
     // B2 — erase the store before its key can be replaced.

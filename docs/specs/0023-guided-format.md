@@ -117,7 +117,7 @@ output unchanged:
 YubiKey 12345678 — firmware 5.4.3
   PIN              ok (3/3 tries left)
   PUK              ok (3/3 tries left)
-  Management key   3DES, PIN-protected
+  Management key   3DES, kept on the YubiKey, unlocked by the PIN
   Slot 0x82        EC P-256, generated on card, certificate CN=YBLOB ECCP256
   Key/certificate  not checked (use --check-key)
 
@@ -259,7 +259,7 @@ marked:
 Plan for YubiKey 12345678:
   1. Change PIN
   2. Change PUK
-  3. Replace the management key with a random PIN-protected key (3DES)
+  3. Replace the management key with a random one (3DES), kept on the YubiKey and unlocked by the PIN
   4. ERASE store — destroys 1 blob: bar
   5. Keep existing key in slot 0x82
 ```
@@ -321,7 +321,7 @@ Summary:
 ```
 Done.  YubiKey 12345678 is ready.
   Store: 32 objects, empty.  Key: slot 0x82 (kept).
-  Management key: PIN-protected (3DES).
+  Management key (3DES): kept on the YubiKey, unlocked by your PIN.
 
 Next:  echo "s3cr3t" | yb store -n my-secret
        yb ls -l
@@ -434,6 +434,14 @@ confirmation.
   - exits 1 on a key/certificate mismatch with `--check-key`;
   - the store output is byte-identical to today's for an existing
     fixture.
+
+### 11. Wording
+
+User-facing text avoids the jargon "PIN-protected" (added after
+implementation, with spec 0027 §8).  Keeping the management key on the
+YubiKey, unlocked by the PIN, is a convenience: the user no longer keeps
+or types it.  Output says "kept on the YubiKey, unlocked by the PIN" /
+"not stored on the YubiKey"; the `--protect` flag keeps its name.
 
 ## Open questions
 

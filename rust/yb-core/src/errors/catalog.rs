@@ -109,15 +109,15 @@ static CATALOG: &[Entry] = &[
         what: "wrong management key",
         why: "the key from YB_MANAGEMENT_KEY or from PRINTED is not the YubiKey's \
               management key",
-        fix: "check YB_MANAGEMENT_KEY; `yb fsck` shows whether the management key is \
-              PIN-protected",
+        fix: "check YB_MANAGEMENT_KEY; `yb fsck` shows whether the YubiKey keeps its \
+              management key",
     },
     Entry {
         op: OpPat::Is(|op| *op == CardOp::ReadObject(crate::auxiliaries::OBJ_PRINTED)),
         sw_value: 0x6A82,
         mask: EXACT,
         what: "the management key is not stored on the YubiKey",
-        why: "the YubiKey is not in PIN-protected mode, or was set up by another tool",
+        why: "the YubiKey does not keep its management key, or was set up by another tool",
         fix: "set YB_MANAGEMENT_KEY, or set the YubiKey up again with `yb format --protect`",
     },
     Entry {

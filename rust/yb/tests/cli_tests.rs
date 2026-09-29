@@ -1985,7 +1985,8 @@ mod guided_tests {
                 "Plan for YubiKey 99999999:\n\
                  \x20 1. Change PIN\n\
                  \x20 2. Change PUK\n\
-                 \x20 3. Replace the management key with a random PIN-protected key (3DES)\n\
+                 \x20 3. Replace the management key with a random one (3DES), kept on the \
+                 YubiKey and unlocked by the PIN\n\
                  \x20 4. Create the store: 32 objects, key slot 0x82\n\
                  \x20 5. Generate a new key in slot 0x82\n"
             ),
@@ -2194,7 +2195,7 @@ mod guided_tests {
         outcome.unwrap_or_else(|e| panic!("{e:#}\n{}", script.text()));
         assert!(script
             .text()
-            .contains("Keep the PIN-protected management key (3DES)"));
+            .contains("Keep the management key stored on the YubiKey (3DES)"));
         let admin = AdminData::parse(&read_admin(&ctx)).unwrap();
         assert_eq!(admin.flags, Some(0x02));
         let keys = read_printed_keys(&ctx.reader, piv.as_ref(), PIN).unwrap();
@@ -2209,7 +2210,7 @@ mod guided_tests {
         // The key in slot 0x82 has no certificate: replaced, so the serial.
         let (outcome, script) = guided(&mut ctx, &["", "77777777"]);
         outcome.unwrap_or_else(|e| panic!("{e:#}\n{}", script.text()));
-        assert!(script.text().contains("PIN-protected key (AES-192)"));
+        assert!(script.text().contains("with a random one (AES-192)"));
         assert_eq!(
             piv.management_key_algorithm(&ctx.reader).unwrap(),
             MgmtAlgo::Aes192

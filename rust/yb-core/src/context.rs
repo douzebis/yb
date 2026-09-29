@@ -367,7 +367,7 @@ impl Context {
             ) =>
             {
                 return Err(YbError::new(
-                    "a PIN is needed to read the PIN-protected management key",
+                    "a PIN is needed to read the management key kept on the YubiKey",
                 )
                 .fix("set YB_PIN, use --pin-stdin, or run yb in a terminal")
                 .into())
@@ -498,17 +498,16 @@ impl Context {
                 .and_then(|data| piv.write_object(reader, auxiliaries::OBJ_ADMIN_DATA, &data, &key))
             {
                 Ok(()) if self.protection == ProtectionMode::LegacyOrPukBlocked => note(
-                    "upgraded PIN-protected management key metadata \
+                    "upgraded the stored management key metadata \
                      to the standard (ykman-compatible) layout",
                 ),
                 Ok(()) => note(
-                    "repaired the PIN-protected management key metadata \
+                    "repaired the stored management key metadata \
                      after an interrupted key switch",
                 ),
-                Err(e) => eprintln!(
-                    "Warning: could not update the PIN-protected management key \
-                     metadata: {e:#}"
-                ),
+                Err(e) => {
+                    eprintln!("Warning: could not update the stored management key metadata: {e:#}")
+                }
             }
         }
 
