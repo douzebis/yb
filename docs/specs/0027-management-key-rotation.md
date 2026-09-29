@@ -97,17 +97,23 @@ the slot 0x82 key.
 
 ### 3a. Whether the old key is in PRINTED
 
-When B1a or B1b fails and the key is unchanged, B1 puts PRINTED back as
-it was: `88 { 89 <old> }` if the old key was stored there, no object
-otherwise.  "Stored there" is decided by what PRINTED holds, not by where
-yb got the key: tag `89` holds the old key, and the card accepts it (the
-spec 0023 §3a definition).
+When B1a or B1b fails and the key is unchanged, B1 puts PRINTED back:
+`88 { 89 <old> }` if PRINTED held the old key, no object otherwise.
+"Held" is decided by what PRINTED contains, not by where yb got the key:
+tag `89` **or** tag `8A` holds the old key.
 
-Deciding it from the key's source, as until now, is wrong when the key
-comes from `YB_MANAGEMENT_KEY` on a card that also stores it: a rejected
-switch would delete PRINTED, and the card would no longer keep its key.
-`yb format --protect` cannot reach that case since spec 0023 (it keeps a
-stored key); rotation can.
+- Tag `8A` counts: after an earlier interrupted switch that did not take
+  effect, `8A` may be the only copy of the card's key.  Deleting PRINTED
+  then would leave a management key that exists nowhere.
+- The key's source is not enough: when the key comes from
+  `YB_MANAGEMENT_KEY` on a card that also stores it, a rejected switch
+  would delete PRINTED, and the card would no longer keep its key.
+  `yb format --protect` cannot reach that case since spec 0023 (it keeps
+  a stored key); rotation can.
+
+This is not the spec 0023 §3a "already protected" test, which asks
+whether the key is stored in `89` and accepted, to decide whether to
+switch at all.
 
 ### 3b. Messages after a failed switch
 
@@ -153,6 +159,12 @@ On the virtual backend:
 - **Faults:** each spec 0022 fault point (B1a–B1d, SET MANAGEMENT KEY
   rejected / lost reply / card lost) keeps invariants I2 and I4 of spec
   0022 §5; I1 holds trivially (store untouched).
+- **§3a:** a rejected switch leaves PRINTED holding the card's key, on a
+  card that stores it with `YB_MANAGEMENT_KEY` also set, and on a card
+  whose only copy is in tag `8A`.
+- **§3b:** no failure message mentions `yb format --protect`; a failed
+  B1d prints nothing, and the next write drops tag `8A`.
+- **§8:** the hint appears in `yb fsck`, not in the guided format.
 
 ### 6. Hardware validation
 
@@ -179,6 +191,10 @@ The README and the man pages name `yb rotate-management-key` where they
 now tell users of an already formatted YubiKey to run `ykman piv access
 change-management-key --generate --protect`.  `yb-rotate-management-key(1)`
 is added.
+
+The error catalog entry for PRINTED not found (`6A82`, spec 0025) points
+to `yb rotate-management-key` instead of `yb format --protect`, which
+erases the store.
 
 ### 8. `yb fsck` hint
 
