@@ -34,7 +34,7 @@
 //! Encryption always produces the GCM format.  No new CBC blobs are written.
 
 use crate::piv::PivBackend;
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use hkdf::Hkdf;
 use p256::{ecdh::EphemeralSecret, elliptic_curve::sec1::ToEncodedPoint, PublicKey};
 use rand::rngs::OsRng;
@@ -152,9 +152,7 @@ fn decrypt_gcm(
     let nonce_bytes = &encrypted[VERSION_LEN + EPHEMERAL_PK_LEN..GCM_HEADER_LEN];
     let ciphertext = &encrypted[GCM_HEADER_LEN..];
 
-    let shared_secret = piv
-        .ecdh(reader, slot, epk_bytes, pin)
-        .context("ECDH with YubiKey (GCM)")?;
+    let shared_secret = piv.ecdh(reader, slot, epk_bytes, pin)?;
 
     let aes_key = hkdf_expand(&shared_secret)?;
 
@@ -192,9 +190,7 @@ fn decrypt_cbc_legacy(
         .unwrap();
     let ciphertext = &encrypted[LEGACY_HEADER_LEN..];
 
-    let shared_secret = piv
-        .ecdh(reader, slot, epk_bytes, pin)
-        .context("ECDH with YubiKey (legacy CBC)")?;
+    let shared_secret = piv.ecdh(reader, slot, epk_bytes, pin)?;
 
     let aes_key = hkdf_expand(&shared_secret)?;
     let dec = Aes256CbcDec::new(&aes_key.into(), &iv.into());

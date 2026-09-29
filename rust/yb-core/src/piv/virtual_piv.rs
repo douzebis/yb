@@ -16,6 +16,7 @@
 //! confuse them with production YubiKey credentials.
 
 use super::{DeviceInfo, MgmtAlgo, PivBackend};
+use crate::errors::{CardError, CardOp, ErrCtx, PcscCode, PcscOp};
 use anyhow::{anyhow, bail, Result};
 use p256::{elliptic_curve::sec1::ToEncodedPoint, PublicKey, SecretKey};
 use rand::rngs::OsRng;
@@ -86,6 +87,10 @@ pub enum Fault {
     /// `generate_certificate` replaces the key in the slot, then fails
     /// before writing the certificate (the old certificate remains).
     GenerateCertificateFailsAfterKey,
+    /// The Nth object write from now (1-based) fails for lack of space
+    /// (`SW 6A84`) and, as measured on hardware (spec 0022, M2), deletes
+    /// the object.
+    StorageFull(usize),
 }
 
 // ---------------------------------------------------------------------------
@@ -128,24 +133,18 @@ impl VirtualState {
         Some(self.faults.remove(pos))
     }
 
-    /// Count one object write against a pending `WriteFails`; return true
-    /// if this write must fail.
-    fn write_must_fail(&mut self) -> bool {
-        let Some(pos) = self
+    /// Count one object write against the first pending write fault
+    /// (`WriteFails` or `StorageFull`); return it if this write must fail.
+    fn write_fault(&mut self) -> Option<Fault> {
+        let pos = self
             .faults
             .iter()
-            .position(|f| matches!(f, Fault::WriteFails(_)))
-        else {
-            return false;
+            .position(|f| matches!(f, Fault::WriteFails(_) | Fault::StorageFull(_)))?;
+        let (Fault::WriteFails(n) | Fault::StorageFull(n)) = &mut self.faults[pos] else {
+            return None;
         };
-        if let Fault::WriteFails(n) = &mut self.faults[pos] {
-            *n -= 1;
-            if *n == 0 {
-                self.faults.remove(pos);
-                return true;
-            }
-        }
-        false
+        *n -= 1;
+        (*n == 0).then(|| self.faults.remove(pos))
     }
 }
 
@@ -408,7 +407,7 @@ impl PivBackend for VirtualPiv {
         s.objects
             .get(&id)
             .cloned()
-            .ok_or_else(|| anyhow!("virtual: object 0x{id:06x} not found"))
+            .ok_or_else(|| CardError::status(CardOp::ReadObject(id), 0x6A, 0x82).into())
     }
 
     fn object_size(&self, reader: &str, id: u32) -> Result<Option<usize>> {
@@ -421,8 +420,13 @@ impl PivBackend for VirtualPiv {
         let mut s = self.state.lock().unwrap();
         check_reader(&s, reader)?;
         do_authenticate_management_key(&mut s, management_key)?;
-        if s.write_must_fail() {
-            bail!("virtual: injected failure writing object 0x{id:06x}");
+        match s.write_fault() {
+            Some(Fault::StorageFull(_)) => {
+                s.objects.remove(&id);
+                return Err(CardError::status(CardOp::WriteObject(id), 0x6A, 0x84).into());
+            }
+            Some(_) => bail!("virtual: injected failure writing object 0x{id:06x}"),
+            None => {}
         }
         if data.is_empty() {
             s.objects.remove(&id);
@@ -542,7 +546,7 @@ impl PivBackend for VirtualPiv {
         s.key_slots
             .get(&slot)
             .and_then(|k| k.cert_der.clone())
-            .ok_or_else(|| anyhow!("virtual: no certificate in slot 0x{slot:02x}"))
+            .ok_or_else(|| CardError::status(CardOp::ReadCertificate(slot), 0x6A, 0x82).into())
     }
 
     fn generate_key(
@@ -638,7 +642,7 @@ impl PivBackend for VirtualPiv {
         s.objects
             .get(&OBJ_PRINTED)
             .cloned()
-            .ok_or_else(|| anyhow!("virtual: no PRINTED object stored"))
+            .ok_or_else(|| CardError::status(CardOp::ReadObject(OBJ_PRINTED), 0x6A, 0x82).into())
     }
 
     fn management_key_algorithm(&self, reader: &str) -> Result<MgmtAlgo> {
@@ -697,19 +701,21 @@ impl PivBackend for VirtualPiv {
 // ---------------------------------------------------------------------------
 
 fn check_reader(s: &VirtualState, reader: &str) -> Result<()> {
+    // No reader name in the error (spec 0025 §3).
     if reader != s.reader {
-        bail!("virtual: unknown reader '{reader}'");
+        bail!("virtual: unknown reader");
     }
     Ok(())
 }
 
 fn do_verify_pin(s: &mut VirtualState, pin: &str) -> Result<()> {
+    // Fail as the card does (spec 0025 §4).
     if s.pin_retries == 0 {
-        bail!("virtual: PIN blocked");
+        return Err(CardError::status(CardOp::VerifyPin, 0x69, 0x83).into());
     }
     if pin != s.pin {
         s.pin_retries -= 1;
-        bail!("virtual: wrong PIN ({} retries remaining)", s.pin_retries);
+        return Err(CardError::status(CardOp::VerifyPin, 0x63, 0xC0 | s.pin_retries).into());
     }
     s.pin_verified = true;
     s.pin_retries = 3;
@@ -718,14 +724,23 @@ fn do_verify_pin(s: &mut VirtualState, pin: &str) -> Result<()> {
 
 fn do_authenticate_management_key(s: &mut VirtualState, key_hex: &str) -> Result<()> {
     if s.card_lost {
-        bail!("virtual: card not responding (injected)");
+        return Err(CardError::Pcsc {
+            op: PcscOp::Transmit,
+            code: PcscCode::RemovedCard,
+        }
+        .into());
     }
     // Like the hardware path: a key of the wrong length for the card's
     // algorithm is rejected before any authentication attempt.
     let key_bytes = hex::decode(key_hex).map_err(|e| anyhow!("decoding management key: {e}"))?;
     s.mgmt_algo.check_key_len(&key_bytes)?;
     if key_hex != s.management_key_hex {
-        bail!("virtual: wrong management key");
+        let ctx = ErrCtx {
+            algo: Some(s.mgmt_algo),
+        };
+        return Err(CardError::status(CardOp::MgmtAuth, 0x69, 0x82)
+            .with_ctx(ctx)
+            .into());
     }
     s.mgmt_authenticated = true;
     Ok(())

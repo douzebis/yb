@@ -6,6 +6,7 @@
 
 use super::transport::PcscSession;
 use crate::auxiliaries::parse_tlv_flat;
+use crate::errors::CardOp;
 use crate::piv::tlv::{encode_length, encode_tlv, parse_gen_key_response};
 use anyhow::Result;
 
@@ -17,8 +18,9 @@ impl PcscSession {
         p1: u8,
         inner_tag: u8,
         payload: &[u8],
-        label: &str,
+        op: CardOp,
     ) -> Result<Vec<u8>> {
+        let label = op.describe();
         // Data: 7C <len> [ 82 00  <inner_tag> <len> <payload> ]
         let mut inner = vec![0x82, 0x00];
         inner.extend(encode_tlv(inner_tag, payload));
@@ -29,11 +31,11 @@ impl PcscSession {
         apdu.extend(&outer);
         apdu.push(0x00); // Le
 
-        let resp = self.transmit_check(&apdu, label)?;
+        let resp = self.transmit_check(&apdu, op)?;
 
         // Response: 7C <len> 82 <len> <result>
-        let outer_r = tlv_get(&resp, 0x7C, label)?;
-        tlv_get(&outer_r, 0x82, label)
+        let outer_r = tlv_get(&resp, 0x7C, &label)?;
+        tlv_get(&outer_r, 0x82, &label)
     }
 
     /// GENERAL AUTHENTICATE ECDH — slot-based key agreement.
@@ -42,12 +44,12 @@ impl PcscSession {
         slot: u8,
         peer_point: &[u8],
     ) -> Result<Vec<u8>> {
-        self.general_authenticate(slot, 0x11, 0x85, peer_point, "GENERAL AUTHENTICATE ECDH")
+        self.general_authenticate(slot, 0x11, 0x85, peer_point, CardOp::Ecdh(slot))
     }
 
     /// GENERAL AUTHENTICATE SIGN — produce an EC signature over `digest`.
     pub(crate) fn general_authenticate_sign(&mut self, slot: u8, digest: &[u8]) -> Result<Vec<u8>> {
-        self.general_authenticate(slot, 0x11, 0x81, digest, "GENERAL AUTHENTICATE SIGN")
+        self.general_authenticate(slot, 0x11, 0x81, digest, CardOp::Sign(slot))
     }
 
     /// GENERAL AUTHENTICATE SIGN — returns raw (r || s), each 32 bytes.
@@ -68,7 +70,7 @@ impl PcscSession {
         let apdu = [
             0x00, 0x47, 0x00, slot, 0x05, 0xAC, 0x03, 0x80, 0x01, 0x11, 0x00,
         ];
-        let resp = self.transmit_check(&apdu, "GENERATE ASYMMETRIC KEY")?;
+        let resp = self.transmit_check(&apdu, CardOp::GenerateKey(slot))?;
         parse_gen_key_response(&resp)
     }
 }

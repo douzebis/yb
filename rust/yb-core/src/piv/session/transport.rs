@@ -4,7 +4,8 @@
 
 //! PC/SC session struct and low-level APDU transport helpers.
 
-use anyhow::{bail, Context, Result};
+use crate::errors::{CardError, CardOp, ErrCtx, PcscOp};
+use anyhow::Result;
 use std::ffi::CString;
 
 // ---------------------------------------------------------------------------
@@ -25,8 +26,8 @@ impl PcscSession {
     }
 
     pub(super) fn open_with_mode(reader: &str, mode: pcsc::ShareMode) -> Result<Self> {
-        let ctx =
-            pcsc::Context::establish(pcsc::Scope::User).context("establishing PC/SC context")?;
+        let ctx = pcsc::Context::establish(pcsc::Scope::User)
+            .map_err(|e| CardError::pcsc(PcscOp::Establish, e))?;
         let card = connect_reader_mode(&ctx, reader, mode)?;
 
         let mut session = Self {
@@ -39,7 +40,7 @@ impl PcscSession {
 
     /// SELECT PIV applet (AID A0 00 00 03 08).
     pub(crate) fn select_piv(&mut self) -> Result<()> {
-        self.transmit_check(SELECT_PIV, "SELECT PIV")?;
+        self.transmit_check(SELECT_PIV, CardOp::SelectPiv)?;
         Ok(())
     }
 
@@ -49,19 +50,34 @@ impl PcscSession {
         let resp = self
             .card
             .transmit(apdu, &mut buf)
-            .context("APDU transmit")?;
+            .map_err(|e| CardError::pcsc(PcscOp::Transmit, e))?;
         Ok(resp.to_vec())
     }
 
+    /// What this session knows, for error reports (spec 0025 §1).
+    pub(crate) fn err_ctx(&self) -> ErrCtx {
+        ErrCtx {
+            algo: self.mgmt_algo,
+        }
+    }
+
+    /// A card error for `op` with status word `sw1 sw2`, carrying this
+    /// session's context.
+    pub(crate) fn status_error(&self, op: CardOp, sw1: u8, sw2: u8) -> CardError {
+        CardError::status(op, sw1, sw2).with_ctx(self.err_ctx())
+    }
+
     /// Send an APDU, handle SW=61xx chaining, check SW=9000, return data (SW stripped).
-    pub(crate) fn transmit_check(&mut self, apdu: &[u8], label: &str) -> Result<Vec<u8>> {
+    pub(crate) fn transmit_check(&mut self, apdu: &[u8], op: CardOp) -> Result<Vec<u8>> {
         let mut resp = self.transmit_raw(apdu)?;
         let mut data = Vec::new();
 
         loop {
             let n = resp.len();
             if n < 2 {
-                bail!("{label}: response too short ({n} bytes)");
+                return Err(
+                    CardError::protocol(op, format!("response too short ({n} bytes)")).into(),
+                );
             }
             let sw1 = resp[n - 2];
             let sw2 = resp[n - 1];
@@ -77,10 +93,7 @@ impl PcscSession {
                 resp = self.transmit_raw(&get_resp)?;
                 continue;
             }
-            bail!(
-                "{label} failed: SW={sw1:02x}{sw2:02x} ({})",
-                sw_description(sw1, sw2)
-            );
+            return Err(self.status_error(op, sw1, sw2).into());
         }
 
         Ok(data)
@@ -96,7 +109,9 @@ pub(crate) const SELECT_PIV: &[u8] = &[0x00, 0xA4, 0x04, 0x00, 0x05, 0xA0, 0x00,
 /// Transmit an APDU via a `&pcsc::Card` (or anything that derefs to it, like `Transaction`).
 pub(crate) fn transmit_raw_card(card: &pcsc::Card, apdu: &[u8]) -> Result<Vec<u8>> {
     let mut buf = vec![0u8; pcsc::MAX_BUFFER_SIZE_EXTENDED];
-    let resp = card.transmit(apdu, &mut buf).context("APDU transmit")?;
+    let resp = card
+        .transmit(apdu, &mut buf)
+        .map_err(|e| CardError::pcsc(PcscOp::Transmit, e))?;
     Ok(resp.to_vec())
 }
 
@@ -105,29 +120,9 @@ pub(crate) fn connect_reader_mode(
     reader: &str,
     mode: pcsc::ShareMode,
 ) -> Result<pcsc::Card> {
-    let cstring = CString::new(reader).map_err(|e| anyhow::anyhow!("reader name: {e}"))?;
-    ctx.connect(&cstring, mode, pcsc::Protocols::ANY)
-        .map_err(|e| anyhow::anyhow!("connecting to reader '{reader}': {e}"))
-}
-
-// ---------------------------------------------------------------------------
-// SW description helper
-// ---------------------------------------------------------------------------
-
-/// Return a short human-readable description for a PIV status word.
-pub(super) fn sw_description(sw1: u8, sw2: u8) -> &'static str {
-    match (sw1, sw2) {
-        (0x63, _) => "wrong PIN",
-        (0x67, 0x00) => "wrong length (object too large?)",
-        (0x69, 0x82) => "security condition not met (PIN or management key required)",
-        (0x69, 0x83) => "PIN blocked",
-        (0x69, 0x84) => "referenced data invalidated (key slot empty?)",
-        (0x69, 0x85) => "conditions of use not satisfied",
-        (0x6A, 0x80) => "incorrect parameters in data field",
-        (0x6A, 0x82) => "object not found",
-        (0x6A, 0x84) => "not enough NVM space",
-        (0x6A, 0x86) => "incorrect parameters P1/P2",
-        (0x6D, 0x00) => "instruction not supported",
-        _ => "unexpected status",
-    }
+    // No reader name in errors: it can identify the device (spec 0025 §3).
+    let cstring = CString::new(reader).map_err(|_| anyhow::anyhow!("invalid reader name"))?;
+    Ok(ctx
+        .connect(&cstring, mode, pcsc::Protocols::ANY)
+        .map_err(|e| CardError::pcsc(PcscOp::Connect, e))?)
 }

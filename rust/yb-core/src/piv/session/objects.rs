@@ -4,13 +4,20 @@
 
 //! PIV data-object read/write (GET DATA / PUT DATA).
 
-use super::transport::{sw_description, transmit_raw_card, PcscSession};
+use super::transport::{transmit_raw_card, PcscSession};
+use crate::errors::{CardError, CardOp};
 use crate::piv::tlv::{encode_tlv, parse_tlv53};
 use anyhow::{bail, Context, Result};
 
 impl PcscSession {
     /// GET DATA — fetch a PIV data object by 3-byte object ID.
     pub(crate) fn get_data(&mut self, object_id: u32) -> Result<Vec<u8>> {
+        self.get_data_as(object_id, CardOp::ReadObject(object_id))
+    }
+
+    /// GET DATA, reporting failures as operation `op` (e.g. reading a
+    /// slot's certificate).
+    pub(crate) fn get_data_as(&mut self, object_id: u32, op: CardOp) -> Result<Vec<u8>> {
         let id = object_id.to_be_bytes(); // 4 bytes; we use the last 3
         let apdu = [
             0x00, 0xCB, 0x3F, 0xFF, // CLA INS P1 P2
@@ -18,7 +25,7 @@ impl PcscSession {
             0x5C, 0x03, id[1], id[2], id[3], // Tag 5C, length 3, 3-byte object ID
             0x00,  // Le
         ];
-        let raw = self.transmit_check(&apdu, "GET DATA")?;
+        let raw = self.transmit_check(&apdu, op)?;
         // Response is BER-TLV: 53 <len> <data>.  Strip the outer wrapper.
         parse_tlv53(&raw)
     }
@@ -35,7 +42,11 @@ impl PcscSession {
         loop {
             let n = resp.len();
             if n < 2 {
-                bail!("GET DATA: response too short");
+                return Err(CardError::protocol(
+                    CardOp::ReadObject(object_id),
+                    "response too short",
+                )
+                .into());
             }
             let sw1 = resp[n - 2];
             let sw2 = resp[n - 1];
@@ -54,10 +65,9 @@ impl PcscSession {
                 let get_resp = [0x00, 0xC0, 0x00, 0x00, le];
                 resp = self.transmit_raw(&get_resp)?;
             } else {
-                bail!(
-                    "GET DATA: SW={sw1:02x}{sw2:02x} ({})",
-                    sw_description(sw1, sw2)
-                );
+                return Err(self
+                    .status_error(CardOp::ReadObject(object_id), sw1, sw2)
+                    .into());
             }
         }
         // data is 53 <len> <payload>; parse payload length.
@@ -92,6 +102,7 @@ impl PcscSession {
     /// key first.
     pub(crate) fn try_put_data(&mut self, object_id: u32, data: &[u8]) -> Result<bool> {
         let id = object_id.to_be_bytes();
+        let fail = self.write_error(object_id);
         let mut content = encode_tlv(0x53, data);
         let mut data_field = vec![0x5C, 0x03, id[1], id[2], id[3]];
         data_field.append(&mut content);
@@ -113,7 +124,11 @@ impl PcscSession {
             let resp = transmit_raw_card(&tx, &apdu)?;
             let n = resp.len();
             if n < 2 {
-                bail!("PUT DATA: response too short");
+                return Err(CardError::protocol(
+                    CardOp::WriteObject(object_id),
+                    "response too short",
+                )
+                .into());
             }
             let sw1 = resp[n - 2];
             let sw2 = resp[n - 1];
@@ -125,18 +140,12 @@ impl PcscSession {
                 if (sw1 == 0x6A && sw2 == 0x84) || (sw1 == 0x67 && sw2 == 0x00) {
                     return Ok(false);
                 }
-                bail!(
-                    "PUT DATA: SW={sw1:02x}{sw2:02x} ({})",
-                    sw_description(sw1, sw2)
-                );
+                return Err(fail(sw1, sw2).into());
             } else if (sw1 == 0x6A && sw2 == 0x84) || (sw1 == 0x67 && sw2 == 0x00) {
                 drop(tx);
                 return Ok(false);
             } else if sw1 != 0x90 || sw2 != 0x00 {
-                bail!(
-                    "PUT DATA (chained): SW={sw1:02x}{sw2:02x} ({})",
-                    sw_description(sw1, sw2)
-                );
+                return Err(fail(sw1, sw2).into());
             }
         }
     }
@@ -145,6 +154,7 @@ impl PcscSession {
     /// key first (call `authenticate_management_key`).
     pub(crate) fn put_data(&mut self, object_id: u32, data: &[u8]) -> Result<()> {
         let id = object_id.to_be_bytes();
+        let fail = self.write_error(object_id);
 
         // Encode the content as BER-TLV: 53 <len> <data>.
         let mut content = encode_tlv(0x53, data);
@@ -176,27 +186,33 @@ impl PcscSession {
             let resp = transmit_raw_card(&tx, &apdu)?;
             let n = resp.len();
             if n < 2 {
-                bail!("PUT DATA: response too short");
+                return Err(CardError::protocol(
+                    CardOp::WriteObject(object_id),
+                    "response too short",
+                )
+                .into());
             }
             let sw1 = resp[n - 2];
             let sw2 = resp[n - 1];
             if is_last {
                 if sw1 != 0x90 || sw2 != 0x00 {
-                    bail!(
-                        "PUT DATA: SW={sw1:02x}{sw2:02x} ({})",
-                        sw_description(sw1, sw2)
-                    );
+                    return Err(fail(sw1, sw2).into());
                 }
                 break;
             } else if sw1 != 0x90 || sw2 != 0x00 {
-                bail!(
-                    "PUT DATA (chained): SW={sw1:02x}{sw2:02x} ({})",
-                    sw_description(sw1, sw2)
-                );
+                return Err(fail(sw1, sw2).into());
             }
         }
 
         // Transaction drops here with SCARD_LEAVE_CARD (pcsc crate default).
         Ok(())
+    }
+
+    /// Builds the error for a failed PUT DATA of `object_id`.  Captures the
+    /// session context up front: the write runs inside a PC/SC transaction
+    /// that borrows the card.
+    fn write_error(&self, object_id: u32) -> impl Fn(u8, u8) -> CardError {
+        let ctx = self.err_ctx();
+        move |sw1, sw2| CardError::status(CardOp::WriteObject(object_id), sw1, sw2).with_ctx(ctx)
     }
 }

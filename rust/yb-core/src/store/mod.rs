@@ -424,7 +424,8 @@ impl Store {
                 next_chunk: 0,
             }));
         }
-        store.sync(piv, management_key)?;
+        // A failed format has its own messages (spec 0022): no partial note.
+        store.write_dirty(piv, management_key, false)?;
         Ok(store)
     }
 
@@ -478,8 +479,19 @@ impl Store {
         }
     }
 
-    /// Write all dirty objects back to the device.
+    /// Write all dirty objects back to the device.  If a write fails after
+    /// others succeeded, the error says the store may be partially updated
+    /// (spec 0025 §3).
     pub fn sync(&mut self, piv: &dyn PivBackend, management_key: &str) -> Result<()> {
+        self.write_dirty(piv, management_key, true)
+    }
+
+    fn write_dirty(
+        &mut self,
+        piv: &dyn PivBackend,
+        management_key: &str,
+        note_partial: bool,
+    ) -> Result<()> {
         use indicatif::{ProgressBar, ProgressStyle};
 
         let dirty: Vec<u8> = self
@@ -496,12 +508,16 @@ impl Store {
                 .progress_chars("=>-"),
         );
 
-        for idx in &dirty {
+        for (written, idx) in dirty.iter().enumerate() {
             let obj = &mut self.objects[*idx as usize];
             let id = OBJECT_ID_ZERO + obj.index as u32;
             let data = obj.to_bytes();
-            piv.write_object(&self.reader, id, &data, management_key)
-                .with_context(|| format!("writing object 0x{id:06x}"))?;
+            let result = piv.write_object(&self.reader, id, &data, management_key);
+            if note_partial && written > 0 {
+                result.context("the store may be partially updated; run `yb fsck`")?;
+            } else {
+                result?;
+            }
             obj.dirty = false;
             pb.inc(1);
         }

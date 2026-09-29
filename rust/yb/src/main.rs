@@ -5,12 +5,18 @@
 use anyhow::Result;
 use clap::{CommandFactory, Parser};
 use clap_complete::CompleteEnv;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use yb::cli;
 use yb::{Cli, Commands};
 use yb_core::{
-    context::OutputOptions, Context, ContextOptions, DeviceInfo, DevicePicker, PivBackend,
+    context::OutputOptions,
+    errors::{render, RenderEnv},
+    Context, ContextOptions, DeviceInfo, DevicePicker, PivBackend,
 };
+
+/// Firmware of the selected YubiKey, once known.  Only the report for
+/// unexpected errors shows it (spec 0025 §2).
+static FIRMWARE: OnceLock<String> = OnceLock::new();
 
 fn main() {
     CompleteEnv::with_factory(Cli::command)
@@ -21,7 +27,11 @@ fn main() {
 
     let result = run(cli);
     if let Err(e) = result {
-        eprintln!("Error: {e:#}");
+        let env = RenderEnv {
+            firmware: FIRMWARE.get().cloned(),
+            yb_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
+        };
+        eprintln!("{}", render(&e, &env));
         std::process::exit(1);
     }
 }
@@ -62,6 +72,8 @@ fn run(cli: Cli) -> Result<()> {
             quiet: cli.quiet,
         },
     )?;
+
+    let _ = FIRMWARE.set(ctx.firmware.clone());
 
     // `mut` is only used by the `SelfTest` arm (feature-gated); suppress the
     // lint when that feature is absent.

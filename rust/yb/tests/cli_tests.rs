@@ -1662,3 +1662,179 @@ mod default_policy_tests {
         assert!(ctx.enforce_default_policy(SecretOp::SelfTest).is_err());
     }
 }
+
+// ---------------------------------------------------------------------------
+// rendered errors, end to end (spec 0025)
+// ---------------------------------------------------------------------------
+
+mod error_render_tests {
+    use super::*;
+    use yb::cli::fetch::{run as fetch_run, FetchArgs};
+    use yb::cli::store::{run as store_run, StoreArgs};
+    use yb_core::errors::{render, RenderEnv};
+    use yb_core::Fault;
+
+    /// Identifying data and secrets that must never appear in errors.
+    const FORBIDDEN: [&str; 5] = [
+        "88888888",              // with_key.yaml serial
+        "Virtual YubiKey 00 01", // with_key.yaml reader
+        PIN,
+        MGMT,
+        cards::OTHER_KEY,
+    ];
+
+    fn rendered(e: &anyhow::Error) -> String {
+        let text = render(
+            e,
+            &RenderEnv {
+                firmware: Some("5.4.3".to_owned()),
+                yb_version: Some("test".to_owned()),
+            },
+        );
+        for f in FORBIDDEN {
+            assert!(!text.contains(f), "identifying data {f:?} in:\n{text}");
+        }
+        text
+    }
+
+    /// A set-up card holding one encrypted blob, and a context with the
+    /// given PIN.
+    fn card_with_blob(pin: &str) -> (Arc<VirtualPiv>, Context) {
+        let (piv, setup) = cards::formatted_card_with_piv();
+        cards::store_one(&setup, "blob").unwrap();
+        let mut ctx = Context::with_backend(piv.clone(), Some(pin.to_owned()), false).unwrap();
+        ctx.quiet = true;
+        (piv, ctx)
+    }
+
+    fn fetch(ctx: &Context) -> anyhow::Result<()> {
+        fetch_run(
+            ctx,
+            &FetchArgs {
+                patterns: vec!["blob".to_owned()],
+                stdout: false,
+                output: None,
+                output_dir: Some(std::env::temp_dir()),
+                extract: false,
+            },
+        )
+    }
+
+    /// Store `len` incompressible bytes as blob `name` (several chunks).
+    fn store_bytes(ctx: &Context, name: &str, len: usize) -> anyhow::Result<()> {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join(name);
+        let mut x: u32 = 0x1234_5678;
+        let data: Vec<u8> = (0..len)
+            .map(|_| {
+                x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (x >> 24) as u8
+            })
+            .collect();
+        std::fs::write(&file, data).unwrap();
+        store_run(
+            ctx,
+            &StoreArgs {
+                files: vec![file],
+                name: None,
+                encrypted: true,
+                unencrypted: false,
+                no_compress: true,
+            },
+        )
+    }
+
+    #[test]
+    fn wrong_pin_then_blocked() {
+        let (_piv, ctx) = card_with_blob("000000");
+        // fetch wraps the card error in context: it becomes the Cause.
+        let text = rendered(&fetch(&ctx).unwrap_err());
+        assert_eq!(
+            text,
+            "Error: decrypting blob 'blob'\n  \
+             Cause: wrong PIN (2 attempts left before the PIN is blocked).\n  \
+             (details: PIN verification → SW 63C2)"
+        );
+
+        fetch(&ctx).unwrap_err();
+        let text = rendered(&fetch(&ctx).unwrap_err());
+        assert!(text.contains("no attempts left"), "{text}");
+        let text = rendered(&fetch(&ctx).unwrap_err());
+        assert!(
+            text.contains("Cause: the PIN is blocked (too many wrong attempts)."),
+            "{text}"
+        );
+        assert!(text.contains("ykman piv access unblock-pin"), "{text}");
+        assert!(
+            text.ends_with("(details: PIN verification → SW 6983)"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn wrong_explicit_management_key() {
+        let (_piv, mut ctx) = card_with_blob(PIN);
+        ctx.management_key = Some(cards::OTHER_KEY.to_owned());
+        let text = rendered(&cards::store_one(&ctx, "x").unwrap_err());
+        assert!(
+            text.starts_with(
+                "Error: the YubiKey rejected the management key from YB_MANAGEMENT_KEY\n  \
+                 Cause: wrong management key ("
+            ),
+            "{text}"
+        );
+        assert!(
+            text.ends_with("(details: management key authentication → SW 6982)"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn storage_full_on_first_write() {
+        let (piv, ctx) = card_with_blob(PIN);
+        piv.inject_fault(Fault::StorageFull(1));
+        let text = rendered(&store_bytes(&ctx, "big", 6000).unwrap_err());
+        assert!(
+            text.starts_with("Error: the YubiKey's storage is full.\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Try: `yb fsck --nvm`, then remove blobs."),
+            "{text}"
+        );
+        assert!(text.contains("→ SW 6A84)"), "{text}");
+    }
+
+    #[test]
+    fn storage_full_midway_notes_partial_update() {
+        let (piv, ctx) = card_with_blob(PIN);
+        piv.inject_fault(Fault::StorageFull(2));
+        let text = rendered(&store_bytes(&ctx, "big", 6000).unwrap_err());
+        assert!(
+            text.starts_with(
+                "Error: the store may be partially updated; run `yb fsck`\n  \
+                 Cause: the YubiKey's storage is full (the PIV area's ~51 KB are used up).\n"
+            ),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn missing_certificate_explained() {
+        // with_key.yaml has a key but no certificate: an encrypted store
+        // cannot find the public key.
+        let piv = Arc::new(with_key_piv());
+        Store::format(&piv.reader_name(), piv.as_ref(), 8, 0x82, MGMT).unwrap();
+        let mut ctx = Context::with_backend(piv, Some(PIN.to_owned()), false).unwrap();
+        ctx.quiet = true;
+        let text = rendered(&cards::store_one(&ctx, "x").unwrap_err());
+        assert!(
+            text.contains("Cause: no key in slot 0x82 (this YubiKey has not been set up for yb)."),
+            "{text}"
+        );
+        assert!(
+            text.ends_with("(details: read certificate of slot 0x82 → SW 6A82)"),
+            "{text}"
+        );
+    }
+}

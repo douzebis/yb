@@ -4,7 +4,8 @@
 
 //! PIN verification and management-key authentication.
 
-use super::transport::{sw_description, PcscSession};
+use super::transport::PcscSession;
+use crate::errors::{CardError, CardOp};
 use crate::piv::mgmt::{parse_mgmt_metadata, MgmtAlgo, GET_METADATA_MGMT};
 use crate::piv::tlv::{crypto_ecb, encode_length, encode_tlv, EcbDir};
 use anyhow::{bail, Context, Result};
@@ -29,19 +30,8 @@ impl PcscSession {
         padded[..pin_bytes.len()].copy_from_slice(pin_bytes);
         let mut apdu = vec![0x00, 0x20, 0x00, 0x80, 0x08];
         apdu.extend_from_slice(&padded);
-        let resp = self.transmit_raw(&apdu)?;
-        let n = resp.len();
-        if n < 2 {
-            bail!("VERIFY PIN: response too short");
-        }
-        let sw1 = resp[n - 2];
-        let sw2 = resp[n - 1];
-        match (sw1, sw2) {
-            (0x90, 0x00) => Ok(()),
-            (0x63, n) => bail!("VERIFY PIN failed: {} retries remaining", n & 0x0f),
-            (0x69, 0x83) => bail!("VERIFY PIN failed: PIN blocked"),
-            (s1, s2) => bail!("VERIFY PIN failed: SW={s1:02x}{s2:02x}"),
-        }
+        self.transmit_check(&apdu, CardOp::VerifyPin)?;
+        Ok(())
     }
 
     /// Return the algorithm of the card's management key.
@@ -53,10 +43,11 @@ impl PcscSession {
         if let Some(algo) = self.mgmt_algo {
             return Ok(algo);
         }
+        let op = CardOp::GetMetadata(0x9B);
         let resp = self.transmit_raw(&GET_METADATA_MGMT)?;
         let n = resp.len();
         if n < 2 {
-            bail!("GET METADATA (management key): response too short");
+            return Err(CardError::protocol(op, "response too short").into());
         }
         let algo = match (resp[n - 2], resp[n - 1]) {
             (0x90, 0x00) => {
@@ -72,10 +63,7 @@ impl PcscSession {
                 md.algo
             }
             (0x6D, 0x00) => MgmtAlgo::Tdes,
-            (s1, s2) => bail!(
-                "GET METADATA (management key) failed: SW={s1:02x}{s2:02x} ({})",
-                sw_description(s1, s2)
-            ),
+            (s1, s2) => return Err(self.status_error(op, s1, s2).into()),
         };
         self.mgmt_algo = Some(algo);
         Ok(algo)
@@ -94,7 +82,6 @@ impl PcscSession {
         let algo = self.management_key_algorithm()?;
         algo.check_key_len(&key_bytes)?;
         self.mutual_auth(algo, &key_bytes)
-            .with_context(|| format!("authenticating with the {algo} management key"))
     }
 
     fn mutual_auth(&mut self, algo: MgmtAlgo, key_bytes: &[u8]) -> Result<()> {
@@ -103,7 +90,7 @@ impl PcscSession {
 
         // Step 1: request witness (card encrypts a challenge).
         let step1 = [0x00, 0x87, p1, 0x9B, 0x04, 0x7C, 0x02, 0x80, 0x00];
-        let resp1 = self.transmit_check(&step1, "MGMT AUTH step1")?;
+        let resp1 = self.transmit_check(&step1, CardOp::MgmtAuth)?;
 
         // Parse: 7C <len> 80 <len> <witness>
         let outer = tlv_get(&resp1, 0x7C, "MGMT AUTH step1")?;
@@ -122,7 +109,7 @@ impl PcscSession {
         step2.extend(encode_length(outer2.len()));
         step2.extend(&outer2);
 
-        let resp2 = self.transmit_check(&step2, "MGMT AUTH step2")?;
+        let resp2 = self.transmit_check(&step2, CardOp::MgmtAuth)?;
 
         // Step 3: verify the card encrypted our challenge correctly.
         let outer_r = tlv_get(&resp2, 0x7C, "MGMT AUTH step2")?;
@@ -130,7 +117,7 @@ impl PcscSession {
 
         let challenge_enc = crypto_ecb(algo, key_bytes, &challenge, EcbDir::Encrypt)?;
         if challenge_enc.ct_eq(&challenge_resp).unwrap_u8() == 0 {
-            bail!("management key authentication failed: card response mismatch");
+            return Err(CardError::protocol(CardOp::MgmtAuth, "card response mismatch").into());
         }
 
         Ok(())

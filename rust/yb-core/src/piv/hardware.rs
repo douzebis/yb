@@ -6,6 +6,7 @@
 //! via PC/SC APDUs (NIST SP 800-73-4).  No external subprocesses required.
 
 use super::{session, tlv, DeviceInfo, FlashHandle, MgmtAlgo, PivBackend};
+use crate::errors::{CardError, CardOp, PcscOp};
 use anyhow::{bail, Context, Result};
 use session::{serial_from_reader, version_from_reader, PcscSession, SELECT_PIV};
 use std::sync::{
@@ -33,14 +34,16 @@ impl Default for HardwarePiv {
 
 impl PivBackend for HardwarePiv {
     fn list_readers(&self) -> Result<Vec<String>> {
-        let ctx =
-            pcsc::Context::establish(pcsc::Scope::User).context("establishing PC/SC context")?;
+        let ctx = pcsc::Context::establish(pcsc::Scope::User)
+            .map_err(|e| CardError::pcsc(PcscOp::Establish, e))?;
         let mut buf = vec![0u8; 65536];
-        let readers: Vec<String> = ctx
-            .list_readers(&mut buf)
-            .context("listing PC/SC readers")?
-            .map(|cstr| cstr.to_string_lossy().into_owned())
-            .collect();
+        let readers: Vec<String> = match ctx.list_readers(&mut buf) {
+            // No readers is not an error for listing: the caller decides.
+            Err(pcsc::Error::NoReadersAvailable) => return Ok(Vec::new()),
+            other => other.map_err(|e| CardError::pcsc(PcscOp::ListReaders, e))?,
+        }
+        .map(|cstr| cstr.to_string_lossy().into_owned())
+        .collect();
         Ok(readers)
     }
 
@@ -83,7 +86,7 @@ impl PivBackend for HardwarePiv {
 
     fn send_apdu(&self, reader: &str, apdu: &[u8]) -> Result<Vec<u8>> {
         let mut session = PcscSession::open(reader)?;
-        session.transmit_check(apdu, "send_apdu")
+        session.transmit_check(apdu, CardOp::Command)
     }
 
     fn ecdh(
@@ -122,7 +125,7 @@ impl PivBackend for HardwarePiv {
     fn read_certificate(&self, reader: &str, slot: u8) -> Result<Vec<u8>> {
         let object_id = slot_to_object_id(slot)?;
         let mut session = PcscSession::open(reader)?;
-        let raw = session.get_data(object_id)?;
+        let raw = session.get_data_as(object_id, CardOp::ReadCertificate(slot))?;
         // Cert TLV: 53 <len> [ 70 <len> <DER cert> 71 01 00 FE 00 ]
         // get_data already stripped the outer 53 wrapper.
         // Now parse the inner TLV for tag 0x70.
@@ -182,7 +185,7 @@ impl PivBackend for HardwarePiv {
             new_bytes.len() as u8,
         ];
         apdu.extend_from_slice(&new_bytes);
-        session.transmit_check(&apdu, "SET MANAGEMENT KEY")?;
+        session.transmit_check(&apdu, CardOp::SetMgmtKey)?;
         session.set_cached_management_key_algorithm(algo);
         Ok(())
     }

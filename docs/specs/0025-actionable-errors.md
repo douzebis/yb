@@ -6,9 +6,9 @@ SPDX-License-Identifier: MIT
 
 # 0025 — Actionable Error Messages
 
-**Status:** draft
+**Status:** implemented
 **App:** yb
-**Implemented in:** <!-- YYYY-MM-DD, fill after implementation -->
+**Implemented in:** 2026-09-29
 
 ## Problem
 
@@ -56,9 +56,9 @@ they should come after an explanation.
   3. **what to do**: a concrete command or check;
   4. **details**: operation label and SW, or the PC/SC error code, on
      one line, for bug reports.
-- The explanation depends on the operation and the SW together, and on
-  known card state (firmware, management key algorithm) where that is
-  available.
+- The explanation depends on the operation and the SW together, plus
+  what the failing step knows (e.g. the management key algorithm yb
+  used), never on the firmware version.
 - Combinations yb doesn't recognize still produce the details line,
   plus an invitation to report the issue.
 - The mapping is data-driven, lives in one place, and every entry is
@@ -78,7 +78,9 @@ they should come after an explanation.
 
 ### 1. Error type
 
-Replace the string-built card errors with a typed error in `yb-core`:
+Two typed errors in `yb-core` replace the string-built messages.
+
+**`CardError`**, for failures reported by the card or by PC/SC:
 
 ```rust
 pub enum CardError {
@@ -91,16 +93,29 @@ pub enum CardError {
 - **`CardOp`** names the operation in yb terms, one variant per call
   site:
   - `SelectPiv`, `VerifyPin`, `MgmtAuth`, `SetMgmtKey`;
-  - `ReadObject(ObjId)`, `WriteObject(ObjId)`;
+  - `ReadObject(ObjId)`, `ReadCertificate(slot)`, `WriteObject(ObjId)`;
   - `GenerateKey(slot)`, `Sign(slot)`, `Ecdh(slot)`;
-  - `ChangePin`, `ChangePuk`, `GetMetadata(slot)`.
-- **`ErrCtx`** carries what is known at the time of the error:
-  - firmware version and management key algorithm, if known;
-  - whether the PIN was verified in this session;
-  - which object id or slot was involved.
+  - `GetMetadata(slot)`, `Command` (any other card command, e.g. a raw
+    APDU);
+  - `ChangePin` and `ChangePuk` arrive with spec 0023, which introduces
+    those operations.
+- **`ErrCtx`** carries only what the failing step itself knows, e.g. the
+  management key algorithm yb used (from the spec 0021 detection) and
+  which object or slot was involved.  It carries no firmware version.
 - `transmit_check` takes a `CardOp` instead of a `&str` label.
-- `CardError` implements `std::error::Error`.  It travels through
-  `anyhow` unchanged, and `main` downcasts it for rendering (§3).
+
+**`YbError { what, why, fix }`**, for yb's own errors, the ones that do
+not come from the card.  Examples: the spec 0022 key resolution ("the
+management key is not in PRINTED…"), the key/certificate mismatch, the
+spec 0024 policy refusals, and the spec 0022 Phase B messages.  These
+messages move into this layout, with light rewording at most.
+
+Both types implement `std::error::Error`.  They travel through `anyhow`
+unchanged, and `main` downcasts them for rendering (§3).
+
+**The catalog never depends on the firmware version.**  Where a status
+word's meaning once depended on firmware, yb now asks the card instead
+(spec 0021: the management key algorithm).
 
 ### 2. Mapping table
 
@@ -115,16 +130,17 @@ give full commands.
 |---|---|---|---|---|
 | `VerifyPin` | `63Cx` | Wrong PIN | — | `x` attempts left; at 1: "one more failure blocks the PIN" |
 | `VerifyPin` | `6983` | PIN is blocked | too many wrong attempts | unblock with the PUK (`ykman piv access unblock-pin`); if the PUK is also blocked, a PIV reset is needed (erases everything) |
-| `ChangePin`/`ChangePuk` | `6985` | New PIN/PUK rejected | does not meet this YubiKey's complexity policy (spec 0023 §6) | choose a less guessable value |
-| `MgmtAuth` | `6A80` | Cannot authenticate with the management key | the card uses a different algorithm than yb used (shows both, if known) | `yb fsck` shows the algorithm; report a bug if they match |
-| `MgmtAuth` | response mismatch | Wrong management key | the key from `YB_MANAGEMENT_KEY` / PRINTED is not the card's key | check `YB_MANAGEMENT_KEY`; `yb fsck` shows the protection mode |
+| `ChangePin`/`ChangePuk` (added by spec 0023) | `6985` | New PIN/PUK rejected | does not meet this YubiKey's complexity policy (spec 0023 §6) | choose a less guessable value |
+| `MgmtAuth` | `6A80` | Cannot authenticate with the management key | the card rejected the algorithm yb used (shown, from `ErrCtx`); only possible if detection had to guess (firmware without GET METADATA) | `ykman piv info` shows the card's algorithm; report a bug if they match |
+| `MgmtAuth` | `6982` | Wrong management key | the key from `YB_MANAGEMENT_KEY` or PRINTED is not the card's key (on real hardware this surfaces at authentication step 2) | check `YB_MANAGEMENT_KEY`; `ykman piv info` shows whether the key is PIN-protected |
+| `MgmtAuth` | response mismatch | Wrong management key | same as above, detected by yb instead of the card | same as above |
 | `ReadObject(PRINTED)` | `6A82` | Management key is not stored on the YubiKey | card is not in PIN-protected mode, or it was set up by another tool | set `YB_MANAGEMENT_KEY`, or re-run setup with `yb format` |
 | `ReadObject(cert of store slot)` | `6A82` | No key in slot 0x82 | the YubiKey has not been set up for yb | run `yb format` |
 | `WriteObject(_)` | `6A84` | The YubiKey's storage is full | the PIV applet's ~51 KB are used up | `yb fsck --nvm`; remove blobs |
 | `WriteObject(_)` | `6982` | Write not permitted | management key authentication did not happen or was lost | likely a yb bug: report it |
 | `GenerateKey`, `Sign`, `Ecdh` | `6982` | The YubiKey requires the PIN (or touch) for this key | PIN not verified, or touch policy | re-run and touch the key if it blinks |
-| `Sign`/`Ecdh` | `6A80` | The key in slot 0x82 cannot do this operation | not an EC P-256 key | `yb fsck`; `yb format` with a new key |
-| any | `6D00` | This YubiKey does not support the operation | firmware too old (shows version) | — |
+| `Sign`/`Ecdh` | `6A80` | The key in slot 0x82 cannot do this operation | not an EC P-256 key | `yb format --generate` (erases the store) |
+| any | `6D00` | This YubiKey does not support the operation | its firmware is too old for it | — |
 | `SelectPiv` | `6A82` | The PIV application is not available | PIV disabled on this key, or not a YubiKey | `ykman config usb --enable PIV` |
 
 PC/SC errors:
@@ -136,30 +152,59 @@ PC/SC errors:
 | `SCARD_E_SHARING_VIOLATION` | Another program is using the YubiKey | usually gpg's scdaemon: `gpgconf --kill scdaemon` |
 | `SCARD_W_REMOVED_CARD`, `SCARD_W_RESET_CARD` | The YubiKey was removed or reset during the operation | reconnect; for write commands, run `yb fsck` to check the store |
 
-Fallback, when no entry matches:
+**Interim wording.**  Fixes point to `ykman piv info` where spec 0023's
+`yb fsck` YubiKey section will later give the same information; spec
+0023 updates those entries.
+
+Fallback, when no entry matches: an unexpected error.  This is the one
+place that carries **all the context available**: the operation, the
+status word, `ErrCtx`, the firmware version and the yb version.  It
+still never carries the identifying data listed in §3.
 
 ```
 Error: the YubiKey rejected <op description>.
   This is unexpected — please report it at https://github.com/douzebis/yb/issues
-  with the details line below.
+  with the details below.
+  (details: <op> → SW <sw>; <ErrCtx>; firmware <version>; yb <version>)
 ```
+
+`main` supplies the firmware version, which it knows from the device
+list; the failing step does not need to.
 
 ### 3. Rendering
 
-On stderr, in `main`:
+Rendering is a **pure function** from the error (and, for the fallback,
+the firmware version) to text, so that tests check it directly.  `main`
+prints its result on stderr:
 
 ```
 Error: cannot authenticate with the management key.
-  The YubiKey expects an AES-192 key, but yb used 3DES.
-  Try: `yb fsck` to see the management key settings.
-  (details: management key authentication → SW 6A80, firmware 5.7.1)
+  The YubiKey rejected the 3DES algorithm yb used.
+  Try: `ykman piv info` shows the card's management key algorithm.
+  (details: management key authentication → SW 6A80)
 ```
 
 - The first line always starts with `Error: `, as today.
 - The `why` and `fix` lines are omitted when empty.
-- The details line is always present for `CardError`.  It uses the
-  `CardOp` description, the 4-digit SW in uppercase hex, and the
-  firmware version when known.
+- The details line is present for every `CardError`: the `CardOp`
+  description and the 4-digit SW in uppercase hex.  It carries no
+  firmware version, except in the fallback (§2).  `YbError` has no
+  details line.
+- **Errors with context.**  Errors often travel wrapped in context (e.g.
+  spec 0022's "yb format stopped while erasing the store… Run `yb format`
+  again", around a card error).  The outer context stays the headline.
+  The inner `CardError` or `YbError` follows with its `why` as `Cause:`
+  and its `fix` as `Try:`, then the details line:
+
+  ```
+  Error: yb format stopped while erasing the store (completed: …).  The store may be partly erased; …
+    Cause: the YubiKey's storage is full (the PIV area's ~51 KB are used up).
+    Try: `yb fsck --nvm`, then remove blobs.
+    (details: write object 0x5F0003 → SW 6A84)
+  ```
+
+  Without an outer context, the error's own `what` is the headline, and
+  `why` and `fix` follow as in the first example.
 - **No identifying data in error output.**  Error messages, including
   the details line and the fallback text, must never contain:
   - the YubiKey serial number;
@@ -171,34 +216,59 @@ Error: cannot authenticate with the management key.
   rendered errors.  Interactive output that is not an error, such as the
   `fsck` report or the guided-format confirmation, may still show the
   serial.
-- Errors that are not `CardError` render as today (`Error: {e:#}`).
-- For write commands (`store`, `rm`, `format`), a card error after the
-  first write APDU adds: `The store may be partially updated; run `yb
-  fsck`.`  Spec 0022 already covers `format`'s own messages; those take
-  precedence.
+- Other errors (argument parsing, file I/O) render as today
+  (`Error: {e:#}`).
+- **Partial writes:** when a card error interrupts `Store::sync` after at
+  least one object was written, `Store::sync` adds the context "the store
+  may be partially updated; run `yb fsck`".  It is added in that one
+  place, so it applies to `store` and `rm`.  `format` has its own spec
+  0022 messages, which take precedence.
 
 ### 4. Migration
 
 - Remove the free-standing `sw_description`; the catalog replaces it.
 - Replace existing ad-hoc `bail!` sites that inspect SWs, such as
   `verify_pin`'s `VERIFY PIN failed: …`, with `CardError`.
-- Specs 0021–0024 introduce new errors (algorithm mismatch, B1c
-  recovery, key/certificate mismatch, default-credential refusal).
-  Their message texts become catalog entries or use the same
-  what/why/fix layout.
+- Map `pcsc::Error` values to `CardError::Pcsc`.  "No PC/SC readers
+  found." (`list-readers`) and "no YubiKey found" (device selection)
+  become the same catalog entry.
+- Move the yb-level messages of specs 0021–0024 into `YbError`: key
+  resolution, key/certificate mismatch, policy refusals, and the Phase B
+  and key-switch messages.
+- **Remove identifying data from existing messages:**
+  - `transport.rs`: "connecting to reader '{reader}'";
+  - `context.rs`: "no device on reader '{r}'";
+  - `context.rs`: "no YubiKey with serial {s} found".  It echoes the
+    serial the user typed, which still ends up in pasted reports.
+- **Virtual backend:** for the failures it emulates, `VirtualPiv` returns
+  the `CardError` a real YubiKey would produce, with the same status word:
+  - wrong PIN `63Cx`, with the tries left;
+  - blocked PIN `6983`;
+  - wrong management key `6982`;
+  - missing object `6A82`;
+  - storage full `6A84` (new injectable fault).
+
+  It does not emulate APDUs byte by byte; it fails the way the card
+  does, so the CLI tests exercise the rendering users see.
 
 ### 5. Tests
 
-- **Every catalog entry** has a test that injects its SW for its
-  operation through the virtual PIV backend, and asserts the rendered
+- **Every catalog entry** has a unit test: a `CardError` with that
+  operation and status word, rendered by the pure function, asserting the
   `what` line and the details line.
+- **End to end:** the CLI tests trigger the failures the virtual backend
+  emulates (wrong PIN, blocked PIN, wrong management key, storage full)
+  and assert the rendered text.
 - **Fallback**: an unmapped `(op, SW)` renders the report invitation and
-  the details line.
-- **Coverage**: every `CardOp` variant is used by at least one
-  `transmit_check` call site; a compile-time match ensures no variant
-  is left undescribed.
-- **Snapshot tests** on the full rendered text of the four examples in
-  this spec.
+  the full details, including the firmware version.
+- **Composition**: a card error wrapped in context renders as `Cause:` /
+  `Try:` under the context headline.
+- **Coverage**: a compile-time match ensures no `CardOp` variant is left
+  without a description.
+- **No identifying data**: rendered errors never contain the virtual
+  backend's serial or reader name, nor any PIN, PUK or management key.
+- **Snapshot tests** on the full rendered text of the examples in this
+  spec.
 
 ### 6. Backward compatibility
 

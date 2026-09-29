@@ -293,6 +293,8 @@ would do, run bare `yb format` and answer no at the confirmation.
   in a terminal for guided setup.`  Default-credential warnings add
   "run `yb fsck` for details".  Both replace the interim wording of spec
   0024 §2, which cannot point to features this spec introduces.
+- Error-catalog fixes that point to `ykman piv info` (spec 0025 §2,
+  interim wording) point to the `yb fsck` YubiKey section instead.
 - When an existing store is about to be erased, the blobs are listed as
   specified in spec 0022 §1 step 6 (printed even with `--quiet`).  There
   is no prompt, so scripts and `yb self-test` are unaffected.

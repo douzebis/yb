@@ -8,6 +8,7 @@
 use crate::piv::VirtualPiv;
 use crate::{
     auxiliaries::{self, ProtectionMode},
+    errors::{CardError, PcscCode, PcscOp, YbError},
     piv::{hardware::HardwarePiv, DeviceInfo, PivBackend},
     policy::{self, SecretOp},
 };
@@ -120,6 +121,9 @@ impl ResolvedKey {
 pub struct Context {
     pub reader: String,
     pub serial: u32,
+    /// Firmware version of the selected YubiKey, as reported by the device
+    /// list (e.g. "5.4.3").  Only the unexpected-error report uses it.
+    pub firmware: String,
     pub management_key: Option<String>,
     /// Which factory-default credentials were still active at startup.
     pub defaults: auxiliaries::DefaultCredentials,
@@ -186,6 +190,7 @@ impl Context {
         Ok(Self {
             reader: selected_reader,
             serial: device.serial,
+            firmware: device.version.clone(),
             management_key: opts.management_key,
             defaults,
             allow_defaults: opts.allow_defaults,
@@ -227,6 +232,7 @@ impl Context {
         Ok(Self {
             reader,
             serial: device.serial,
+            firmware: device.version.clone(),
             management_key: None,
             defaults,
             allow_defaults: false,
@@ -275,11 +281,13 @@ impl Context {
     /// with (PIN-derived, or unparseable ADMIN DATA).
     pub fn ensure_supported_protection(&self) -> Result<()> {
         match self.protection {
-            ProtectionMode::Derived => bail!("{}", auxiliaries::PIN_DERIVED_UNSUPPORTED),
-            ProtectionMode::Invalid => bail!(
-                "the YubiKey's ADMIN DATA object (0x5FFF00) cannot be parsed; \
-                 refusing to write"
-            ),
+            ProtectionMode::Derived => Err(auxiliaries::pin_derived_unsupported().into()),
+            ProtectionMode::Invalid => Err(YbError::new(
+                "the YubiKey's ADMIN DATA object (0x5FFF00) cannot be parsed",
+            )
+            .why("yb does not write to a YubiKey whose management key setup it cannot read")
+            .fix("inspect it with `ykman piv objects export 0x5fff00 -`")
+            .into()),
             ProtectionMode::None
             | ProtectionMode::Standard
             | ProtectionMode::LegacyOrPukBlocked => Ok(()),
@@ -336,7 +344,11 @@ impl Context {
                 ProtectionMode::Standard | ProtectionMode::LegacyOrPukBlocked
             ) =>
             {
-                bail!("PIN required to retrieve PIN-protected management key")
+                return Err(YbError::new(
+                    "a PIN is needed to read the PIN-protected management key",
+                )
+                .fix("set YB_PIN, use --pin-stdin, or run yb in a terminal")
+                .into())
             }
             None => auxiliaries::PrintedKeys::default(),
         };
@@ -378,9 +390,10 @@ impl Context {
             };
             return Ok(ResolvedKey::new(key, source, repairs));
         }
-        bail!(
-            "the management key is not in PRINTED and is not the factory default; \
-             set YB_MANAGEMENT_KEY"
+        Err(
+            YbError::new("the management key is not in PRINTED and is not the factory default")
+                .fix("set YB_MANAGEMENT_KEY")
+                .into(),
         )
     }
 
@@ -545,23 +558,28 @@ fn select_device(
     >,
 ) -> Result<(DeviceInfo, String, Option<Box<dyn crate::piv::FlashHandle>>)> {
     if let Some(s) = serial {
-        let dev = devices
-            .iter()
-            .find(|d| &d.serial == s)
-            .ok_or_else(|| anyhow::anyhow!("no YubiKey with serial {s} found"))?;
+        let dev = devices.iter().find(|d| &d.serial == s).ok_or_else(|| {
+            // Not echoing the serial: it would end up in pasted reports.
+            YbError::new("no connected YubiKey has the requested serial number")
+                .fix("`ykman list --serials` lists the connected YubiKeys")
+        })?;
         return Ok((dev.clone(), dev.reader.clone(), None));
     }
 
     if let Some(r) = reader {
-        let dev = devices
-            .iter()
-            .find(|d| d.reader == r)
-            .ok_or_else(|| anyhow::anyhow!("no device on reader '{r}'"))?;
+        let dev = devices.iter().find(|d| d.reader == r).ok_or_else(|| {
+            YbError::new("no YubiKey on the requested reader")
+                .fix("`yb list-readers` lists the readers")
+        })?;
         return Ok((dev.clone(), r.to_owned(), None));
     }
 
     match devices.len() {
-        0 => bail!("no YubiKey found"),
+        0 => Err(CardError::Pcsc {
+            op: PcscOp::ListReaders,
+            code: PcscCode::NoReaders,
+        }
+        .into()),
         1 => Ok((devices[0].clone(), devices[0].reader.clone(), None)),
         _ => {
             // Multiple devices: invoke the picker (interactive or fallback).

@@ -10,7 +10,7 @@ use std::io::Read;
 use std::path::PathBuf;
 use yb_core::orchestrator::{self, Compression, Encryption, StoreOptions};
 use yb_core::store::{constants::MAX_NAME_LEN, Store};
-use yb_core::{Context, SecretOp, SlotKeyCheck};
+use yb_core::{errors::YbError, Context, SecretOp, SlotKeyCheck};
 
 #[derive(Args, Debug)]
 pub struct StoreArgs {
@@ -150,11 +150,12 @@ pub fn run(ctx: &Context, args: &StoreArgs) -> Result<()> {
     // signatures would not verify (spec 0022 §6).
     let slot = store.store_key_slot;
     if ctx.check_slot_key(slot)? == SlotKeyCheck::Mismatch {
-        bail!(
-            "the key in slot 0x{slot:02x} does not match its certificate; new blobs would \
-             be undecryptable.  Nothing was stored.  Run `yb format --generate` \
-             (this erases the store)."
-        );
+        return Err(YbError::new(format!(
+            "the key in slot 0x{slot:02x} does not match its certificate"
+        ))
+        .why("new blobs would be undecryptable; nothing was stored")
+        .fix("`yb format --generate` (this erases the store)")
+        .into());
     }
 
     let pin = ctx.require_pin()?;

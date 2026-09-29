@@ -11,7 +11,8 @@
 //! reveals nothing.
 
 use crate::auxiliaries::DefaultCredentials;
-use anyhow::{bail, Result};
+use crate::errors::YbError;
+use anyhow::Result;
 
 /// The operation about to act, for [`default_policy`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,17 +81,22 @@ pub fn default_policy(
     if !refused.is_empty() {
         let what = join(&refused);
         if op == SecretOp::SelfTest {
-            bail!(
-                "YubiKey has default credentials: {what}.  \
-                 This is insecure.  Use --allow-defaults to override."
+            return Err(
+                YbError::new(format!("YubiKey has default credentials: {what}"))
+                    .why("this is insecure")
+                    .fix("use --allow-defaults to override")
+                    .into(),
             );
         }
-        bail!(
-            "this YubiKey still has the factory-default {what}.  Anything stored on \
-             it could be read by whoever holds the key.\n  \
-             Fix: change the PIN and PUK with `ykman piv access change-pin` and \
-             `ykman piv access change-puk` (the store is kept).\n  \
-             Override (testing only): --allow-defaults"
+        return Err(
+            YbError::new(format!("this YubiKey still has the factory-default {what}"))
+                .why("anything stored on it could be read by whoever holds the key")
+                .fix(
+                    "change the PIN and PUK with `ykman piv access change-pin` and \
+                     `ykman piv access change-puk` (the store is kept); for testing \
+                     only, --allow-defaults overrides",
+                )
+                .into(),
         );
     }
     Ok(if warned.is_empty() {
@@ -206,6 +212,6 @@ mod tests {
         let e = default_policy(SecretOp::Store, &all, false).unwrap_err();
         assert!(e
             .to_string()
-            .starts_with("this YubiKey still has the factory-default PIN and PUK."));
+            .starts_with("this YubiKey still has the factory-default PIN and PUK ("));
     }
 }

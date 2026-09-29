@@ -38,6 +38,7 @@ pub mod auxiliaries;
 pub mod crypto;
 
 pub mod context;
+pub mod errors;
 pub mod nvm;
 pub mod orchestrator;
 pub mod piv;

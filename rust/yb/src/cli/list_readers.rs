@@ -4,7 +4,10 @@
 
 use anyhow::Result;
 use clap::Args;
-use yb_core::{HardwarePiv, PivBackend as _, VirtualPiv};
+use yb_core::{
+    errors::{explain_pcsc, PcscCode},
+    HardwarePiv, PivBackend as _, VirtualPiv,
+};
 
 #[derive(Args, Debug)]
 pub struct ListReadersArgs {}
@@ -17,7 +20,12 @@ pub fn run(_args: &ListReadersArgs) -> Result<()> {
         HardwarePiv::new().list_readers()?
     };
     if readers.is_empty() {
+        // Same explanation as "no YubiKey found" elsewhere (spec 0025 §4);
+        // still exit 0, as before.
         eprintln!("No PC/SC readers found.");
+        if let Some(fix) = explain_pcsc(&PcscCode::NoReaders).and_then(|e| e.fix) {
+            eprintln!("  Try: {fix}.");
+        }
     } else {
         for r in &readers {
             println!("{r}");

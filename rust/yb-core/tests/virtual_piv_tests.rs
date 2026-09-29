@@ -11,6 +11,7 @@
 use std::path::Path;
 use std::sync::Arc;
 use yb_core::{
+    errors::{CardError, CardOp},
     orchestrator::{
         fetch_blob, list_blobs, remove_blob, store_blob, Compression, Encryption, StoreOptions,
     },
@@ -105,15 +106,20 @@ fn test_pin_retry_and_block() {
     let piv = default_piv();
     let reader = piv.reader_name();
 
-    // 3 wrong attempts exhaust retries.
-    for _ in 0..3 {
-        let _ = piv.verify_pin(&reader, "badpin");
+    // 3 wrong attempts exhaust retries; each fails like the card does,
+    // with SW 63Cx carrying the tries left (spec 0025 §4).
+    for left in [2u8, 1, 0] {
+        let err = piv.verify_pin(&reader, "badpin").unwrap_err();
+        assert_eq!(
+            err.downcast_ref::<CardError>(),
+            Some(&CardError::status(CardOp::VerifyPin, 0x63, 0xC0 | left))
+        );
     }
-    // Now blocked.
+    // Now blocked: SW 6983.
     let err = piv.verify_pin(&reader, "123456").unwrap_err();
-    assert!(
-        err.to_string().contains("blocked"),
-        "expected blocked: {err}"
+    assert_eq!(
+        err.downcast_ref::<CardError>(),
+        Some(&CardError::status(CardOp::VerifyPin, 0x69, 0x83))
     );
 }
 

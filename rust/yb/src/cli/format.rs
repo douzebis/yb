@@ -13,6 +13,7 @@ use yb_core::{
         enable_pin_protected_management_key, generate_random_management_key, KeySwitch,
         ProtectionMode,
     },
+    errors::YbError,
     list_blobs,
     store::{
         constants::{DEFAULT_OBJECT_COUNT, DEFAULT_SUBJECT, OBJECT_ID_ZERO},
@@ -90,9 +91,10 @@ fn preflight(ctx: &Context, args: &FormatArgs) -> Result<Plan> {
     })?;
 
     // 3. PIN.
-    let pin = ctx
-        .require_pin()?
-        .ok_or_else(|| anyhow::anyhow!("PIN required to format the store"))?;
+    let pin = ctx.require_pin()?.ok_or_else(|| {
+        YbError::new("a PIN is needed to format the store")
+            .fix("set YB_PIN, use --pin-stdin, or run yb in a terminal")
+    })?;
     ctx.piv.verify_pin(&ctx.reader, &pin)?;
 
     // 4. Management key: resolved and accepted by the card.
@@ -106,12 +108,17 @@ fn preflight(ctx: &Context, args: &FormatArgs) -> Result<Plan> {
         match ctx.check_slot_key(slot)? {
             SlotKeyCheck::Match => {}
             SlotKeyCheck::NoCertificate => {
-                bail!("no certificate in slot 0x{slot:02x}; use --generate to create a key")
+                return Err(YbError::new(format!("no certificate in slot 0x{slot:02x}"))
+                    .fix("add --generate to create a key and its certificate")
+                    .into());
             }
-            SlotKeyCheck::Mismatch => bail!(
-                "the key in slot 0x{slot:02x} does not match its certificate; \
-                 use --generate to replace both"
-            ),
+            SlotKeyCheck::Mismatch => {
+                return Err(YbError::new(format!(
+                    "the key in slot 0x{slot:02x} does not match its certificate"
+                ))
+                .fix("add --generate to replace both")
+                .into());
+            }
         }
     }
 
@@ -214,7 +221,10 @@ fn apply(ctx: &Context, args: &FormatArgs, plan: Plan) -> Result<()> {
                 )?;
                 match ctx.check_slot_key(slot)? {
                     SlotKeyCheck::Match => Ok(()),
-                    _ => bail!("the new certificate does not match the key in the slot"),
+                    _ => Err(YbError::new(
+                        "the new certificate does not match the key in the slot",
+                    )
+                    .into()),
                 }
             },
         )?;

@@ -369,7 +369,7 @@ pub fn admin_data_with_stored_key(
     let mut admin = read_admin_data(reader, piv)
         .map_err(|e| anyhow::anyhow!("cannot update ADMIN DATA (0x5FFF00): {e}"))?;
     if admin.salt.is_some() {
-        bail!("{PIN_DERIVED_UNSUPPORTED}");
+        return Err(pin_derived_unsupported().into());
     }
     let mut flags = admin.flags.unwrap_or(0) | ADMIN_FLAG_MGMT_KEY_STORED;
     match puk_retries_remaining(reader, piv) {
@@ -382,10 +382,12 @@ pub fn admin_data_with_stored_key(
     Ok(admin.to_bytes())
 }
 
-/// Message for a card whose management key is PIN-derived.
-pub const PIN_DERIVED_UNSUPPORTED: &str =
-    "PIN-derived management key mode is deprecated and not supported. \
-     Please migrate to PIN-protected mode.";
+/// The error for a card whose management key is PIN-derived.
+pub fn pin_derived_unsupported() -> crate::errors::YbError {
+    crate::errors::YbError::new("this YubiKey's management key is PIN-derived")
+        .why("that mode is deprecated, and yb does not support it")
+        .fix("switch to PIN-protected mode: `ykman piv access change-management-key --protect`")
+}
 
 /// Generate a random management key for `algo`, returned as a hex string.
 pub fn generate_random_management_key(algo: MgmtAlgo) -> String {
