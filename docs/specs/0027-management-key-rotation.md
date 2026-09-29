@@ -6,9 +6,9 @@ SPDX-License-Identifier: MIT
 
 # 0027 — Management Key Rotation
 
-**Status:** ready
+**Status:** implemented
 **App:** yb
-**Implemented in:** <!-- YYYY-MM-DD, fill after implementation -->
+**Implemented in:** 2026-09-29
 
 ## Problem
 

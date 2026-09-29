@@ -97,7 +97,7 @@ pub fn run_with_output(ctx: &Context, args: &FormatArgs, out: &mut dyn Write) ->
     let settings = Settings::from_args(args)?;
     let report = args.plan.then(|| CardReport::build(ctx, settings.slot));
     if let Some(ref report) = report {
-        writeln!(out, "{}", report.render(None))?;
+        writeln!(out, "{}", report.render(None, false))?;
     }
     let prepared = preflight(ctx, &settings).context("nothing was changed on the YubiKey")?;
     let store = StorePresence::probe(&ctx.reader, ctx.piv.as_ref());
@@ -189,9 +189,8 @@ impl Prepared {
     /// `--protect`, whether it is already protected.
     pub fn resolve(ctx: &Context, protect: bool, pin: String) -> Result<Self> {
         let management_key = ctx.management_key_for_write()?;
-        let management_key_in_printed = ctx
-            .management_key_source()
-            .is_some_and(|source| source.is_printed());
+        // Only a key switch (--protect) needs it.
+        let management_key_in_printed = protect && ctx.management_key_in_printed()?;
         let already_protected = protect && ctx.management_key_protected()?;
         Ok(Self {
             management_key,

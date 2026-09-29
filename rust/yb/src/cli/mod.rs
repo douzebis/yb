@@ -10,6 +10,7 @@ pub mod list;
 pub mod list_readers;
 pub mod picker;
 pub mod remove;
+pub mod rotate_management_key;
 pub mod select;
 pub mod store;
 pub mod util;

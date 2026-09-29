@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2025 - 2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+// SPDX-FileCopyrightText: 2025, 2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
 //
 // SPDX-License-Identifier: MIT
 
@@ -175,4 +175,14 @@ pub fn resolve_patterns(
     }
 
     Ok(result)
+}
+
+/// How to read back the management key yb keeps on the YubiKey, for the
+/// rare case it is needed.  Never the key itself.
+pub fn read_back_hint() -> String {
+    format!(
+        "To read it back if ever needed: \
+         yubico-piv-tool -a verify-pin -a read-object --id 0x{:06x}",
+        yb_core::auxiliaries::OBJ_PRINTED
+    )
 }

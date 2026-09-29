@@ -71,6 +71,9 @@ pub enum Commands {
     Remove(cli::remove::RemoveArgs),
     /// Filesystem check — dump store metadata.
     Fsck(cli::fsck::FsckArgs),
+    /// Replace the management key with a random one, kept on the YubiKey
+    /// and unlocked by the PIN (the store is kept).
+    RotateManagementKey(cli::rotate_management_key::RotateManagementKeyArgs),
     /// List PC/SC readers.
     ListReaders(cli::list_readers::ListReadersArgs),
     /// Interactively select a YubiKey and print its serial number.

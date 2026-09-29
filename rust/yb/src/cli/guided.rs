@@ -12,7 +12,7 @@ use anyhow::{Context as _, Result};
 use std::fmt;
 use std::io::{BufRead as _, Write as _};
 use yb_core::{
-    auxiliaries::{self, DEFAULT_PIN, DEFAULT_PUK},
+    auxiliaries::{DEFAULT_PIN, DEFAULT_PUK},
     context::MANAGEMENT_KEY_NOT_FOUND,
     errors::{render, CardError, RenderEnv, YbError},
     list_blobs,
@@ -24,7 +24,7 @@ use yb_core::{
 use crate::cli::format::{
     apply, EraseStep, FormatPlan, ManagementStep, Prepared, Settings, SlotStep,
 };
-use crate::cli::util::quote_name;
+use crate::cli::util::{quote_name, read_back_hint};
 
 const NOTHING_CHANGED: &str = "nothing was changed on the YubiKey";
 
@@ -87,7 +87,7 @@ pub fn run(ctx: &mut Context, p: &mut dyn Prompter) -> Result<()> {
     let report = CardReport::build(ctx, slot);
 
     // 1. Report, and blocking errors.
-    p.say(&report.render(None));
+    p.say(&report.render(None, false));
     p.say(&store_summary(&store));
     p.say("");
     stop_if_blocked(ctx, &report).context(NOTHING_CHANGED)?;
@@ -504,11 +504,7 @@ fn summary(
             lines.push(format!(
                 "  Management key: new ({algo}), kept on the YubiKey, unlocked by your PIN."
             ));
-            lines.push(format!(
-                "  To read it back if ever needed: \
-                 yubico-piv-tool -a verify-pin -a read-object --id 0x{:06x}",
-                auxiliaries::OBJ_PRINTED
-            ));
+            lines.push(format!("  {}", read_back_hint()));
         }
         ManagementStep::KeepProtected(algo) => lines.push(format!(
             "  Management key ({algo}): kept on the YubiKey, unlocked by your PIN."

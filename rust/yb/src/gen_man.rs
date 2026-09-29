@@ -15,6 +15,7 @@
 //!   <output-dir>/yb-list.1
 //!   <output-dir>/yb-remove.1
 //!   <output-dir>/yb-fsck.1
+//!   <output-dir>/yb-rotate-management-key.1
 //!   <output-dir>/yb-list-readers.1
 //!   <output-dir>/yb-select.1
 
@@ -131,6 +132,7 @@ P-256 private key that never leaves the YubiKey hardware.
 \fByb\-list\fR(1),
 \fByb\-remove\fR(1),
 \fByb\-fsck\fR(1),
+\fByb\-rotate\-management\-key\fR(1),
 \fByb\-list\-readers\fR(1),
 \fByb\-select\fR(1),
 \fBykman\fR(1)"#,
@@ -449,7 +451,9 @@ without a store.  It exits with status 1 when the report shows an error
 (blocked PIN, unsupported management key mode, key/certificate mismatch,
 a certificate without an EC P-256 key, an unreadable store, a CORRUPTED
 blob), and 0 otherwise; warnings (e.g. factory-default credentials) do
-not change the exit status.  It does not repair damage; use
+not change the exit status.  When the YubiKey does not keep its
+management key, a hint says how to have it kept
+(\fByb rotate\-management\-key\fR).  It does not repair damage; use
 \fByb remove\fR to clean up corrupt blobs."#,
             r#".SH OUTPUT
 Default output (no flags):
@@ -524,6 +528,39 @@ yb fsck \-\-check\-key
 .RE
 .SH SEE ALSO
 \fByb\fR(1), \fByb\-list\fR(1), \fByb\-format\fR(1), \fByb\-remove\fR(1)"#,
+        ),
+
+        "yb-rotate-management-key" => (
+            r#".PP
+Replace the PIV management key with a new random key, kept on the
+YubiKey and unlocked by the PIN.  The store and its blobs are not touched:
+the management key only authorizes writes.
+.PP
+Keeping the management key on the YubiKey is a convenience, not extra
+security: you never need to keep or type it, since \fByb\fR reads it when
+a write needs it.  On a YubiKey that already keeps its key this way, the
+command replaces it (rotation); on one that does not, it sets this up,
+without erasing the store as \fByb format \-\-protect\fR would.
+.PP
+The new key has the same algorithm as the current one.  The current key
+is taken from \fBYB_MANAGEMENT_KEY\fR, else from the YubiKey, else the
+factory default.  The command refuses while the PIN or PUK is still the
+factory default (unless \fB\-\-allow\-defaults\fR is given), since the
+new key would be kept behind that PIN.
+.PP
+The new key is written to the YubiKey before the switch, so an
+interruption never leaves a key that exists nowhere; the next \fByb\fR
+write finishes any leftover cleanup.  The key is never printed."#,
+            r#".SH EXAMPLES
+.PP
+Replace the management key:
+.RS
+.nf
+yb rotate\-management\-key
+.fi
+.RE
+.SH SEE ALSO
+\fByb\fR(1), \fByb\-format\fR(1), \fByb\-fsck\fR(1), \fBykman\fR(1)"#,
         ),
 
         "yb-select" => (

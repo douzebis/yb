@@ -21,6 +21,7 @@ pub enum SecretOp {
     Store,
     Remove,
     Format { protect: bool },
+    RotateManagementKey,
     SelfTest,
 }
 
@@ -40,9 +41,9 @@ impl SecretOp {
             Self::Fetch => (Warn, Silent),
             Self::Store => (Refuse, Warn),
             Self::Remove | Self::Format { protect: false } => (Warn, Warn),
-            // --protect stores the new management key behind the PIN, and
-            // replaces the factory management key.
-            Self::Format { protect: true } => (Refuse, Silent),
+            // --protect and rotation store the new management key behind the
+            // PIN, and replace the factory management key.
+            Self::Format { protect: true } | Self::RotateManagementKey => (Refuse, Silent),
             // Unchanged from before spec 0024.
             Self::SelfTest => (Refuse, Refuse),
         }
@@ -137,12 +138,13 @@ mod tests {
         ..NONE
     };
 
-    const ALL_OPS: [SecretOp; 6] = [
+    const ALL_OPS: [SecretOp; 7] = [
         SecretOp::Fetch,
         SecretOp::Store,
         SecretOp::Remove,
         SecretOp::Format { protect: false },
         SecretOp::Format { protect: true },
+        SecretOp::RotateManagementKey,
         SecretOp::SelfTest,
     ];
 
@@ -164,7 +166,7 @@ mod tests {
                 .collect();
             assert_eq!(
                 got,
-                ["warn", "refuse", "warn", "warn", "refuse", "refuse"],
+                ["warn", "refuse", "warn", "warn", "refuse", "refuse", "refuse"],
                 "{creds:?}"
             );
         }
@@ -173,7 +175,10 @@ mod tests {
     #[test]
     fn table_default_management_key() {
         let got: Vec<_> = ALL_OPS.iter().map(|&op| outcome(op, MGMT, false)).collect();
-        assert_eq!(got, ["silent", "warn", "warn", "warn", "silent", "refuse"]);
+        assert_eq!(
+            got,
+            ["silent", "warn", "warn", "warn", "silent", "silent", "refuse"]
+        );
     }
 
     #[test]

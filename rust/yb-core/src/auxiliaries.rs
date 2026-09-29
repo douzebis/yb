@@ -402,7 +402,8 @@ pub fn generate_random_management_key(algo: MgmtAlgo) -> String {
 pub struct KeySwitch<'a> {
     /// The card's current management key.
     pub old_key: &'a str,
-    /// Whether `old_key` was read from PRINTED (the card was protected).
+    /// PRINTED holds `old_key`, in tag `89` or `8A` (spec 0027 §3a): a
+    /// failed switch puts it back there.
     pub old_key_in_printed: bool,
     /// The new key, `algo.key_len()` bytes, hex-encoded.
     pub new_key: &'a str,
@@ -422,7 +423,8 @@ pub struct KeySwitch<'a> {
 ///
 /// ADMIN DATA is prepared before any write, so an unparseable or
 /// PIN-derived ADMIN DATA fails with nothing changed.  Errors describe the
-/// resulting card state and never contain key material.
+/// resulting card state and never contain key material; they say nothing
+/// about leftovers that the next yb write repairs (spec 0027 §3b).
 pub fn enable_pin_protected_management_key(
     reader: &str,
     piv: &dyn PivBackend,
@@ -456,9 +458,7 @@ pub fn enable_pin_protected_management_key(
         if piv.authenticate_management_key(reader, sw.new_key).is_err() {
             return Err(e).context(
                 "the management key switch was interrupted and its outcome is unknown \
-                 (was the YubiKey removed?).  PRINTED holds both the previous and the \
-                 new key: once the YubiKey is reconnected, any yb write command or \
-                 `yb format --protect` recovers",
+                 (was the YubiKey removed?); reconnect the YubiKey",
             );
         }
         // The card accepts the new key: the switch happened, only the reply
@@ -469,23 +469,18 @@ pub fn enable_pin_protected_management_key(
     piv.write_object(reader, OBJ_ADMIN_DATA, &admin_payload, sw.new_key)
         .context(
             "the management key was changed and saved in PRINTED, but ADMIN DATA could \
-             not be updated; any yb write command or `yb format --protect` repairs it",
+             not be updated",
         )?;
 
-    // B1d — drop the old key from PRINTED.
-    if let Err(e) = encode_printed(sw.new_key, None)
-        .and_then(|only_new| piv.write_object(reader, OBJ_PRINTED, &only_new, sw.new_key))
-    {
-        eprintln!(
-            "Warning: could not remove the previous management key from PRINTED ({e:#}); \
-             the next yb write command removes it"
-        );
-    }
+    // B1d — drop the old key from PRINTED.  On failure, the next write
+    // drops it.
+    let _ = encode_printed(sw.new_key, None)
+        .and_then(|only_new| piv.write_object(reader, OBJ_PRINTED, &only_new, sw.new_key));
     Ok(())
 }
 
-/// Put PRINTED back as it was before a key switch — `88 { 89 <old> }` if the
-/// old key came from PRINTED, otherwise no object — and describe the
+/// Put PRINTED back after a failed key switch — `88 { 89 <old> }` if
+/// PRINTED held the old key, otherwise no object — and describe the
 /// outcome for an error message.
 fn restored_or_not(reader: &str, piv: &dyn PivBackend, sw: &KeySwitch<'_>, what: &str) -> String {
     let previous = if sw.old_key_in_printed {
@@ -496,13 +491,12 @@ fn restored_or_not(reader: &str, piv: &dyn PivBackend, sw: &KeySwitch<'_>, what:
     let restored = previous
         .and_then(|data| piv.write_object(reader, OBJ_PRINTED, &data, sw.old_key))
         .is_ok();
+    // If PRINTED could not be put back, it holds both keys, and the next
+    // write repairs it.
     if restored {
         format!("{what}; nothing was changed")
     } else {
-        format!(
-            "{what}; the management key is unchanged, but PRINTED could not be \
-             restored: run `yb format --protect` again"
-        )
+        format!("{what}; the management key is unchanged")
     }
 }
 

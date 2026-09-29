@@ -461,6 +461,29 @@ impl Context {
         }
     }
 
+    /// Whether PRINTED holds the resolved management key, in tag `89` or
+    /// `8A`, whatever the key's source (spec 0027 §3a).  A failed key
+    /// switch puts it back there.
+    pub fn management_key_in_printed(&self) -> Result<bool> {
+        let key = self.management_key_for_write()?;
+        match self.management_key_source() {
+            Some(source) if source.is_printed() => Ok(true),
+            Some(KeySource::Explicit) => {
+                let Some(pin) = self.require_pin()? else {
+                    return Ok(false);
+                };
+                self.piv.verify_pin(&self.reader, &pin)?;
+                let printed =
+                    auxiliaries::read_printed_keys(&self.reader, self.piv.as_ref(), &pin)?;
+                Ok([printed.current, printed.previous]
+                    .iter()
+                    .flatten()
+                    .any(|k| k.eq_ignore_ascii_case(&key)))
+            }
+            _ => Ok(false),
+        }
+    }
+
     /// Where the resolved management key came from, once resolved.
     pub fn management_key_source(&self) -> Option<KeySource> {
         self.resolved.borrow().as_ref().map(|r| r.source)

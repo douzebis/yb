@@ -94,6 +94,8 @@ pub struct Item {
     pub label: String,
     pub text: String,
     pub severity: Severity,
+    /// Advice shown under the line by `yb fsck` (spec 0027 §8).
+    pub hint: Vec<String>,
 }
 
 /// The state of a YubiKey, from read-only APDUs.
@@ -180,8 +182,9 @@ impl CardReport {
             .unwrap_or(Severity::Ok)
     }
 
-    /// The YubiKey section (spec 0023 §2), one line per item.
-    pub fn render(&self, key_check_hint: Option<&str>) -> String {
+    /// The YubiKey section (spec 0023 §2), one line per item, followed by
+    /// the item's hint lines when `hints` is set.
+    pub fn render(&self, key_check_hint: Option<&str>, hints: bool) -> String {
         let mut out = format!("YubiKey {} — firmware {}\n", self.serial, self.firmware);
         for i in self.items(key_check_hint) {
             let text = match i.severity {
@@ -190,6 +193,11 @@ impl CardReport {
                 Severity::Error => format!("ERROR: {}", i.text),
             };
             out.push_str(&format!("  {:<16} {text}\n", i.label));
+            if hints {
+                for line in &i.hint {
+                    out.push_str(&format!("  {:<16} {line}\n", ""));
+                }
+            }
         }
         out
     }
@@ -244,7 +252,19 @@ impl CardReport {
                 TouchPolicy::Never => {}
             }
         }
-        item(LABEL, parts.join(", "), severity)
+        let mut item = item(LABEL, parts.join(", "), severity);
+        // A key yb must be given each time: say it could keep it (spec
+        // 0027 §8).  The factory key needs no keeping.
+        if self.protection == ProtectionMode::None
+            && self.management_key.is_some_and(|md| !md.is_default)
+        {
+            item.hint = vec![
+                "yb store and yb remove need it each time (YB_MANAGEMENT_KEY).".to_owned(),
+                "To have yb keep it on the YubiKey, unlocked by your PIN:".to_owned(),
+                "yb rotate-management-key".to_owned(),
+            ];
+        }
+        item
     }
 
     fn slot_item(&self) -> Item {
@@ -288,6 +308,7 @@ fn item(label: &str, text: String, severity: Severity) -> Item {
         label: label.to_owned(),
         text,
         severity,
+        hint: Vec::new(),
     }
 }
 
@@ -351,7 +372,7 @@ mod tests {
         let ctx = Context::with_backend(piv, None, false).unwrap();
         let report = CardReport::build(&ctx, 0x82);
         assert!(report.has_metadata());
-        let text = report.render(Some("use --check-key"));
+        let text = report.render(Some("use --check-key"), true);
         assert_eq!(
             text,
             "YubiKey 99999999 — firmware 5.4.3\n\

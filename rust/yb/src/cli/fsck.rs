@@ -69,7 +69,7 @@ pub fn check(ctx: &Context, args: &FsckArgs, out: &mut dyn Write) -> Result<bool
         }
         report.key_check = Some(ctx.check_slot_key(slot)?);
     }
-    writeln!(out, "{}", report.render(Some("use --check-key")))?;
+    writeln!(out, "{}", report.render(Some("use --check-key"), true))?;
     let card_ok = report.severity() < Severity::Error;
 
     let store_ok = match presence {

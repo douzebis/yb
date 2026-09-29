@@ -265,10 +265,11 @@ The guided `yb format` always sets it up.  From a script, at format time
 yb format --generate --protect
 ```
 
-Or, if you have already formatted and want to enable it separately:
+Or, on a YubiKey already formatted, without touching the store (this also
+replaces a key that is already kept on the YubiKey):
 
 ```shell
-ykman piv access change-management-key --generate --protect
+yb rotate-management-key
 ```
 
 To bypass the default-credential check (testing only): `--allow-defaults` or

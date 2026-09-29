@@ -118,7 +118,8 @@ static CATALOG: &[Entry] = &[
         mask: EXACT,
         what: "the management key is not stored on the YubiKey",
         why: "the YubiKey does not keep its management key, or was set up by another tool",
-        fix: "set YB_MANAGEMENT_KEY, or set the YubiKey up again with `yb format --protect`",
+        fix: "set YB_MANAGEMENT_KEY, or have yb keep a new one on the YubiKey with \
+              `yb rotate-management-key`",
     },
     Entry {
         op: OpPat::Is(|op| matches!(op, CardOp::ReadCertificate(_))),

@@ -2227,6 +2227,8 @@ mod guided_tests {
         let mut ctx = context(&piv, Some(PIN));
         let (outcome, script) = guided(&mut ctx, &["k", OTHER_KEY, "", "y"]);
         outcome.unwrap_or_else(|e| panic!("{e:#}\n{}", script.text()));
+        // The fsck hint (spec 0027 §8) is not shown: the flow stores the key.
+        assert!(!script.text().contains("rotate-management-key"));
         assert_ready(&piv, PIN);
     }
 
@@ -2402,5 +2404,275 @@ mod guided_tests {
                  Integrity: 1 verified, 0 unverified, 0 corrupted\n"
             )
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// yb rotate-management-key (spec 0027)
+// ---------------------------------------------------------------------------
+
+mod rotation_tests {
+    use super::cards::*;
+    use super::*;
+    use yb::cli::fsck::{check as fsck_check, FsckArgs};
+    use yb::cli::rotate_management_key::{run as rotate_run, RotateManagementKeyArgs};
+    use yb_core::auxiliaries::{
+        encode_printed, read_printed_keys, AdminData, PrintedKeys, ProtectionMode, OBJ_ADMIN_DATA,
+        OBJ_PRINTED,
+    };
+    use yb_core::{fetch_blob, Fault, MgmtAlgo, PivBackend};
+
+    /// A third 24-byte key, neither `MGMT` nor `OTHER_KEY`.
+    const THIRD_KEY: &str = "d1d2d3d4d5d6d7d8e1e2e3e4e5e6e7e8f1f2f3f4f5f6f7f8";
+
+    fn rotate(ctx: &Context) -> anyhow::Result<()> {
+        rotate_run(ctx, &RotateManagementKeyArgs {})
+    }
+
+    fn printed_keys(ctx: &Context) -> PrintedKeys {
+        read_printed_keys(&ctx.reader, ctx.piv.as_ref(), PIN).unwrap()
+    }
+
+    /// The card keeps a new key, only in tag 89, with the standard flag;
+    /// blob "kept" still decrypts and writes need only the PIN.
+    fn assert_rotated(ctx: &Context, old_key: &str) {
+        let keys = printed_keys(ctx);
+        let new_key = keys.current.expect("new key in PRINTED");
+        assert_ne!(new_key, old_key);
+        assert_eq!(keys.previous, None, "tag 8A dropped");
+        ctx.piv
+            .authenticate_management_key(&ctx.reader, &new_key)
+            .unwrap();
+        let admin = AdminData::parse(&read_admin(ctx)).unwrap();
+        assert_eq!(admin.flags, Some(0x02));
+
+        let after = reopen(ctx);
+        assert_eq!(after.protection, ProtectionMode::Standard);
+        let store = Store::from_device(&after.reader, after.piv.as_ref()).unwrap();
+        fetch_blob(
+            &store,
+            after.piv.as_ref(),
+            &after.reader,
+            "kept",
+            Some(PIN),
+            false,
+        )
+        .unwrap();
+        store_one(&after, "after").unwrap();
+    }
+
+    #[test]
+    fn rotates_a_stored_key() {
+        let (_piv, setup) = protected_card_with_piv(&ADMIN_STANDARD);
+        store_one(&setup, "kept").unwrap();
+        let ctx = reopen(&setup);
+        rotate(&ctx).unwrap();
+        assert_rotated(&ctx, OTHER_KEY);
+    }
+
+    #[test]
+    fn stores_the_factory_key_replacement_and_keeps_the_store() {
+        let (piv, setup) = formatted_card_with_piv();
+        store_one(&setup, "kept").unwrap();
+        let ctx = reopen(&setup);
+        let store_objects = || -> Vec<Vec<u8>> {
+            (0..8)
+                .map(|i| piv.read_object(&ctx.reader, 0x5F_0000 + i).unwrap())
+                .collect()
+        };
+        let before = store_objects();
+        rotate(&ctx).unwrap();
+        assert_eq!(store_objects(), before, "store untouched");
+        assert_rotated(&ctx, MGMT);
+    }
+
+    #[test]
+    fn stores_an_explicit_key_replacement() {
+        let (piv, setup) = formatted_card_with_piv();
+        store_one(&setup, "kept").unwrap();
+        piv.set_management_key(&setup.reader, MGMT, OTHER_KEY, MgmtAlgo::Tdes)
+            .unwrap();
+        let mut ctx = reopen(&setup);
+        ctx.management_key = Some(OTHER_KEY.to_owned());
+        rotate(&ctx).unwrap();
+        assert_rotated(&ctx, OTHER_KEY);
+    }
+
+    #[test]
+    fn repairs_the_legacy_flag() {
+        let (piv, setup) = protected_card_with_piv(&ADMIN_STANDARD);
+        store_one(&setup, "kept").unwrap();
+        // Set the legacy flag after the store, whose write would repair it.
+        piv.write_object(&setup.reader, OBJ_ADMIN_DATA, &ADMIN_LEGACY, OTHER_KEY)
+            .unwrap();
+        let ctx = reopen(&setup);
+        assert_eq!(ctx.protection, ProtectionMode::LegacyOrPukBlocked);
+        rotate(&ctx).unwrap();
+        assert_rotated(&ctx, OTHER_KEY);
+    }
+
+    #[test]
+    fn keeps_aes192() {
+        let mut ctx = make_ctx(VirtualPiv::from_fixture(&fixture("aes192.yaml")).unwrap());
+        ctx.management_key = None;
+        rotate(&ctx).unwrap();
+        assert_eq!(
+            ctx.piv.management_key_algorithm(&ctx.reader).unwrap(),
+            MgmtAlgo::Aes192
+        );
+        assert_eq!(reopen(&ctx).protection, ProtectionMode::Standard);
+    }
+
+    #[test]
+    fn factory_pin_refuses_without_writing() {
+        let piv = Arc::new(VirtualPiv::new());
+        let mut ctx = Context::with_backend(piv.clone(), None, false).unwrap();
+        ctx.quiet = true;
+        let err = rotate(&ctx).unwrap_err();
+        let text = format!("{err:#}");
+        assert!(text.contains("nothing was changed"), "{text}");
+        assert!(text.contains("factory-default PIN and PUK"), "{text}");
+        assert_eq!(piv.write_count(), 0);
+
+        ctx.allow_defaults = true;
+        rotate(&ctx).unwrap();
+    }
+
+    /// Spec 0022 invariants I2 and I4 at every fault point; the store is
+    /// never touched.
+    #[test]
+    fn invariants_hold_for_every_fault() {
+        let faults = [
+            Fault::WriteFails(1), // B1a
+            Fault::WriteFails(2), // B1c
+            Fault::WriteFails(3), // B1d
+            Fault::SetManagementKeyRejected,
+            Fault::SetManagementKeyLostReply,
+            Fault::CardLostDuringSetManagementKey { applied: true },
+            Fault::CardLostDuringSetManagementKey { applied: false },
+        ];
+        for stored in [false, true] {
+            for fault in faults {
+                let case = format!("stored={stored} fault={fault:?}");
+                let (piv, setup) = if stored {
+                    protected_card_with_piv(&ADMIN_STANDARD)
+                } else {
+                    formatted_card_with_piv()
+                };
+                store_one(&setup, "kept").unwrap();
+                let ctx = reopen(&setup);
+                piv.inject_fault(fault);
+                let outcome = rotate(&ctx);
+
+                // I4, and spec 0027 §3b: no key material, no advice to run
+                // the store-erasing `yb format --protect`.
+                if let Err(ref e) = outcome {
+                    let text = format!("{e:#}");
+                    for key in [MGMT, OTHER_KEY] {
+                        assert!(!text.contains(key), "{case}: I4 violated: {text}");
+                    }
+                    assert!(!text.contains("format --protect"), "{case}: {text}");
+                }
+
+                // I2: after reconnecting, the key is found, and the next
+                // write repairs what is left.
+                piv.clear_faults();
+                let after = reopen(&ctx);
+                store_one(&after, "after").unwrap_or_else(|e| panic!("{case}: {e:#}"));
+                assert_eq!(printed_keys(&after).previous, None, "{case}");
+                assert!(
+                    list_blobs(&Store::from_device(&after.reader, after.piv.as_ref()).unwrap())
+                        .iter()
+                        .any(|b| b.name == "kept"),
+                    "{case}: store touched"
+                );
+            }
+        }
+    }
+
+    /// Spec 0027 §3b: B1d failing is not an error; the next write drops
+    /// the old key from PRINTED.
+    #[test]
+    fn failed_cleanup_is_silent_and_repaired_later() {
+        let (piv, setup) = protected_card_with_piv(&ADMIN_STANDARD);
+        let ctx = reopen(&setup);
+        piv.inject_fault(Fault::WriteFails(3));
+        rotate(&ctx).unwrap();
+        assert_eq!(printed_keys(&ctx).previous.as_deref(), Some(OTHER_KEY));
+        store_one(&reopen(&ctx), "after").unwrap();
+        assert_eq!(printed_keys(&ctx).previous, None);
+    }
+
+    /// Spec 0027 §3a: a stored key given through YB_MANAGEMENT_KEY stays
+    /// in PRINTED after a rejected switch.
+    #[test]
+    fn rejected_switch_keeps_a_stored_explicit_key() {
+        let (piv, setup) = protected_card_with_piv(&ADMIN_STANDARD);
+        let mut ctx = reopen(&setup);
+        ctx.management_key = Some(OTHER_KEY.to_owned());
+        piv.inject_fault(Fault::SetManagementKeyRejected);
+        let err = rotate(&ctx).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("nothing was changed"),
+            "{err:#}"
+        );
+        assert_eq!(
+            piv.read_object(&ctx.reader, OBJ_PRINTED).unwrap(),
+            printed(OTHER_KEY)
+        );
+    }
+
+    /// Spec 0027 §3a: when tag 8A holds the only copy of the card's key,
+    /// a rejected switch writes it back.
+    #[test]
+    fn rejected_switch_keeps_a_key_only_in_8a() {
+        let (piv, setup) = protected_card_with_piv(&ADMIN_STANDARD);
+        let stale = encode_printed(THIRD_KEY, Some(OTHER_KEY)).unwrap();
+        piv.write_object(&setup.reader, OBJ_PRINTED, &stale, OTHER_KEY)
+            .unwrap();
+        let ctx = reopen(&setup);
+        piv.inject_fault(Fault::SetManagementKeyRejected);
+        assert!(rotate(&ctx).is_err());
+        assert_eq!(
+            piv.read_object(&ctx.reader, OBJ_PRINTED).unwrap(),
+            printed(OTHER_KEY)
+        );
+    }
+
+    /// Spec 0027 §8: `yb fsck` suggests the command, in plain words, when
+    /// the key is neither kept on the YubiKey nor the factory key.
+    #[test]
+    fn fsck_hint() {
+        let fsck = |ctx: &Context| {
+            let mut out = Vec::new();
+            let args = FsckArgs {
+                verbose: false,
+                nvm: false,
+                check_key: false,
+            };
+            let healthy = fsck_check(ctx, &args, &mut out).unwrap();
+            (healthy, String::from_utf8(out).unwrap())
+        };
+        let (piv, setup) = formatted_card_with_piv();
+
+        // Factory key: no hint.
+        let (_, text) = fsck(&reopen(&setup));
+        assert!(!text.contains("rotate-management-key"), "{text}");
+
+        piv.set_management_key(&setup.reader, MGMT, OTHER_KEY, MgmtAlgo::Tdes)
+            .unwrap();
+        let (healthy, text) = fsck(&reopen(&setup));
+        assert!(healthy, "a hint is not a warning");
+        assert!(
+            text.contains(
+                "  Management key   3DES, not stored on the YubiKey\n\
+                 \x20                  yb store and yb remove need it each time \
+                 (YB_MANAGEMENT_KEY).\n\
+                 \x20                  To have yb keep it on the YubiKey, unlocked by your PIN:\n\
+                 \x20                  yb rotate-management-key\n"
+            ),
+            "{text}"
+        );
+        assert!(!text.contains("protect"), "no jargon: {text}");
     }
 }
