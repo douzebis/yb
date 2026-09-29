@@ -6,7 +6,7 @@ SPDX-License-Identifier: MIT
 
 # 0027 — Management Key Rotation
 
-**Status:** draft
+**Status:** ready
 **App:** yb
 **Implemented in:** <!-- YYYY-MM-DD, fill after implementation -->
 
@@ -37,8 +37,8 @@ no rollback (spec 0022, Assumptions / Context).
 - A yb command that sets a **new random management key**, stored behind
   the PIN, **without touching the store**.  On an already-protected
   YubiKey it rotates the key; on an unprotected one it protects it.
-- The switch is the spec 0022 B1 sequence, reused as is: the same
-  recovery, the same guarantees, the same assumptions.
+- The switch is the spec 0022 B1 sequence: the same recovery, the same
+  guarantees, the same assumptions (with the fixes of §3a and §3b).
 - The new key keeps the card's algorithm (spec 0021 §3).
 - No key material is ever shown (spec 0025).
 
@@ -84,9 +84,10 @@ Any failure reports "nothing was changed on the YubiKey".
 ### 3. The switch
 
 - Generate a random key of the card's algorithm (spec 0021 §3).
-- Run spec 0022 B1a–B1d unchanged, with the resolved key as the old key.
-  This includes the B1b recovery, the self-healing resolution, the
-  ADMIN DATA write (standard flag) and the PRINTED cleanup.
+- Run spec 0022 B1a–B1d, with the resolved key as the old key.  This
+  includes the B1b recovery, the self-healing resolution, the ADMIN DATA
+  write (standard flag) and the PRINTED cleanup, with two changes (§3a,
+  §3b).
 - The resolver's pending repairs (legacy flag, leftover `8A`) are covered
   by B1c/B1d, as in `format --protect`.
 
@@ -94,11 +95,44 @@ The store is not read or written.  Blobs are unaffected: the management
 key only authorizes writes, and blobs are encrypted to and signed with
 the slot 0x82 key.
 
+### 3a. Whether the old key is in PRINTED
+
+When B1a or B1b fails and the key is unchanged, B1 puts PRINTED back as
+it was: `88 { 89 <old> }` if the old key was stored there, no object
+otherwise.  "Stored there" is decided by what PRINTED holds, not by where
+yb got the key: tag `89` holds the old key, and the card accepts it (the
+spec 0023 §3a definition).
+
+Deciding it from the key's source, as until now, is wrong when the key
+comes from `YB_MANAGEMENT_KEY` on a card that also stores it: a rejected
+switch would delete PRINTED, and the card would no longer keep its key.
+`yb format --protect` cannot reach that case since spec 0023 (it keeps a
+stored key); rotation can.
+
+### 3b. Messages after a failed switch
+
+Spec 0022 B1 tells the user to run `yb format --protect` after some
+failures.  That command erases the store and, since spec 0023, does not
+replace a stored key.  In the spirit of the store (spec 0022 `write_dirty`),
+yb says nothing about state that the next write repairs by itself:
+
+- **The command failed** (B1a, B1b, B1c): the failure is reported, with
+  what happened, but no instruction to run another command when the next
+  yb write repairs the state anyway (leftover tag `8A`, ADMIN DATA flag
+  not yet written, PRINTED not restored).  An interrupted switch still
+  says to reconnect the YubiKey.
+- **The command succeeded** (B1d, dropping tag `8A`, failed): no warning.
+  The next write drops it.
+
+This applies to `yb format --protect` and the guided format as well,
+which share B1.
+
 ### 4. Output
 
 - Unless `--quiet`, one line:
   - `Management key rotated (3DES).` on a card that was protected;
-  - `Management key protected (AES-192).` on a card that was not.
+  - `Management key replaced, and now kept on the YubiKey, unlocked by
+    your PIN (AES-192).` on a card that was not.
 - It never prints the key.  The spec 0023 summary hint on reading it back
   (`yubico-piv-tool … read-object 0x5fc109`) is repeated.
 - Failures are rendered through spec 0025, with the spec 0022 B1
@@ -135,16 +169,52 @@ On each test YubiKey (firmware < 5.7 and ≥ 5.7):
 
 - New subcommand only.  Card content is the same as after `yb format
   --protect` (spec 0021 metadata, spec 0022 PRINTED layout).
+- Messages after a failed key switch change (§3b); they are not meant for
+  parsing.
 - Spec 0021 §6 applies.
+
+### 7a. Documentation
+
+The README and the man pages name `yb rotate-management-key` where they
+now tell users of an already formatted YubiKey to run `ykman piv access
+change-management-key --generate --protect`.  `yb-rotate-management-key(1)`
+is added.
+
+### 8. `yb fsck` hint
+
+Storing the management key behind the PIN is a **convenience, not a
+security measure**: the key no longer has to be kept and supplied by the
+user, since yb reads it from the YubiKey once the PIN is given.  Without
+it, every `yb store` and `yb remove` needs `YB_MANAGEMENT_KEY`.
+
+When the management key is neither stored on the YubiKey nor the factory
+default (the factory key is covered by spec 0024), the spec 0023 YubiKey
+section adds a hint under the management key line, in plain words:
+
+```
+  Management key   3DES, not stored on the YubiKey
+                   yb store and yb remove need it each time (YB_MANAGEMENT_KEY).
+                   To have yb keep it on the YubiKey, unlocked by your PIN:
+                   yb rotate-management-key
+```
+
+- The hint does not say "protect" or "PIN-protected mode": that is
+  jargon.
+- The hint is shown by `yb fsck` only.  The guided format prints the same
+  section without it, since it stores the key anyway.  The report gains
+  optional hint lines under an item for this.
+- It is not a warning: keeping the key elsewhere (e.g. in a password
+  manager) is a valid choice.  The line's severity stays **ok**, and the
+  exit status is unchanged.
 
 ## Open questions
 
-- **Name.** `yb rotate-management-key` is explicit but long.
-  Alternatives: `yb mgmt-key rotate` (a subcommand group, room for later
-  `mgmt-key info` / `mgmt-key algorithm`), or `yb protect` (fits the
-  unprotected case, less so rotation).
-- Should `yb fsck` (spec 0023 YubiKey section) suggest this command when
-  the management key is not protected?
+None.  Resolved:
+
+- **Name:** `yb rotate-management-key`, in the spirit of `ykman piv
+  access change-management-key`.
+- **fsck:** a plain-language hint, not a warning, in `yb fsck` only (§8).
+- **Failure messages:** silent about state the next write repairs (§3b).
 
 ## References
 
