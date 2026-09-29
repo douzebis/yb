@@ -5,7 +5,7 @@
 //! Hardware PIV backend — communicates directly with the YubiKey PIV applet
 //! via PC/SC APDUs (NIST SP 800-73-4).  No external subprocesses required.
 
-use super::{session, tlv, DeviceInfo, FlashHandle, PivBackend};
+use super::{session, tlv, DeviceInfo, FlashHandle, MgmtAlgo, PivBackend};
 use anyhow::{bail, Context, Result};
 use session::{serial_from_reader, version_from_reader, PcscSession, SELECT_PIV};
 use std::sync::{
@@ -155,18 +155,37 @@ impl PivBackend for HardwarePiv {
         session.get_data(OBJ_PRINTED)
     }
 
-    fn set_management_key(&self, reader: &str, old_key_hex: &str, new_key_hex: &str) -> Result<()> {
+    fn management_key_algorithm(&self, reader: &str) -> Result<MgmtAlgo> {
+        let mut session = PcscSession::open(reader)?;
+        session.management_key_algorithm()
+    }
+
+    fn set_management_key(
+        &self,
+        reader: &str,
+        old_key_hex: &str,
+        new_key_hex: &str,
+        algo: MgmtAlgo,
+    ) -> Result<()> {
         let new_bytes = hex::decode(new_key_hex).context("decoding new management key")?;
-        if new_bytes.len() != 24 {
-            anyhow::bail!("set_management_key: new key must be 24 bytes (3DES)");
-        }
+        algo.check_key_len(&new_bytes)?;
         let mut session = PcscSession::open(reader)?;
         session.authenticate_management_key(old_key_hex)?;
-        // SET MANAGEMENT KEY: INS=0xFF, P1=0xFF, P2=0xFF
-        // Data: 03 (3DES algorithm) 9B (management key tag) 18 (24 decimal) <24 bytes>
-        let mut apdu = vec![0x00, 0xFF, 0xFF, 0xFF, 27u8, 0x03, 0x9B, 0x18];
+        // SET MANAGEMENT KEY: INS=0xFF, P1=0xFF, P2=0xFF (no touch)
+        // Data: <algorithm id> 9B (management key tag) <len> <key bytes>
+        let mut apdu = vec![
+            0x00,
+            0xFF,
+            0xFF,
+            0xFF,
+            (3 + new_bytes.len()) as u8,
+            algo.id(),
+            0x9B,
+            new_bytes.len() as u8,
+        ];
         apdu.extend_from_slice(&new_bytes);
         session.transmit_check(&apdu, "SET MANAGEMENT KEY")?;
+        session.set_cached_management_key_algorithm(algo);
         Ok(())
     }
 

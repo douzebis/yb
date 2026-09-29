@@ -73,23 +73,29 @@ pub fn run(ctx: &Context, args: &FormatArgs) -> Result<()> {
     // longer than necessary.  We set mgmt_key_override to signal which path
     // to take below.
     let pin_only_after_protect = if args.protect {
-        let old_key = ctx
-            .management_key
-            .as_deref()
-            .unwrap_or(DEFAULT_MANAGEMENT_KEY);
-        let pin = ctx.require_pin()?.ok_or_else(|| {
+        ctx.require_pin()?.ok_or_else(|| {
             anyhow::anyhow!("PIN required to set up PIN-protected management key")
         })?;
-        let new_key_hex = generate_random_management_key();
+        // The current key comes from the same place as for any write:
+        // YB_MANAGEMENT_KEY, else the PIN-protected PRINTED object (the card
+        // may already be protected), else the factory default.
+        let old_key = ctx
+            .management_key_for_write()?
+            .unwrap_or_else(|| DEFAULT_MANAGEMENT_KEY.to_owned());
+        // Keep the card's current algorithm (spec 0021 §3): AES-192 on
+        // firmware 5.7+, 3DES before.
+        let algo = ctx.piv.management_key_algorithm(&ctx.reader)?;
+        let new_key_hex = generate_random_management_key(algo);
         enable_pin_protected_management_key(
             &ctx.reader,
             ctx.piv.as_ref(),
-            old_key,
+            &old_key,
             &new_key_hex,
-            &pin,
+            algo,
+            ctx.legacy_migration_due(),
         )?;
         if !ctx.quiet {
-            eprintln!("PIN-protected management key configured.");
+            eprintln!("PIN-protected management key configured ({algo}).");
         }
         true
     } else {
@@ -98,7 +104,7 @@ pub fn run(ctx: &Context, args: &FormatArgs) -> Result<()> {
 
     // Resolve the management key for Store::format.
     // If --protect just ran, PIN-protected mode is now active on the card even
-    // though ctx.pin_protected was set at startup (before the change).  Use
+    // though ctx.protection was set at startup (before the change).  Use
     // pin-only auth (mgmt_key = None) so write_object retrieves the new key
     // from the PRINTED object via PIN verification in the same session.
     let mgmt_key = if pin_only_after_protect {
@@ -116,6 +122,11 @@ pub fn run(ctx: &Context, args: &FormatArgs) -> Result<()> {
         mgmt_key.as_deref(),
         pin.as_deref(),
     )?;
+
+    // --protect already wrote ADMIN DATA in the standard layout.
+    if !pin_only_after_protect {
+        ctx.complete_legacy_migration(mgmt_key.as_deref());
+    }
 
     if !ctx.quiet {
         eprintln!(

@@ -568,7 +568,13 @@ fn test_with_backend_multiple_devices_errors() {
             anyhow::bail!("stub")
         }
 
-        fn set_management_key(&self, _r: &str, _old: &str, _new: &str) -> anyhow::Result<()> {
+        fn set_management_key(
+            &self,
+            _r: &str,
+            _old: &str,
+            _new: &str,
+            _algo: yb_core::piv::MgmtAlgo,
+        ) -> anyhow::Result<()> {
             anyhow::bail!("stub")
         }
     }

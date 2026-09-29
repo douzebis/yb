@@ -4,13 +4,19 @@
 
 //! PIN verification and management-key authentication.
 
-use super::transport::PcscSession;
+use super::transport::{sw_description, PcscSession};
 use crate::auxiliaries::{extract_pin_protected_key, OBJ_PRINTED};
+use crate::piv::mgmt::{parse_mgmt_metadata, MgmtAlgo, GET_METADATA_MGMT};
 use crate::piv::tlv::{crypto_ecb, encode_length, encode_tlv, EcbDir};
 use anyhow::{bail, Context, Result};
+use std::sync::Once;
 use subtle::ConstantTimeEq;
 
 use super::crypto::tlv_get;
+
+/// The touch-policy warning is printed at most once per process, however
+/// many sessions authenticate.
+static TOUCH_WARNING: Once = Once::new();
 
 impl PcscSession {
     /// VERIFY PIN (P2=0x80 = user PIN reference).
@@ -39,16 +45,62 @@ impl PcscSession {
         }
     }
 
-    /// Authenticate the management key using GENERAL AUTHENTICATE (3-pass mutual auth).
-    /// `key_hex` is 48 hex chars for 3DES, or 32/48/64 for AES-128/192/256.
+    /// Return the algorithm of the card's management key.
+    ///
+    /// Sends GET METADATA (slot 9B) on first use and caches the result for
+    /// the rest of the session.  Firmware without GET METADATA (< 5.3,
+    /// SW=6D00) only supports 3DES management keys, so 3DES is assumed.
+    pub(crate) fn management_key_algorithm(&mut self) -> Result<MgmtAlgo> {
+        if let Some(algo) = self.mgmt_algo {
+            return Ok(algo);
+        }
+        let resp = self.transmit_raw(&GET_METADATA_MGMT)?;
+        let n = resp.len();
+        if n < 2 {
+            bail!("GET METADATA (management key): response too short");
+        }
+        let algo = match (resp[n - 2], resp[n - 1]) {
+            (0x90, 0x00) => {
+                let md = parse_mgmt_metadata(&resp[..n - 2])?;
+                if md.touch_required {
+                    TOUCH_WARNING.call_once(|| {
+                        eprintln!(
+                            "Warning: this YubiKey's management key requires touch; \
+                             touch the key when it blinks during write operations."
+                        );
+                    });
+                }
+                md.algo
+            }
+            (0x6D, 0x00) => MgmtAlgo::Tdes,
+            (s1, s2) => bail!(
+                "GET METADATA (management key) failed: SW={s1:02x}{s2:02x} ({})",
+                sw_description(s1, s2)
+            ),
+        };
+        self.mgmt_algo = Some(algo);
+        Ok(algo)
+    }
+
+    /// Record the algorithm of a management key just installed with
+    /// SET MANAGEMENT KEY, keeping the session cache accurate.
+    pub(crate) fn set_cached_management_key_algorithm(&mut self, algo: MgmtAlgo) {
+        self.mgmt_algo = Some(algo);
+    }
+
+    /// Authenticate the management key using GENERAL AUTHENTICATE (3-pass
+    /// mutual auth), with the algorithm reported by the card.
     pub(crate) fn authenticate_management_key(&mut self, key_hex: &str) -> Result<()> {
         let key_bytes = hex::decode(key_hex).context("decoding management key")?;
-        let (p1, block_size): (u8, usize) = match key_bytes.len() {
-            24 => (0x03, 8),  // 3DES
-            16 => (0x08, 16), // AES-128
-            32 => (0x0C, 16), // AES-256
-            n => bail!("unsupported management key length: {n} bytes"),
-        };
+        let algo = self.management_key_algorithm()?;
+        algo.check_key_len(&key_bytes)?;
+        self.mutual_auth(algo, &key_bytes)
+            .with_context(|| format!("authenticating with the {algo} management key"))
+    }
+
+    fn mutual_auth(&mut self, algo: MgmtAlgo, key_bytes: &[u8]) -> Result<()> {
+        let p1 = algo.id();
+        let block_size = algo.block_size();
 
         // Step 1: request witness (card encrypts a challenge).
         let step1 = [0x00, 0x87, p1, 0x9B, 0x04, 0x7C, 0x02, 0x80, 0x00];
@@ -59,7 +111,7 @@ impl PcscSession {
         let witness_enc = tlv_get(&outer, 0x80, "MGMT AUTH step1")?;
 
         // Step 2: decrypt witness, generate our own challenge, send both.
-        let witness_dec = crypto_ecb(&key_bytes, &witness_enc, block_size, EcbDir::Decrypt)?;
+        let witness_dec = crypto_ecb(algo, key_bytes, &witness_enc, EcbDir::Decrypt)?;
         let challenge: Vec<u8> = (0..block_size).map(|_| rand::random::<u8>()).collect();
 
         // Build data: 7C <len> [ 80 <len> <decrypted-witness> 81 <len> <challenge> ]
@@ -77,7 +129,7 @@ impl PcscSession {
         let outer_r = tlv_get(&resp2, 0x7C, "MGMT AUTH step2")?;
         let challenge_resp = tlv_get(&outer_r, 0x82, "MGMT AUTH step2")?;
 
-        let challenge_enc = crypto_ecb(&key_bytes, &challenge, block_size, EcbDir::Encrypt)?;
+        let challenge_enc = crypto_ecb(algo, key_bytes, &challenge, EcbDir::Encrypt)?;
         if challenge_enc.ct_eq(&challenge_resp).unwrap_u8() == 0 {
             bail!("management key authentication failed: card response mismatch");
         }

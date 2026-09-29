@@ -6,10 +6,12 @@
 
 pub mod emulated;
 pub mod hardware;
+pub mod mgmt;
 pub mod session;
 pub(crate) mod tlv;
 pub mod virtual_piv;
 
+pub use mgmt::MgmtAlgo;
 pub use virtual_piv::VirtualPiv;
 
 use anyhow::Result;
@@ -117,13 +119,29 @@ pub trait PivBackend: Send + Sync {
     /// session to prevent the card from resetting PIN-verified state between calls.
     fn read_printed_object_with_pin(&self, reader: &str, pin: &str) -> Result<Vec<u8>>;
 
+    /// Return the algorithm of the card's current management key.
+    ///
+    /// The default implementation reports 3DES, for backends that do not
+    /// model the management key algorithm.
+    fn management_key_algorithm(&self, reader: &str) -> Result<MgmtAlgo> {
+        let _ = reader;
+        Ok(MgmtAlgo::Tdes)
+    }
+
     /// Replace the management key.
     ///
-    /// `old_key_hex` is the current management key (48 hex chars for 3DES).
-    /// `new_key_hex` is the replacement key (same length).
+    /// `old_key_hex` is the current management key.  `new_key_hex` is the
+    /// replacement, which must be `algo.key_len()` bytes long; it is
+    /// installed with algorithm `algo`.
     /// The implementation must authenticate with `old_key_hex` first, then
     /// issue SET MANAGEMENT KEY to install `new_key_hex`.
-    fn set_management_key(&self, reader: &str, old_key_hex: &str, new_key_hex: &str) -> Result<()>;
+    fn set_management_key(
+        &self,
+        reader: &str,
+        old_key_hex: &str,
+        new_key_hex: &str,
+        algo: MgmtAlgo,
+    ) -> Result<()>;
 
     /// Return the size in bytes of a PIV data object, or `None` if the object
     /// does not exist.  Used by `scan_nvm` to measure NVM usage without writes.

@@ -5,7 +5,8 @@
 //! Auxiliary helpers: TLV parsing, default-credential checks, PIN-protected
 //! management-key retrieval.
 
-use crate::piv::PivBackend;
+use crate::piv::mgmt::{parse_retries_remaining, GET_METADATA_MGMT, GET_METADATA_PUK};
+use crate::piv::{MgmtAlgo, PivBackend};
 use anyhow::{bail, Result};
 use std::collections::HashMap;
 
@@ -15,12 +16,12 @@ pub const OBJ_PRINTED: u32 = 0x5F_C109;
 
 /// Factory-default credentials.
 pub const DEFAULT_PIN: &str = "123456";
+/// Factory-default management key: 3DES before firmware 5.7, AES-192 from
+/// firmware 5.7 on (same bytes).
 pub const DEFAULT_MANAGEMENT_KEY: &str = "010203040506070801020304050607080102030405060708";
 
 // APDU bytes for GET_METADATA (YubiKey firmware 5.3+).
 const GET_METADATA_PIN: [u8; 5] = [0x00, 0xF7, 0x00, 0x80, 0x00];
-const GET_METADATA_PUK: [u8; 5] = [0x00, 0xF7, 0x00, 0x81, 0x00];
-const GET_METADATA_MGMT: [u8; 5] = [0x00, 0xF7, 0x00, 0x9B, 0x00];
 
 // TLV tag that carries the is_default flag (value 0x01 = is default).
 const TAG_IS_DEFAULT: u8 = 0x05;
@@ -180,48 +181,195 @@ pub fn check_for_default_credentials(
 // PIN-protected management key
 // ---------------------------------------------------------------------------
 
-/// Parsed contents of the ADMIN DATA object (0x5FFF00).
-#[derive(Debug, Default)]
+/// ADMIN DATA flag (tag 0x81): the PUK is blocked.
+pub const ADMIN_FLAG_PUK_BLOCKED: u8 = 0x01;
+/// ADMIN DATA flag (tag 0x81): the management key is stored in the
+/// PIN-protected PRINTED object.
+pub const ADMIN_FLAG_MGMT_KEY_STORED: u8 = 0x02;
+
+const TAG_ADMIN_DATA: u8 = 0x80;
+const TAG_ADMIN_FLAGS: u8 = 0x81;
+const TAG_ADMIN_SALT: u8 = 0x82;
+
+/// How the card's management key is protected, as recorded in ADMIN DATA.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProtectionMode {
+    /// Not protected: the key must be supplied (or is the factory default).
+    None,
+    /// Key stored in PRINTED, flag `0x02` (ykman layout).
+    Standard,
+    /// Flag `0x01` without `0x02`: either the PUK is really blocked, or the
+    /// card was protected by yb ≤ 0.4.x, which wrote `0x01` by mistake.
+    /// Resolved when a management key is needed (spec 0021 §4).
+    LegacyOrPukBlocked,
+    /// PIN-derived management key (salt present).  Deprecated; unsupported.
+    Derived,
+    /// ADMIN DATA exists but cannot be parsed.  yb refuses to write.
+    Invalid,
+}
+
+/// Parsed pivman ADMIN DATA object (0x5FFF00), laid out as ykman's
+/// `PivmanData`: `80 L [ 81 01 <flags> | 82 L <salt> | 83 04 <timestamp> ]`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AdminData {
-    #[allow(dead_code)]
-    pub puk_blocked: bool,
-    pub mgmt_key_stored: bool,
-    pub pin_derived: bool,
+    /// Tag 0x81 bitfield, if present.
+    pub flags: Option<u8>,
+    /// Tag 0x82: salt of a PIN-derived management key, if present.
+    pub salt: Option<Vec<u8>>,
+    /// Every other TLV (tag 0x83 PIN timestamp, unknown tags), kept in
+    /// order so that a rewrite preserves it.
+    pub other: Vec<(u8, Vec<u8>)>,
 }
 
-/// Read and parse the ADMIN DATA object.
-pub fn parse_admin_data(reader: &str, piv: &dyn PivBackend) -> Result<AdminData> {
-    let raw = match piv.read_object(reader, OBJ_ADMIN_DATA) {
-        Err(_) => return Ok(AdminData::default()),
-        Ok(r) => r,
-    };
+impl AdminData {
+    /// Parse the ADMIN DATA object content (outer `53` wrapper removed).
+    /// Empty content means "no ADMIN DATA".
+    pub fn parse(raw: &[u8]) -> Result<Self> {
+        let mut admin = Self::default();
+        if raw.is_empty() {
+            return Ok(admin);
+        }
+        let inner = match parse_tlv_list(raw)?.into_iter().next() {
+            Some((TAG_ADMIN_DATA, inner)) => inner,
+            _ => bail!("ADMIN DATA: expected tag 0x80"),
+        };
+        for (tag, value) in parse_tlv_list(&inner)? {
+            match tag {
+                TAG_ADMIN_FLAGS => match value.as_slice() {
+                    [flags] => admin.flags = Some(*flags),
+                    _ => bail!("ADMIN DATA: flags (tag 0x81) must be one byte"),
+                },
+                TAG_ADMIN_SALT => admin.salt = Some(value),
+                _ => admin.other.push((tag, value)),
+            }
+        }
+        Ok(admin)
+    }
 
-    let tlv = parse_tlv_flat(&raw);
-    // Tag 0x80 contains a nested TLV; tag 0x81 inside holds the bitfield.
-    // Bits 0x01/0x02: mgmt key stored in PRINTED object (PIN-protected mode).
-    // Bit 0x04: PIN-derived (deprecated).
-    let flags = tlv
-        .get(&0x80)
-        .and_then(|inner_bytes| {
-            let inner = parse_tlv_flat(inner_bytes);
-            inner.get(&0x81).and_then(|v| v.first()).copied()
-        })
-        .unwrap_or(0);
+    /// Encode as ADMIN DATA object content.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        use crate::piv::tlv::encode_tlv;
+        let mut inner = Vec::new();
+        if let Some(flags) = self.flags {
+            inner.extend(encode_tlv(TAG_ADMIN_FLAGS, &[flags]));
+        }
+        if let Some(ref salt) = self.salt {
+            inner.extend(encode_tlv(TAG_ADMIN_SALT, salt));
+        }
+        for (tag, value) in &self.other {
+            inner.extend(encode_tlv(*tag, value));
+        }
+        encode_tlv(TAG_ADMIN_DATA, &inner)
+    }
 
-    Ok(AdminData {
-        puk_blocked: flags & 0x01 != 0,
-        // Bit 0x01 = key stored in PRINTED object; bit 0x02 = key stored in
-        // PROTECTED object.  We treat either bit as "PIN-protected mode".
-        mgmt_key_stored: flags & 0x03 != 0,
-        pin_derived: flags & 0x04 != 0,
-    })
+    /// How the management key is protected, per spec 0021 §4.
+    pub fn protection_mode(&self) -> ProtectionMode {
+        let flags = self.flags.unwrap_or(0);
+        if self.salt.is_some() {
+            ProtectionMode::Derived
+        } else if flags & ADMIN_FLAG_MGMT_KEY_STORED != 0 {
+            ProtectionMode::Standard
+        } else if flags & ADMIN_FLAG_PUK_BLOCKED != 0 {
+            ProtectionMode::LegacyOrPukBlocked
+        } else {
+            ProtectionMode::None
+        }
+    }
 }
 
-/// Detect PIN-protected mode.
-/// Returns (is_pin_protected, is_pin_derived).
-pub fn detect_pin_protected_mode(reader: &str, piv: &dyn PivBackend) -> Result<(bool, bool)> {
-    let admin = parse_admin_data(reader, piv)?;
-    Ok((admin.mgmt_key_stored, admin.pin_derived))
+/// Parse a BER-TLV sequence with single-byte tags, in order.  Unlike
+/// [`parse_tlv_flat`], truncated input is an error.
+fn parse_tlv_list(data: &[u8]) -> Result<Vec<(u8, Vec<u8>)>> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < data.len() {
+        let tag = data[i];
+        i += 1;
+        if i >= data.len() {
+            bail!("truncated TLV: tag 0x{tag:02x} has no length");
+        }
+        let (len, consumed) = decode_tlv_length(&data[i..]);
+        i += consumed;
+        if consumed == 0 || i + len > data.len() {
+            bail!("truncated TLV: tag 0x{tag:02x}");
+        }
+        out.push((tag, data[i..i + len].to_vec()));
+        i += len;
+    }
+    Ok(out)
+}
+
+/// Read and parse the ADMIN DATA object.  A missing object reads as empty.
+pub fn read_admin_data(reader: &str, piv: &dyn PivBackend) -> Result<AdminData> {
+    match piv.read_object(reader, OBJ_ADMIN_DATA) {
+        Err(_) => Ok(AdminData::default()),
+        Ok(raw) => AdminData::parse(&raw),
+    }
+}
+
+/// Detect how the management key is protected (read-only, no PIN).
+pub fn detect_protection_mode(reader: &str, piv: &dyn PivBackend) -> ProtectionMode {
+    match read_admin_data(reader, piv) {
+        Ok(admin) => admin.protection_mode(),
+        Err(_) => ProtectionMode::Invalid,
+    }
+}
+
+/// Number of PUK retries remaining, or `None` when the card cannot say
+/// (firmware < 5.3).
+fn puk_retries_remaining(reader: &str, piv: &dyn PivBackend) -> Option<u8> {
+    let resp = piv.send_apdu(reader, &GET_METADATA_PUK).ok()?;
+    parse_retries_remaining(&resp)
+}
+
+/// Build the ADMIN DATA content recording a management key stored in
+/// PRINTED, as a read-modify-write of the current object (spec 0021 §4):
+///
+/// - flag `0x02` is set;
+/// - flag `0x01` (PUK blocked) is set from the PUK retry counter when the
+///   card reports it; otherwise it is kept, or cleared when
+///   `clearing_legacy_flag` (the `0x01` was written by yb ≤ 0.4.x);
+/// - tag 0x83 and unknown tags/bits are preserved.
+///
+/// Fails, without writing anything, if ADMIN DATA cannot be parsed or
+/// records a PIN-derived key.
+pub fn admin_data_with_stored_key(
+    reader: &str,
+    piv: &dyn PivBackend,
+    clearing_legacy_flag: bool,
+) -> Result<Vec<u8>> {
+    let mut admin = read_admin_data(reader, piv)
+        .map_err(|e| anyhow::anyhow!("cannot update ADMIN DATA (0x5FFF00): {e}"))?;
+    if admin.salt.is_some() {
+        bail!("{PIN_DERIVED_UNSUPPORTED}");
+    }
+    let mut flags = admin.flags.unwrap_or(0) | ADMIN_FLAG_MGMT_KEY_STORED;
+    match puk_retries_remaining(reader, piv) {
+        Some(0) => flags |= ADMIN_FLAG_PUK_BLOCKED,
+        Some(_) => flags &= !ADMIN_FLAG_PUK_BLOCKED,
+        None if clearing_legacy_flag => flags &= !ADMIN_FLAG_PUK_BLOCKED,
+        None => {}
+    }
+    admin.flags = Some(flags);
+    Ok(admin.to_bytes())
+}
+
+/// Message for a card whose management key is PIN-derived.
+pub const PIN_DERIVED_UNSUPPORTED: &str =
+    "PIN-derived management key mode is deprecated and not supported. \
+     Please migrate to PIN-protected mode.";
+
+/// Rewrite the ADMIN DATA of a card protected by yb ≤ 0.4.x (flag `0x01`)
+/// to the standard layout (flag `0x02`).  The management key and PRINTED
+/// are unchanged.
+pub fn migrate_legacy_admin_data(
+    reader: &str,
+    piv: &dyn PivBackend,
+    management_key: Option<&str>,
+    pin: Option<&str>,
+) -> Result<()> {
+    let payload = admin_data_with_stored_key(reader, piv, true)?;
+    piv.write_object(reader, OBJ_ADMIN_DATA, &payload, management_key, pin)
 }
 
 /// Retrieve the management key stored in the PRINTED object (0x5FC109).
@@ -237,35 +385,43 @@ pub fn get_pin_protected_management_key(
     extract_pin_protected_key(&raw)
 }
 
-/// Generate a random 24-byte 3DES management key, returned as a hex string.
-pub fn generate_random_management_key() -> String {
-    let bytes: [u8; 24] = rand::random();
+/// Generate a random management key for `algo`, returned as a hex string.
+pub fn generate_random_management_key(algo: MgmtAlgo) -> String {
+    let bytes: Vec<u8> = (0..algo.key_len()).map(|_| rand::random::<u8>()).collect();
     hex::encode(bytes)
 }
 
 /// Store `new_key_hex` in PIN-protected mode on the device.
 ///
 /// Steps:
-/// 1. Issue SET MANAGEMENT KEY to replace the current key with `new_key_hex`.
+/// 0. Prepare the new ADMIN DATA (read-only); fails before any write if
+///    ADMIN DATA is unparseable or records a PIN-derived key.
+/// 1. Issue SET MANAGEMENT KEY to replace the current key with `new_key_hex`
+///    (algorithm `algo`).
 /// 2. Write the new key into the PRINTED object (0x5FC109) wrapped in the
-///    `88 <n> [ 89 <24> <key_bytes> ]` TLV structure that
+///    `88 <n> [ 89 <len> <key_bytes> ]` TLV structure that
 ///    `extract_pin_protected_key` expects.
-/// 3. Write ADMIN DATA (0x5FFF00) with the `mgmt_key_stored` bit set so that
-///    `detect_pin_protected_mode` recognises PIN-protected mode.
+/// 3. Write ADMIN DATA (0x5FFF00) with flag `0x02` set (ykman layout), see
+///    [`admin_data_with_stored_key`].
 ///
-/// The caller must have already verified `pin` is correct for this device.
+/// `clearing_legacy_flag` is true when the card is known to carry the
+/// legacy yb `0x01` flag.
 pub fn enable_pin_protected_management_key(
     reader: &str,
     piv: &dyn PivBackend,
     old_key_hex: &str,
     new_key_hex: &str,
-    pin: &str,
+    algo: MgmtAlgo,
+    clearing_legacy_flag: bool,
 ) -> Result<()> {
+    // Step 0 — prepare ADMIN DATA before changing anything.
+    let admin_payload = admin_data_with_stored_key(reader, piv, clearing_legacy_flag)?;
+
     // Step 1 — swap the management key on the card.
-    piv.set_management_key(reader, old_key_hex, new_key_hex)?;
+    piv.set_management_key(reader, old_key_hex, new_key_hex, algo)?;
 
     // Step 2 — encode the new key in the PRINTED object.
-    // Format: 88 <outer_len> [ 89 <24> <24 key bytes> ]
+    // Format: 88 <outer_len> [ 89 <len> <key bytes> ]
     let key_bytes = hex::decode(new_key_hex).map_err(|e| anyhow::anyhow!("key hex: {e}"))?;
     let inner_value: Vec<u8> = {
         let mut v = vec![0x89u8, key_bytes.len() as u8];
@@ -285,14 +441,7 @@ pub fn enable_pin_protected_management_key(
         None,
     )?;
 
-    // Step 3 — write ADMIN DATA: tag 0x80 [ tag 0x81 <1 byte: flags> ]
-    // Bit 0x01 = mgmt key stored in PRINTED object (PIN-protected mode).
-    let admin_inner = [0x81u8, 0x01, 0x01];
-    let admin_payload: Vec<u8> = {
-        let mut v = vec![0x80u8, admin_inner.len() as u8];
-        v.extend_from_slice(&admin_inner);
-        v
-    };
+    // Step 3 — write ADMIN DATA with flag 0x02 (key stored in PRINTED).
     piv.write_object(
         reader,
         OBJ_ADMIN_DATA,
@@ -301,7 +450,6 @@ pub fn enable_pin_protected_management_key(
         None,
     )?;
 
-    let _ = pin; // caller-supplied PIN acknowledged; no additional round-trip needed
     Ok(())
 }
 
@@ -335,5 +483,116 @@ mod tests {
         let data = [0x01u8, 0x81, 0x03, 0xAA, 0xBB, 0xCC];
         let map = parse_tlv_flat(&data);
         assert_eq!(map.get(&0x01), Some(&vec![0xAAu8, 0xBB, 0xCC]));
+    }
+
+    // ADMIN DATA (spec 0021 §4)
+
+    fn mode(raw: &[u8]) -> ProtectionMode {
+        AdminData::parse(raw).unwrap().protection_mode()
+    }
+
+    #[test]
+    fn admin_data_protection_modes() {
+        assert_eq!(mode(&[]), ProtectionMode::None);
+        assert_eq!(mode(&[0x80, 0x03, 0x81, 0x01, 0x00]), ProtectionMode::None);
+        // ykman: key stored in PRINTED.
+        assert_eq!(
+            mode(&[0x80, 0x03, 0x81, 0x01, 0x02]),
+            ProtectionMode::Standard
+        );
+        // 0x02 wins over 0x01 (stored key and blocked PUK).
+        assert_eq!(
+            mode(&[0x80, 0x03, 0x81, 0x01, 0x03]),
+            ProtectionMode::Standard
+        );
+        // yb ≤ 0.4.x, or ykman with a blocked PUK.
+        assert_eq!(
+            mode(&[0x80, 0x03, 0x81, 0x01, 0x01]),
+            ProtectionMode::LegacyOrPukBlocked
+        );
+        // Salt present: PIN-derived, whatever the flags say.
+        assert_eq!(
+            mode(&[0x80, 0x07, 0x81, 0x01, 0x02, 0x82, 0x02, 0xAA, 0xBB]),
+            ProtectionMode::Derived
+        );
+        // Bit 0x04 is no longer interpreted.
+        assert_eq!(mode(&[0x80, 0x03, 0x81, 0x01, 0x04]), ProtectionMode::None);
+    }
+
+    #[test]
+    fn admin_data_round_trip_preserves_other_tags() {
+        // Flags, PIN timestamp (0x83) and an unknown tag (0x90).
+        let raw = [
+            0x80, 0x0C, 0x81, 0x01, 0x02, 0x83, 0x04, 0x01, 0x02, 0x03, 0x04, 0x90, 0x01, 0x7F,
+        ];
+        let admin = AdminData::parse(&raw).unwrap();
+        assert_eq!(admin.flags, Some(0x02));
+        assert_eq!(
+            admin.other,
+            vec![(0x83, vec![1, 2, 3, 4]), (0x90, vec![0x7F])]
+        );
+        assert_eq!(admin.to_bytes(), raw.to_vec());
+    }
+
+    #[test]
+    fn admin_data_rejects_malformed_content() {
+        // Truncated inner TLV.
+        assert!(AdminData::parse(&[0x80, 0x05, 0x81]).is_err());
+        // Wrong outer tag.
+        assert!(AdminData::parse(&[0x53, 0x03, 0x81, 0x01, 0x02]).is_err());
+        // Flags must be one byte.
+        assert!(AdminData::parse(&[0x80, 0x04, 0x81, 0x02, 0x02, 0x00]).is_err());
+    }
+
+    #[cfg(feature = "virtual-piv")]
+    mod admin_rewrite {
+        use super::*;
+        use crate::piv::VirtualPiv;
+
+        const MGMT: &str = DEFAULT_MANAGEMENT_KEY;
+
+        fn card_with_admin(raw: &[u8]) -> (VirtualPiv, String) {
+            let piv = VirtualPiv::new();
+            let reader = piv.reader_name();
+            piv.write_object(&reader, OBJ_ADMIN_DATA, raw, Some(MGMT), None)
+                .unwrap();
+            (piv, reader)
+        }
+
+        #[test]
+        fn legacy_flag_cleared_when_puk_not_blocked() {
+            // The virtual card reports 3 PUK retries remaining.
+            let (piv, reader) = card_with_admin(&[0x80, 0x03, 0x81, 0x01, 0x01]);
+            let payload = admin_data_with_stored_key(&reader, &piv, true).unwrap();
+            assert_eq!(payload, vec![0x80, 0x03, 0x81, 0x01, 0x02]);
+        }
+
+        #[test]
+        fn timestamp_and_unknown_bits_preserved() {
+            // Unknown flag bit 0x10 and a PIN timestamp.
+            let (piv, reader) = card_with_admin(&[
+                0x80, 0x09, 0x81, 0x01, 0x10, 0x83, 0x04, 0x01, 0x02, 0x03, 0x04,
+            ]);
+            let payload = admin_data_with_stored_key(&reader, &piv, false).unwrap();
+            assert_eq!(
+                payload,
+                vec![0x80, 0x09, 0x81, 0x01, 0x12, 0x83, 0x04, 0x01, 0x02, 0x03, 0x04]
+            );
+        }
+
+        #[test]
+        fn missing_admin_data_is_created() {
+            let piv = VirtualPiv::new();
+            let reader = piv.reader_name();
+            let payload = admin_data_with_stored_key(&reader, &piv, false).unwrap();
+            assert_eq!(payload, vec![0x80, 0x03, 0x81, 0x01, 0x02]);
+        }
+
+        #[test]
+        fn pin_derived_is_refused() {
+            let (piv, reader) =
+                card_with_admin(&[0x80, 0x07, 0x81, 0x01, 0x00, 0x82, 0x02, 0xAA, 0xBB]);
+            assert!(admin_data_with_stored_key(&reader, &piv, false).is_err());
+        }
     }
 }

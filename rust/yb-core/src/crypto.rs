@@ -282,7 +282,13 @@ mod tests {
             bail!("mock")
         }
 
-        fn set_management_key(&self, _r: &str, _old: &str, _new: &str) -> Result<()> {
+        fn set_management_key(
+            &self,
+            _r: &str,
+            _old: &str,
+            _new: &str,
+            _algo: crate::piv::MgmtAlgo,
+        ) -> Result<()> {
             bail!("mock")
         }
     }
@@ -342,7 +348,13 @@ mod tests {
             bail!("mock")
         }
 
-        fn set_management_key(&self, _r: &str, _old: &str, _new: &str) -> Result<()> {
+        fn set_management_key(
+            &self,
+            _r: &str,
+            _old: &str,
+            _new: &str,
+            _algo: crate::piv::MgmtAlgo,
+        ) -> Result<()> {
             bail!("mock")
         }
     }

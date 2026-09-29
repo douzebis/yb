@@ -15,7 +15,7 @@
 //! test key material**.  Never use these keys to protect real data and never
 //! confuse them with production YubiKey credentials.
 
-use super::{DeviceInfo, PivBackend};
+use super::{DeviceInfo, MgmtAlgo, PivBackend};
 use crate::auxiliaries::{extract_pin_protected_key, OBJ_PRINTED};
 use anyhow::{anyhow, bail, Result};
 use p256::{elliptic_curve::sec1::ToEncodedPoint, PublicKey, SecretKey};
@@ -78,7 +78,9 @@ struct VirtualState {
     pin: String,
     puk: String,
     management_key_hex: String, // hex-encoded raw key bytes
+    mgmt_algo: MgmtAlgo,
     pin_retries: u8,
+    puk_retries: u8,
 
     pin_verified: bool,
     mgmt_authenticated: bool,
@@ -98,7 +100,9 @@ impl VirtualState {
             pin: "123456".to_owned(),
             puk: "12345678".to_owned(),
             management_key_hex: "010203040506070801020304050607080102030405060708".to_owned(),
+            mgmt_algo: MgmtAlgo::Tdes,
             pin_retries: 3,
+            puk_retries: 3,
             pin_verified: false,
             mgmt_authenticated: false,
             key_slots: HashMap::new(),
@@ -151,6 +155,10 @@ struct FixtureCredentials {
     puk: String,
     #[serde(default = "default_mgmt_key")]
     management_key: String,
+    /// `TDES` (default), `AES128`, `AES192` or `AES256`.  Firmware 5.7+
+    /// YubiKeys ship with an AES-192 management key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    management_key_algorithm: Option<String>,
 }
 
 fn default_pin() -> String {
@@ -210,6 +218,10 @@ impl VirtualPiv {
         state.pin = fixture.credentials.pin;
         state.puk = fixture.credentials.puk;
         state.management_key_hex = fixture.credentials.management_key;
+        if let Some(ref name) = fixture.credentials.management_key_algorithm {
+            state.mgmt_algo = MgmtAlgo::from_name(name)
+                .ok_or_else(|| anyhow!("fixture: unknown management_key_algorithm '{name}'"))?;
+        }
 
         for (slot_str, slot_fixture) in &fixture.slots {
             let slot_byte = u8::from_str_radix(slot_str.trim_start_matches("0x"), 16)
@@ -273,6 +285,12 @@ impl VirtualPiv {
                 pin: s.pin.clone(),
                 puk: s.puk.clone(),
                 management_key: s.management_key_hex.clone(),
+                management_key_algorithm: match s.mgmt_algo {
+                    MgmtAlgo::Tdes => None,
+                    MgmtAlgo::Aes128 => Some("AES128".to_owned()),
+                    MgmtAlgo::Aes192 => Some("AES192".to_owned()),
+                    MgmtAlgo::Aes256 => Some("AES256".to_owned()),
+                },
             },
             slots,
             objects,
@@ -340,10 +358,23 @@ impl PivBackend for VirtualPiv {
         do_verify_pin(&mut s, pin)
     }
 
-    fn send_apdu(&self, reader: &str, _apdu: &[u8]) -> Result<Vec<u8>> {
+    /// Emulates GET METADATA (INS 0xF7) for the management key (9B) and the
+    /// PIN/PUK (80/81); every other APDU returns empty data.
+    ///
+    /// The "is default" flag (tag 0x05) is deliberately never reported, so
+    /// that the default-credential check stays silent on virtual devices.
+    fn send_apdu(&self, reader: &str, apdu: &[u8]) -> Result<Vec<u8>> {
         let s = self.state.lock().unwrap();
         check_reader(&s, reader)?;
-        Ok(vec![])
+        match apdu {
+            [0x00, 0xF7, 0x00, 0x9B, ..] => {
+                // Algorithm; policy (PIN n/a, touch never).
+                Ok(vec![0x01, 0x01, s.mgmt_algo.id(), 0x02, 0x02, 0x00, 0x01])
+            }
+            [0x00, 0xF7, 0x00, 0x80, ..] => Ok(vec![0x06, 0x02, 3, s.pin_retries]),
+            [0x00, 0xF7, 0x00, 0x81, ..] => Ok(vec![0x06, 0x02, 3, s.puk_retries]),
+            _ => Ok(vec![]),
+        }
     }
 
     fn ecdsa_sign(
@@ -492,11 +523,26 @@ impl PivBackend for VirtualPiv {
             .ok_or_else(|| anyhow!("virtual: no PRINTED object stored"))
     }
 
-    fn set_management_key(&self, reader: &str, old_key_hex: &str, new_key_hex: &str) -> Result<()> {
+    fn management_key_algorithm(&self, reader: &str) -> Result<MgmtAlgo> {
+        let s = self.state.lock().unwrap();
+        check_reader(&s, reader)?;
+        Ok(s.mgmt_algo)
+    }
+
+    fn set_management_key(
+        &self,
+        reader: &str,
+        old_key_hex: &str,
+        new_key_hex: &str,
+        algo: MgmtAlgo,
+    ) -> Result<()> {
         let mut s = self.state.lock().unwrap();
         check_reader(&s, reader)?;
         do_authenticate_management_key(&mut s, old_key_hex)?;
+        let new_bytes = hex::decode(new_key_hex).map_err(|e| anyhow!("new key hex: {e}"))?;
+        algo.check_key_len(&new_bytes)?;
         s.management_key_hex = new_key_hex.to_owned();
+        s.mgmt_algo = algo;
         Ok(())
     }
 
@@ -530,6 +576,10 @@ fn do_verify_pin(s: &mut VirtualState, pin: &str) -> Result<()> {
 }
 
 fn do_authenticate_management_key(s: &mut VirtualState, key_hex: &str) -> Result<()> {
+    // Like the hardware path: a key of the wrong length for the card's
+    // algorithm is rejected before any authentication attempt.
+    let key_bytes = hex::decode(key_hex).map_err(|e| anyhow!("decoding management key: {e}"))?;
+    s.mgmt_algo.check_key_len(&key_bytes)?;
     if key_hex != s.management_key_hex {
         bail!("virtual: wrong management key");
     }

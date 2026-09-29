@@ -178,5 +178,6 @@ pub fn run(ctx: &Context, args: &StoreArgs) -> Result<()> {
         }
     }
 
+    ctx.complete_legacy_migration(mgmt_key.as_deref());
     Ok(())
 }

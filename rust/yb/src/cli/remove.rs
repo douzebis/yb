@@ -47,6 +47,7 @@ pub fn run(ctx: &Context, args: &RemoveArgs) -> Result<()> {
     }
     let pin = ctx.require_pin()?;
     store.sync(ctx.piv.as_ref(), mgmt_key.as_deref(), pin.as_deref())?;
+    ctx.complete_legacy_migration(mgmt_key.as_deref());
 
     if !ctx.quiet {
         for name in &to_remove {

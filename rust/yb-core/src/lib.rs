@@ -54,7 +54,7 @@ pub use orchestrator::{
 pub use piv::hardware::HardwarePiv;
 #[cfg(any(feature = "virtual-piv", feature = "test-utils"))]
 pub use piv::VirtualPiv;
-pub use piv::{DeviceInfo, FlashHandle, PivBackend};
+pub use piv::{DeviceInfo, FlashHandle, MgmtAlgo, PivBackend};
 
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;

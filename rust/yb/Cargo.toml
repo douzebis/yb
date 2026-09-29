@@ -47,5 +47,6 @@ clap_mangen   = "0.2"
 [dev-dependencies]
 yb-core  = { path = "../yb-core", version = "0.4.2", features = ["chrono", "virtual-piv"] }
 tempfile = "3"
+hex      = "0.4"
 
 

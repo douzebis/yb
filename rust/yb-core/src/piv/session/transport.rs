@@ -13,6 +13,9 @@ use std::ffi::CString;
 
 pub(crate) struct PcscSession {
     pub(crate) card: pcsc::Card,
+    /// Management key algorithm, detected on first use and cached for the
+    /// lifetime of the session (spec 0021 §1).
+    pub(super) mgmt_algo: Option<crate::piv::MgmtAlgo>,
 }
 
 impl PcscSession {
@@ -26,7 +29,10 @@ impl PcscSession {
             pcsc::Context::establish(pcsc::Scope::User).context("establishing PC/SC context")?;
         let card = connect_reader_mode(&ctx, reader, mode)?;
 
-        let mut session = Self { card };
+        let mut session = Self {
+            card,
+            mgmt_algo: None,
+        };
         session.select_piv()?;
         Ok(session)
     }

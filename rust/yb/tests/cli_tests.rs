@@ -847,3 +847,290 @@ mod format_tests {
         assert!(format_run(&ctx, &args).is_err());
     }
 }
+
+// ---------------------------------------------------------------------------
+// management key algorithm and ADMIN DATA (spec 0021)
+// ---------------------------------------------------------------------------
+
+mod mgmt_key_tests {
+    use super::*;
+    use yb::cli::format::{run as format_run, FormatArgs};
+    use yb::cli::store::{run as store_run, StoreArgs};
+    use yb_core::auxiliaries::{AdminData, ProtectionMode, OBJ_ADMIN_DATA, OBJ_PRINTED};
+    use yb_core::store::constants::{DEFAULT_OBJECT_COUNT, DEFAULT_SUBJECT};
+    use yb_core::{MgmtAlgo, PivBackend};
+
+    /// A second 24-byte management key, distinct from `MGMT`.
+    const OTHER_KEY: &str = "a1a2a3a4a5a6a7a8b1b2b3b4b5b6b7b8c1c2c3c4c5c6c7c8";
+
+    /// ADMIN DATA as written by yb ≤ 0.4.x `format --protect` (flag 0x01),
+    /// which is also what ykman writes for a blocked PUK.
+    const ADMIN_LEGACY: [u8; 5] = [0x80, 0x03, 0x81, 0x01, 0x01];
+
+    /// PRINTED object content holding `key_hex`: `88 { 89 <key> }`.
+    fn printed(key_hex: &str) -> Vec<u8> {
+        let key = hex::decode(key_hex).unwrap();
+        let mut inner = vec![0x89, key.len() as u8];
+        inner.extend(key);
+        let mut out = vec![0x88, inner.len() as u8];
+        out.extend(inner);
+        out
+    }
+
+    fn read_admin(ctx: &Context) -> Vec<u8> {
+        ctx.piv
+            .read_object(&ctx.reader, OBJ_ADMIN_DATA)
+            .unwrap_or_default()
+    }
+
+    /// Fresh context on the same device, with no explicit management key:
+    /// the protection mode is detected at construction.
+    fn reopen(ctx: &Context) -> Context {
+        let mut ctx = Context::with_backend(ctx.piv.clone(), Some(PIN.to_owned()), false).unwrap();
+        ctx.quiet = true;
+        ctx
+    }
+
+    /// A formatted card with a key and certificate in slot 0x82.
+    fn formatted_card() -> Context {
+        let ctx = make_ctx(with_key_piv());
+        ctx.piv
+            .generate_certificate(&ctx.reader, 0x82, "CN=Test", Some(MGMT), None)
+            .unwrap();
+        format_store(&ctx);
+        ctx
+    }
+
+    /// A formatted card whose management key is `OTHER_KEY`, stored in
+    /// PRINTED, with the given ADMIN DATA content.
+    fn protected_card(admin: &[u8]) -> Context {
+        let setup = formatted_card();
+        let (piv, reader) = (setup.piv.as_ref(), setup.reader.as_str());
+        piv.set_management_key(reader, MGMT, OTHER_KEY, MgmtAlgo::Tdes)
+            .unwrap();
+        piv.write_object(
+            reader,
+            OBJ_PRINTED,
+            &printed(OTHER_KEY),
+            Some(OTHER_KEY),
+            None,
+        )
+        .unwrap();
+        piv.write_object(reader, OBJ_ADMIN_DATA, admin, Some(OTHER_KEY), None)
+            .unwrap();
+        reopen(&setup)
+    }
+
+    fn store_one(ctx: &Context, name: &str) -> anyhow::Result<()> {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join(name);
+        std::fs::write(&file, b"secret").unwrap();
+        store_run(
+            ctx,
+            &StoreArgs {
+                files: vec![file],
+                name: None,
+                encrypted: true,
+                unencrypted: false,
+                no_compress: false,
+            },
+        )
+    }
+
+    #[test]
+    fn format_protect_on_firmware_57_keeps_aes192() {
+        let ctx = make_ctx(VirtualPiv::from_fixture(&fixture("aes192.yaml")).unwrap());
+        let args = FormatArgs {
+            object_count: DEFAULT_OBJECT_COUNT,
+            key_slot: "0x82".to_owned(),
+            generate: true,
+            subject: DEFAULT_SUBJECT.to_owned(),
+            protect: true,
+        };
+        format_run(&ctx, &args).unwrap();
+
+        assert_eq!(
+            ctx.piv.management_key_algorithm(&ctx.reader).unwrap(),
+            MgmtAlgo::Aes192
+        );
+        let admin = AdminData::parse(&read_admin(&ctx)).unwrap();
+        assert_eq!(admin.flags, Some(0x02), "standard (ykman) flag");
+
+        // The new key is PIN-protected: writes need only the PIN.
+        let ctx = reopen(&ctx);
+        assert_eq!(ctx.protection, ProtectionMode::Standard);
+        store_one(&ctx, "blob").unwrap();
+    }
+
+    #[test]
+    fn legacy_flag_is_migrated_on_first_write() {
+        let ctx = protected_card(&ADMIN_LEGACY);
+        assert_eq!(ctx.protection, ProtectionMode::LegacyOrPukBlocked);
+
+        store_one(&ctx, "blob").unwrap();
+
+        // 0x02 set; 0x01 cleared because the PUK is not blocked.
+        let admin = AdminData::parse(&read_admin(&ctx)).unwrap();
+        assert_eq!(admin.flags, Some(0x02));
+        assert!(!ctx.legacy_migration_due());
+        // Management key and PRINTED are unchanged.
+        assert_eq!(
+            ctx.piv.read_object(&ctx.reader, OBJ_PRINTED).unwrap(),
+            printed(OTHER_KEY)
+        );
+        // Subsequent invocations see the standard layout.
+        assert_eq!(reopen(&ctx).protection, ProtectionMode::Standard);
+    }
+
+    /// `format --protect` on a card that is already PIN-protected must
+    /// authenticate with the key from PRINTED, not the factory default.
+    fn reprotect(admin: &[u8]) {
+        let ctx = protected_card(admin);
+        let args = FormatArgs {
+            object_count: DEFAULT_OBJECT_COUNT,
+            key_slot: "0x82".to_owned(),
+            generate: false,
+            subject: DEFAULT_SUBJECT.to_owned(),
+            protect: true,
+        };
+        format_run(&ctx, &args).unwrap();
+
+        // A new random key replaced OTHER_KEY and is stored in PRINTED,
+        // with the standard flag.
+        assert_ne!(
+            ctx.piv.read_object(&ctx.reader, OBJ_PRINTED).unwrap(),
+            printed(OTHER_KEY)
+        );
+        let admin = AdminData::parse(&read_admin(&ctx)).unwrap();
+        assert_eq!(admin.flags, Some(0x02));
+        store_one(&reopen(&ctx), "blob").unwrap();
+    }
+
+    #[test]
+    fn format_protect_on_protected_card() {
+        reprotect(&[0x80, 0x03, 0x81, 0x01, 0x02]);
+    }
+
+    #[test]
+    fn format_protect_on_legacy_protected_card() {
+        reprotect(&ADMIN_LEGACY);
+    }
+
+    #[test]
+    fn ykman_layout_is_used_as_is() {
+        // Flag 0x02 plus a PIN timestamp (tag 0x83), as ykman writes it.
+        let admin = [
+            0x80, 0x09, 0x81, 0x01, 0x02, 0x83, 0x04, 0x65, 0x43, 0x21, 0x00,
+        ];
+        let ctx = protected_card(&admin);
+        assert_eq!(ctx.protection, ProtectionMode::Standard);
+
+        store_one(&ctx, "blob").unwrap();
+
+        assert_eq!(read_admin(&ctx), admin.to_vec(), "ADMIN DATA untouched");
+    }
+
+    #[test]
+    fn puk_blocked_card_is_not_treated_as_protected() {
+        // Flag 0x01 but PRINTED is empty: the PUK really is blocked.
+        let setup = formatted_card();
+        setup
+            .piv
+            .write_object(
+                &setup.reader,
+                OBJ_ADMIN_DATA,
+                &ADMIN_LEGACY,
+                Some(MGMT),
+                None,
+            )
+            .unwrap();
+        let mut ctx = reopen(&setup);
+        assert_eq!(ctx.protection, ProtectionMode::LegacyOrPukBlocked);
+
+        assert_eq!(ctx.management_key_for_write().unwrap(), None);
+        assert!(!ctx.legacy_migration_due());
+
+        // With the key supplied, writes work and ADMIN DATA is untouched.
+        ctx.management_key = Some(MGMT.to_owned());
+        store_one(&ctx, "blob").unwrap();
+        assert_eq!(read_admin(&ctx), ADMIN_LEGACY.to_vec());
+    }
+
+    #[test]
+    fn pin_derived_card_is_readable_but_not_writable() {
+        // Salt (tag 0x82) present: PIN-derived management key.
+        let admin = [
+            0x80, 0x09, 0x81, 0x01, 0x00, 0x82, 0x04, 0xAA, 0xBB, 0xCC, 0xDD,
+        ];
+        let setup = formatted_card();
+        setup
+            .piv
+            .write_object(&setup.reader, OBJ_ADMIN_DATA, &admin, Some(MGMT), None)
+            .unwrap();
+
+        // Context creation (read-only use) succeeds.
+        let ctx = reopen(&setup);
+        assert_eq!(ctx.protection, ProtectionMode::Derived);
+        let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+        assert!(list_blobs(&store).is_empty());
+
+        let err = ctx.management_key_for_write().unwrap_err();
+        assert!(err.to_string().contains("PIN-derived"), "{err}");
+        assert!(store_one(&ctx, "blob").is_err());
+    }
+
+    #[test]
+    fn unparseable_admin_data_refuses_writes() {
+        let setup = formatted_card();
+        // Tag 0x80 claims 5 bytes but only 1 follows.
+        setup
+            .piv
+            .write_object(
+                &setup.reader,
+                OBJ_ADMIN_DATA,
+                &[0x80, 0x05, 0x81],
+                Some(MGMT),
+                None,
+            )
+            .unwrap();
+        let ctx = reopen(&setup);
+        assert_eq!(ctx.protection, ProtectionMode::Invalid);
+        let err = ctx.management_key_for_write().unwrap_err();
+        assert!(err.to_string().contains("cannot be parsed"), "{err}");
+    }
+
+    #[test]
+    fn key_of_wrong_length_is_rejected_before_authentication() {
+        let mut ctx = make_ctx(VirtualPiv::from_fixture(&fixture("aes192.yaml")).unwrap());
+        ctx.management_key = Some("000102030405060708090a0b0c0d0e0f".to_owned());
+        let args = FormatArgs {
+            object_count: DEFAULT_OBJECT_COUNT,
+            key_slot: "0x82".to_owned(),
+            generate: true,
+            subject: DEFAULT_SUBJECT.to_owned(),
+            protect: false,
+        };
+        let err = format_run(&ctx, &args).unwrap_err();
+        assert!(
+            format!("{err:#}")
+                .contains("management key is 16 bytes but the card uses AES-192 (24 bytes)"),
+            "{err:#}"
+        );
+        // Nothing was generated in the slot.
+        assert!(ctx.piv.read_certificate(&ctx.reader, 0x82).is_err());
+    }
+
+    #[test]
+    fn fixture_round_trips_management_key_algorithm() {
+        let piv = VirtualPiv::from_fixture(&fixture("aes192.yaml")).unwrap();
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("saved.yaml");
+        piv.save_fixture(&path).unwrap();
+        let reloaded = VirtualPiv::from_fixture(&path).unwrap();
+        let reader = reloaded.reader_name();
+        assert_eq!(
+            reloaded.management_key_algorithm(&reader).unwrap(),
+            MgmtAlgo::Aes192
+        );
+    }
+}

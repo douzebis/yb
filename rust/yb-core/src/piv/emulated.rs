@@ -193,6 +193,7 @@ impl PivBackend for EmulatedPiv {
         reader: &str,
         _old_key_hex: &str,
         _new_key_hex: &str,
+        _algo: super::MgmtAlgo,
     ) -> Result<()> {
         if reader != self.reader {
             bail!("emulated: unknown reader '{reader}'");

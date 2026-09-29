@@ -3173,6 +3173,7 @@ dependencies = [
  "clap_mangen",
  "crossterm",
  "globset",
+ "hex",
  "p256 0.13.2",
  "rpassword",
  "sha2 0.10.9",

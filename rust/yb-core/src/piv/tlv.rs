@@ -4,6 +4,7 @@
 
 //! BER-TLV encoding/decoding and management-key ECB crypto helpers.
 
+use super::mgmt::MgmtAlgo;
 use crate::auxiliaries::decode_tlv_length;
 use anyhow::{bail, Result};
 
@@ -96,16 +97,13 @@ pub(crate) enum EcbDir {
     Decrypt,
 }
 
-pub(crate) fn crypto_ecb(
-    key: &[u8],
-    data: &[u8],
-    block_size: usize,
-    dir: EcbDir,
-) -> Result<Vec<u8>> {
+pub(crate) fn crypto_ecb(algo: MgmtAlgo, key: &[u8], data: &[u8], dir: EcbDir) -> Result<Vec<u8>> {
     let dir_str = match dir {
         EcbDir::Encrypt => "encrypt",
         EcbDir::Decrypt => "decrypt",
     };
+    algo.check_key_len(key)?;
+    let block_size = algo.block_size();
     if data.len() != block_size {
         bail!(
             "ECB {dir_str}: data length {} != block size {}",
@@ -149,6 +147,22 @@ pub(crate) fn crypto_ecb(
             c.decrypt_block(&mut b);
             $block.copy_from_slice(&b);
         }};
+        (aes192, $key:expr, $block:expr, encrypt) => {{
+            use aes::cipher::{BlockEncrypt, KeyInit};
+            let c = aes::Aes192::new_from_slice($key)
+                .map_err(|e| anyhow::anyhow!("AES-192 key: {e}"))?;
+            let mut b = aes::cipher::generic_array::GenericArray::clone_from_slice($block);
+            c.encrypt_block(&mut b);
+            $block.copy_from_slice(&b);
+        }};
+        (aes192, $key:expr, $block:expr, decrypt) => {{
+            use aes::cipher::{BlockDecrypt, KeyInit};
+            let c = aes::Aes192::new_from_slice($key)
+                .map_err(|e| anyhow::anyhow!("AES-192 key: {e}"))?;
+            let mut b = aes::cipher::generic_array::GenericArray::clone_from_slice($block);
+            c.decrypt_block(&mut b);
+            $block.copy_from_slice(&b);
+        }};
         (aes256, $key:expr, $block:expr, encrypt) => {{
             use aes::cipher::{BlockEncrypt, KeyInit};
             let c = aes::Aes256::new_from_slice($key)
@@ -168,14 +182,51 @@ pub(crate) fn crypto_ecb(
     }
 
     let mut block = data.to_vec();
-    match (key.len(), dir) {
-        (24, EcbDir::Encrypt) => ecb_arm!(des, key, &mut block, encrypt),
-        (24, EcbDir::Decrypt) => ecb_arm!(des, key, &mut block, decrypt),
-        (16, EcbDir::Encrypt) => ecb_arm!(aes128, key, &mut block, encrypt),
-        (16, EcbDir::Decrypt) => ecb_arm!(aes128, key, &mut block, decrypt),
-        (32, EcbDir::Encrypt) => ecb_arm!(aes256, key, &mut block, encrypt),
-        (32, EcbDir::Decrypt) => ecb_arm!(aes256, key, &mut block, decrypt),
-        (n, _) => bail!("unsupported key length for ECB: {n}"),
+    match (algo, dir) {
+        (MgmtAlgo::Tdes, EcbDir::Encrypt) => ecb_arm!(des, key, &mut block, encrypt),
+        (MgmtAlgo::Tdes, EcbDir::Decrypt) => ecb_arm!(des, key, &mut block, decrypt),
+        (MgmtAlgo::Aes128, EcbDir::Encrypt) => ecb_arm!(aes128, key, &mut block, encrypt),
+        (MgmtAlgo::Aes128, EcbDir::Decrypt) => ecb_arm!(aes128, key, &mut block, decrypt),
+        (MgmtAlgo::Aes192, EcbDir::Encrypt) => ecb_arm!(aes192, key, &mut block, encrypt),
+        (MgmtAlgo::Aes192, EcbDir::Decrypt) => ecb_arm!(aes192, key, &mut block, decrypt),
+        (MgmtAlgo::Aes256, EcbDir::Encrypt) => ecb_arm!(aes256, key, &mut block, encrypt),
+        (MgmtAlgo::Aes256, EcbDir::Decrypt) => ecb_arm!(aes256, key, &mut block, decrypt),
     }
     Ok(block)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // FIPS-197 Appendix C.2 (AES-192) known-answer vector.
+    const AES192_KEY: &str = "000102030405060708090a0b0c0d0e0f1011121314151617";
+    const AES192_PT: &str = "00112233445566778899aabbccddeeff";
+    const AES192_CT: &str = "dda97ca4864cdfe06eaf70a0ec0d7191";
+
+    #[test]
+    fn aes192_known_answer() {
+        let key = hex::decode(AES192_KEY).unwrap();
+        let pt = hex::decode(AES192_PT).unwrap();
+        let ct = crypto_ecb(MgmtAlgo::Aes192, &key, &pt, EcbDir::Encrypt).unwrap();
+        assert_eq!(hex::encode(&ct), AES192_CT);
+        let back = crypto_ecb(MgmtAlgo::Aes192, &key, &ct, EcbDir::Decrypt).unwrap();
+        assert_eq!(back, pt);
+    }
+
+    #[test]
+    fn same_key_bytes_differ_between_tdes_and_aes192() {
+        // A 24-byte key is valid for both algorithms; they must not be
+        // confused (the firmware 5.7 default key is AES-192).
+        let key = hex::decode(crate::auxiliaries::DEFAULT_MANAGEMENT_KEY).unwrap();
+        let tdes = crypto_ecb(MgmtAlgo::Tdes, &key, &[0u8; 8], EcbDir::Encrypt).unwrap();
+        let aes = crypto_ecb(MgmtAlgo::Aes192, &key, &[0u8; 16], EcbDir::Encrypt).unwrap();
+        assert_eq!(tdes.len(), 8);
+        assert_eq!(aes.len(), 16);
+    }
+
+    #[test]
+    fn ecb_rejects_wrong_key_length() {
+        assert!(crypto_ecb(MgmtAlgo::Aes192, &[0u8; 16], &[0u8; 16], EcbDir::Encrypt).is_err());
+    }
 }

@@ -7,12 +7,12 @@
 #[cfg(feature = "virtual-piv")]
 use crate::piv::VirtualPiv;
 use crate::{
-    auxiliaries,
+    auxiliaries::{self, ProtectionMode},
     piv::{hardware::HardwarePiv, DeviceInfo, PivBackend},
 };
 use anyhow::{bail, Context as _, Result};
 use p256::PublicKey;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 use zeroize::Zeroizing;
 
@@ -61,7 +61,12 @@ pub struct Context {
     pub piv: Arc<dyn PivBackend>,
     pub debug: bool,
     pub quiet: bool,
-    pub pin_protected: bool,
+    /// How the management key is protected, from ADMIN DATA at startup.
+    pub protection: ProtectionMode,
+    /// Set when the management key was found through the legacy yb ≤ 0.4.x
+    /// path; the ADMIN DATA rewrite is then due once the command's own
+    /// writes have succeeded (see [`Context::complete_legacy_migration`]).
+    legacy_migration_due: Cell<bool>,
     /// Optional flash handle passed in from the interactive device picker.
     /// Kept alive so the LED continues to flash into the next prompt.
     /// Consumed by [`Context::take_flash`].
@@ -130,11 +135,9 @@ impl Context {
             }
         });
 
-        let (pin_protected, pin_derived) =
-            auxiliaries::detect_pin_protected_mode(&selected_reader, piv.as_ref())
-                .unwrap_or((false, false));
-
-        reject_pin_derived(pin_derived)?;
+        // Unsupported modes (PIN-derived, unparseable) are refused only when
+        // a management key is needed, so read-only commands keep working.
+        let protection = auxiliaries::detect_protection_mode(&selected_reader, piv.as_ref());
 
         Ok(Self {
             reader: selected_reader,
@@ -146,7 +149,8 @@ impl Context {
             piv,
             debug,
             quiet,
-            pin_protected,
+            protection,
+            legacy_migration_due: Cell::new(false),
             flash_handle,
         })
     }
@@ -157,8 +161,8 @@ impl Context {
     /// custom `PivBackend` implementation.  The backend must expose exactly
     /// one device; if it exposes none or more than one, an error is returned.
     ///
-    /// Default-credential and PIN-derived-key checks are skipped (the caller
-    /// controls the backend and is assumed to have configured it correctly).
+    /// Default-credential checks are skipped (the caller controls the
+    /// backend and is assumed to have configured it correctly).
     pub fn with_backend(
         backend: Arc<dyn PivBackend>,
         pin: Option<String>,
@@ -174,11 +178,7 @@ impl Context {
         };
         let reader = device.reader.clone();
 
-        let (pin_protected, pin_derived) =
-            auxiliaries::detect_pin_protected_mode(&reader, backend.as_ref())
-                .unwrap_or((false, false));
-
-        reject_pin_derived(pin_derived)?;
+        let protection = auxiliaries::detect_protection_mode(&reader, backend.as_ref());
 
         Ok(Self {
             reader,
@@ -190,7 +190,8 @@ impl Context {
             piv: backend,
             debug,
             quiet: false,
-            pin_protected,
+            protection,
+            legacy_migration_due: Cell::new(false),
             flash_handle: None,
         })
     }
@@ -212,25 +213,109 @@ impl Context {
         Ok(resolved)
     }
 
+    /// Fail if the card's management key protection is one yb cannot write
+    /// with (PIN-derived, or unparseable ADMIN DATA).
+    pub fn ensure_supported_protection(&self) -> Result<()> {
+        match self.protection {
+            ProtectionMode::Derived => bail!("{}", auxiliaries::PIN_DERIVED_UNSUPPORTED),
+            ProtectionMode::Invalid => bail!(
+                "the YubiKey's ADMIN DATA object (0x5FFF00) cannot be parsed; \
+                 refusing to write"
+            ),
+            ProtectionMode::None
+            | ProtectionMode::Standard
+            | ProtectionMode::LegacyOrPukBlocked => Ok(()),
+        }
+    }
+
     /// Return the management key to use for write operations.
     ///
     /// Priority: explicit --key > PIN-protected retrieval > None (use default).
+    ///
+    /// On a card with the ambiguous legacy flag (`0x01` without `0x02`), the
+    /// PRINTED object decides: if it holds a key, the card was protected by
+    /// yb ≤ 0.4.x — the key is used and an ADMIN DATA migration becomes due;
+    /// otherwise the flag really means "PUK blocked" and the card is treated
+    /// as not protected.
     pub fn management_key_for_write(&self) -> Result<Option<String>> {
+        self.ensure_supported_protection()?;
         if let Some(ref k) = self.management_key {
             return Ok(Some(k.clone()));
         }
-        if self.pin_protected {
-            let pin = self.require_pin()?.ok_or_else(|| {
-                anyhow::anyhow!("PIN required to retrieve PIN-protected management key")
-            })?;
-            let key = auxiliaries::get_pin_protected_management_key(
-                &self.reader,
-                self.piv.as_ref(),
-                &pin,
-            )?;
-            return Ok(Some(key));
+        match self.protection {
+            ProtectionMode::Standard => {
+                let pin = self.require_pin_for_management_key()?;
+                let key = auxiliaries::get_pin_protected_management_key(
+                    &self.reader,
+                    self.piv.as_ref(),
+                    &pin,
+                )?;
+                Ok(Some(key))
+            }
+            ProtectionMode::LegacyOrPukBlocked => {
+                let pin = self.require_pin_for_management_key()?;
+                // Verify first, so that a wrong PIN is reported as such and
+                // not mistaken for an empty PRINTED object.
+                self.piv.verify_pin(&self.reader, &pin)?;
+                match auxiliaries::get_pin_protected_management_key(
+                    &self.reader,
+                    self.piv.as_ref(),
+                    &pin,
+                ) {
+                    Ok(key) => {
+                        self.legacy_migration_due.set(true);
+                        Ok(Some(key))
+                    }
+                    Err(_) => Ok(None),
+                }
+            }
+            _ => Ok(None),
         }
-        Ok(None)
+    }
+
+    fn require_pin_for_management_key(&self) -> Result<String> {
+        self.require_pin()?
+            .ok_or_else(|| anyhow::anyhow!("PIN required to retrieve PIN-protected management key"))
+    }
+
+    /// Whether this card was found to carry the legacy yb ≤ 0.4.x ADMIN DATA
+    /// flag during this invocation.
+    pub fn legacy_migration_due(&self) -> bool {
+        self.legacy_migration_due.get()
+    }
+
+    /// Rewrite a legacy yb ≤ 0.4.x ADMIN DATA object to the standard layout
+    /// (spec 0021 §4), if [`management_key_for_write`] found one.
+    ///
+    /// Call once the command's own writes have succeeded, with the
+    /// management key the command used.  A failure is reported as a warning
+    /// and does not fail the command.
+    ///
+    /// [`management_key_for_write`]: Context::management_key_for_write
+    pub fn complete_legacy_migration(&self, management_key: Option<&str>) {
+        if !self.legacy_migration_due.replace(false) {
+            return;
+        }
+        let pin = self.pin.borrow().as_ref().map(|z| z.as_str().to_owned());
+        match auxiliaries::migrate_legacy_admin_data(
+            &self.reader,
+            self.piv.as_ref(),
+            management_key,
+            pin.as_deref(),
+        ) {
+            Ok(()) => {
+                if !self.quiet {
+                    eprintln!(
+                        "yb: note: upgraded PIN-protected management key metadata \
+                         to the standard (ykman-compatible) layout"
+                    );
+                }
+            }
+            Err(e) => eprintln!(
+                "Warning: could not upgrade the PIN-protected management key \
+                 metadata to the standard layout: {e:#}"
+            ),
+        }
     }
 
     /// Take the flash handle passed in from the interactive device picker.
@@ -250,16 +335,6 @@ impl Context {
             .with_context(|| format!("reading certificate from slot 0x{slot:02x}"))?;
         parse_ec_public_key_from_cert_der(&cert_der)
     }
-}
-
-fn reject_pin_derived(pin_derived: bool) -> Result<()> {
-    if pin_derived {
-        bail!(
-            "PIN-derived management key mode is deprecated and not supported. \
-             Please migrate to PIN-protected mode."
-        );
-    }
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
