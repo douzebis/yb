@@ -10,7 +10,7 @@ use std::io::Read;
 use std::path::PathBuf;
 use yb_core::orchestrator::{self, Compression, Encryption, StoreOptions};
 use yb_core::store::{constants::MAX_NAME_LEN, Store};
-use yb_core::Context;
+use yb_core::{Context, SlotKeyCheck};
 
 #[derive(Args, Debug)]
 pub struct StoreArgs {
@@ -145,6 +145,17 @@ pub fn run(ctx: &Context, args: &StoreArgs) -> Result<()> {
         }
     }
 
+    // Refuse to write blobs that the slot key could not decrypt or whose
+    // signatures would not verify (spec 0022 §6).
+    let slot = store.store_key_slot;
+    if ctx.check_slot_key(slot)? == SlotKeyCheck::Mismatch {
+        bail!(
+            "the key in slot 0x{slot:02x} does not match its certificate; new blobs would \
+             be undecryptable.  Nothing was stored.  Run `yb format --generate` \
+             (this erases the store)."
+        );
+    }
+
     let pin = ctx.require_pin()?;
     for (name, payload) in &entries {
         let ok = orchestrator::store_blob(
@@ -159,7 +170,7 @@ pub fn run(ctx: &Context, args: &StoreArgs) -> Result<()> {
                 },
                 compression,
             },
-            mgmt_key.as_deref(),
+            &mgmt_key,
             pin.as_deref(),
         )?;
         if !ok {
@@ -178,6 +189,6 @@ pub fn run(ctx: &Context, args: &StoreArgs) -> Result<()> {
         }
     }
 
-    ctx.complete_legacy_migration(mgmt_key.as_deref());
+    ctx.complete_pending_repairs();
     Ok(())
 }

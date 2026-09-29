@@ -404,8 +404,7 @@ impl Store {
         piv: &dyn PivBackend,
         object_count: u8,
         store_key_slot: u8,
-        management_key: Option<&str>,
-        pin: Option<&str>,
+        management_key: &str,
     ) -> Result<Self> {
         // Build a temporary store (no objects yet) so we can use make_object.
         let mut store = Self {
@@ -425,7 +424,7 @@ impl Store {
                 next_chunk: 0,
             }));
         }
-        store.sync(piv, management_key, pin)?;
+        store.sync(piv, management_key)?;
         Ok(store)
     }
 
@@ -480,12 +479,7 @@ impl Store {
     }
 
     /// Write all dirty objects back to the device.
-    pub fn sync(
-        &mut self,
-        piv: &dyn PivBackend,
-        management_key: Option<&str>,
-        pin: Option<&str>,
-    ) -> Result<()> {
+    pub fn sync(&mut self, piv: &dyn PivBackend, management_key: &str) -> Result<()> {
         use indicatif::{ProgressBar, ProgressStyle};
 
         let dirty: Vec<u8> = self
@@ -506,7 +500,7 @@ impl Store {
             let obj = &mut self.objects[*idx as usize];
             let id = OBJECT_ID_ZERO + obj.index as u32;
             let data = obj.to_bytes();
-            piv.write_object(&self.reader, id, &data, management_key, pin)
+            piv.write_object(&self.reader, id, &data, management_key)
                 .with_context(|| format!("writing object 0x{id:06x}"))?;
             obj.dirty = false;
             pb.inc(1);

@@ -291,9 +291,9 @@ would do, run bare `yb format` and answer no at the confirmation.
 
 - Default-credential errors from any command add: `Tip: run `yb format`
   in a terminal for guided setup.`
-- When an existing store with at least one blob is about to be erased,
-  a one-line warning listing the blob count goes to stderr.  There is no
-  prompt, so scripts and `yb self-test` are unaffected.
+- When an existing store is about to be erased, the blobs are listed as
+  specified in spec 0022 §1 step 6 (printed even with `--quiet`).  There
+  is no prompt, so scripts and `yb self-test` are unaffected.
 
 ### 9. Backward compatibility
 

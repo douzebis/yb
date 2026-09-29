@@ -81,8 +81,7 @@ impl PivBackend for EmulatedPiv {
         reader: &str,
         id: u32,
         data: &[u8],
-        _management_key: Option<&str>,
-        _pin: Option<&str>,
+        _management_key: &str,
     ) -> Result<()> {
         if reader != self.reader {
             bail!("emulated: unknown reader '{reader}'");
@@ -94,6 +93,13 @@ impl PivBackend for EmulatedPiv {
         }
         let mut state = self.state.lock().unwrap();
         state.objects.insert(id, data.to_vec());
+        Ok(())
+    }
+
+    fn authenticate_management_key(&self, reader: &str, _management_key: &str) -> Result<()> {
+        if reader != self.reader {
+            bail!("emulated: unknown reader '{reader}'");
+        }
         Ok(())
     }
 
@@ -166,7 +172,7 @@ impl PivBackend for EmulatedPiv {
         reader: &str,
         _slot: u8,
         _subject: &str,
-        _management_key: Option<&str>,
+        _management_key: &str,
         _pin: Option<&str>,
     ) -> Result<Vec<u8>> {
         if reader != self.reader {

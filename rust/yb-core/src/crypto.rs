@@ -243,14 +243,10 @@ mod tests {
         fn read_object(&self, _r: &str, _id: u32) -> Result<Vec<u8>> {
             bail!("mock")
         }
-        fn write_object(
-            &self,
-            _r: &str,
-            _id: u32,
-            _d: &[u8],
-            _mk: Option<&str>,
-            _pin: Option<&str>,
-        ) -> Result<()> {
+        fn write_object(&self, _r: &str, _id: u32, _d: &[u8], _mk: &str) -> Result<()> {
+            bail!("mock")
+        }
+        fn authenticate_management_key(&self, _r: &str, _mk: &str) -> Result<()> {
             bail!("mock")
         }
         fn verify_pin(&self, _r: &str, _pin: &str) -> Result<()> {
@@ -273,7 +269,7 @@ mod tests {
             _r: &str,
             _slot: u8,
             _subj: &str,
-            _mk: Option<&str>,
+            _mk: &str,
             _pin: Option<&str>,
         ) -> Result<Vec<u8>> {
             bail!("mock")
@@ -309,14 +305,10 @@ mod tests {
         fn read_object(&self, _r: &str, _id: u32) -> Result<Vec<u8>> {
             bail!("mock")
         }
-        fn write_object(
-            &self,
-            _r: &str,
-            _id: u32,
-            _d: &[u8],
-            _mk: Option<&str>,
-            _pin: Option<&str>,
-        ) -> Result<()> {
+        fn write_object(&self, _r: &str, _id: u32, _d: &[u8], _mk: &str) -> Result<()> {
+            bail!("mock")
+        }
+        fn authenticate_management_key(&self, _r: &str, _mk: &str) -> Result<()> {
             bail!("mock")
         }
         fn verify_pin(&self, _r: &str, _pin: &str) -> Result<()> {
@@ -339,7 +331,7 @@ mod tests {
             _r: &str,
             _slot: u8,
             _subj: &str,
-            _mk: Option<&str>,
+            _mk: &str,
             _pin: Option<&str>,
         ) -> Result<Vec<u8>> {
             bail!("mock")

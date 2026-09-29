@@ -12,7 +12,7 @@ pub(crate) mod tlv;
 pub mod virtual_piv;
 
 pub use mgmt::MgmtAlgo;
-pub use virtual_piv::VirtualPiv;
+pub use virtual_piv::{Fault, VirtualPiv};
 
 use anyhow::Result;
 
@@ -53,19 +53,16 @@ pub trait PivBackend: Send + Sync {
     /// Read a PIV data object by its numeric ID.
     fn read_object(&self, reader: &str, id: u32) -> Result<Vec<u8>>;
 
-    /// Write a PIV data object.
+    /// Write a PIV data object, authenticating with `management_key`.
     ///
-    /// If `management_key` is Some, it is used directly for authentication.
-    /// If `management_key` is None and `pin` is Some, the management key is
-    /// retrieved from the PIN-protected PRINTED object in the same session.
-    fn write_object(
-        &self,
-        reader: &str,
-        id: u32,
-        data: &[u8],
-        management_key: Option<&str>,
-        pin: Option<&str>,
-    ) -> Result<()>;
+    /// Empty `data` deletes the object.  The management key is always
+    /// explicit: resolving it (e.g. from the PIN-protected PRINTED object)
+    /// is the caller's job — see `Context::management_key_for_write`.
+    fn write_object(&self, reader: &str, id: u32, data: &[u8], management_key: &str) -> Result<()>;
+
+    /// Authenticate with `management_key` and write nothing.  Fails if the
+    /// card rejects the key.
+    fn authenticate_management_key(&self, reader: &str, management_key: &str) -> Result<()>;
 
     /// Verify the user PIN.  Returns Err if verification fails.
     fn verify_pin(&self, reader: &str, pin: &str) -> Result<()>;
@@ -109,7 +106,7 @@ pub trait PivBackend: Send + Sync {
         reader: &str,
         slot: u8,
         subject: &str,
-        management_key: Option<&str>,
+        management_key: &str,
         pin: Option<&str>,
     ) -> Result<Vec<u8>>;
 

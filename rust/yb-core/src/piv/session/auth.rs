@@ -5,7 +5,6 @@
 //! PIN verification and management-key authentication.
 
 use super::transport::{sw_description, PcscSession};
-use crate::auxiliaries::{extract_pin_protected_key, OBJ_PRINTED};
 use crate::piv::mgmt::{parse_mgmt_metadata, MgmtAlgo, GET_METADATA_MGMT};
 use crate::piv::tlv::{crypto_ecb, encode_length, encode_tlv, EcbDir};
 use anyhow::{bail, Context, Result};
@@ -135,46 +134,5 @@ impl PcscSession {
         }
 
         Ok(())
-    }
-
-    /// Resolve the management key from three sources, in priority order:
-    /// 1. Explicit `management_key` argument.
-    /// 2. PIN-protected object on the device (requires verifying `pin` first).
-    /// 3. Fails with a helpful message if neither is available.
-    ///
-    /// Does **not** authenticate — call [`authenticate_management_key`] with
-    /// the returned key to complete the process.
-    pub(crate) fn resolve_management_key(
-        &mut self,
-        management_key: Option<&str>,
-        pin: Option<&str>,
-        caller: &str,
-    ) -> Result<String> {
-        if let Some(k) = management_key {
-            return Ok(k.to_owned());
-        }
-        if let Some(p) = pin {
-            self.verify_pin(p)?;
-            let raw = self.get_data(OBJ_PRINTED).map_err(|_| {
-                anyhow::anyhow!(
-                    "management key not found on device; \
-                     supply it via YB_MANAGEMENT_KEY or the --key flag"
-                )
-            })?;
-            return extract_pin_protected_key(&raw);
-        }
-        bail!("{caller}: management_key or pin required");
-    }
-
-    /// Resolve the management key and authenticate in one step.
-    pub(crate) fn resolve_and_auth_management_key(
-        &mut self,
-        management_key: Option<&str>,
-        pin: Option<&str>,
-        caller: &str,
-    ) -> Result<String> {
-        let key = self.resolve_management_key(management_key, pin, caller)?;
-        self.authenticate_management_key(&key)?;
-        Ok(key)
     }
 }

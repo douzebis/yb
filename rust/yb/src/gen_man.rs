@@ -138,15 +138,22 @@ Each object is written at exactly the size its content requires (9-byte
 sentinel for empty slots, up to 3,063 bytes for occupied slots).
 .PP
 By default \fBformat\fR expects an ECDH key to already exist in the chosen
-PIV slot (verified via its X.509 certificate).  Pass \fB\-\-generate\fR to
-create a new P-256 key pair and a self-signed certificate on the card.
+PIV slot, and checks that it matches the slot's X.509 certificate.  Pass
+\fB\-\-generate\fR to create a new P-256 key pair and a self-signed
+certificate on the card.
 .PP
 Pass \fB\-\-protect\fR to generate a random management key and store it in
 PIN-protected mode (the PRINTED PIV object).  After this, future write
 operations only require the PIN — no \fBYB_MANAGEMENT_KEY\fR or
 \fB\-\-key\fR needed.  The current management key is taken from
-\fBYB_MANAGEMENT_KEY\fR / \fB\-\-key\fR, or the factory default if neither
-is set.
+\fBYB_MANAGEMENT_KEY\fR / \fB\-\-key\fR, else from PRINTED if the card is
+already protected, else the factory default.
+.PP
+\fBformat\fR first checks everything it can without writing (PIN,
+management key, slot key) and lists the blobs it will destroy.  It then
+sets up protection, erases the store, and generates the key last, so that
+a failure never leaves blobs behind a replaced key.  If it stops partway,
+the message says what was done and what to run next.
 .PP
 \fBformat\fR must be run once before \fBstore\fR, \fBfetch\fR, or any other
 command that accesses the store."#,

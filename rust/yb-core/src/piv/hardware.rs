@@ -65,17 +65,15 @@ impl PivBackend for HardwarePiv {
         session.get_data(id)
     }
 
-    fn write_object(
-        &self,
-        reader: &str,
-        id: u32,
-        data: &[u8],
-        management_key: Option<&str>,
-        pin: Option<&str>,
-    ) -> Result<()> {
+    fn write_object(&self, reader: &str, id: u32, data: &[u8], management_key: &str) -> Result<()> {
         let mut session = PcscSession::open(reader)?;
-        session.resolve_and_auth_management_key(management_key, pin, "write_object")?;
+        session.authenticate_management_key(management_key)?;
         session.put_data(id, data)
+    }
+
+    fn authenticate_management_key(&self, reader: &str, management_key: &str) -> Result<()> {
+        let mut session = PcscSession::open(reader)?;
+        session.authenticate_management_key(management_key)
     }
 
     fn verify_pin(&self, reader: &str, pin: &str) -> Result<()> {
@@ -194,7 +192,7 @@ impl PivBackend for HardwarePiv {
         reader: &str,
         slot: u8,
         subject: &str,
-        management_key: Option<&str>,
+        management_key: &str,
         pin: Option<&str>,
     ) -> Result<Vec<u8>> {
         use crate::auxiliaries::parse_subject_dn;
@@ -204,10 +202,10 @@ impl PivBackend for HardwarePiv {
         use sha2::{Digest, Sha256};
         use std::sync::Mutex;
 
-        // ---- Step 1: resolve management key, authenticate, generate key ----
+        // ---- Step 1: authenticate, generate key ----
         let mut session = PcscSession::open(reader)?;
-        let mgmt_key_owned =
-            session.resolve_and_auth_management_key(management_key, pin, "generate_certificate")?;
+        session.authenticate_management_key(management_key)?;
+        let mgmt_key_owned = management_key.to_owned();
         let pubkey_point = session.generate_key(slot)?;
         drop(session);
 

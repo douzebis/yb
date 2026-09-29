@@ -55,7 +55,7 @@ pub fn store_blob(
     name: &str,
     payload: &[u8],
     options: StoreOptions<'_>,
-    management_key: Option<&str>,
+    management_key: &str,
     pin: Option<&str>,
 ) -> Result<bool> {
     validate_name(name)?;
@@ -154,7 +154,7 @@ pub fn store_blob(
     // Append 65-byte signature trailer (spec 0017).
     append_signature_trailer(store, piv, &data, pin);
 
-    store.sync(piv, management_key, pin)?;
+    store.sync(piv, management_key)?;
     Ok(true)
 }
 
@@ -216,8 +216,7 @@ pub fn remove_blob(
     store: &mut Store,
     piv: &dyn PivBackend,
     name: &str,
-    management_key: Option<&str>,
-    pin: Option<&str>,
+    management_key: &str,
 ) -> Result<bool> {
     let head_idx = match store.find_head(name) {
         None => return Ok(false),
@@ -228,7 +227,7 @@ pub fn remove_blob(
     for idx in chain {
         store.objects[idx as usize].reset();
     }
-    store.sync(piv, management_key, pin)?;
+    store.sync(piv, management_key)?;
     Ok(true)
 }
 
@@ -325,7 +324,7 @@ mod tests {
         let reader = piv.reader_name();
 
         // Format a tiny store: 2 objects.
-        let mut store = Store::format(&reader, &piv, 2, 0x82, Some(mgmt), None).unwrap();
+        let mut store = Store::format(&reader, &piv, 2, 0x82, mgmt).unwrap();
 
         // Fill both slots with single-chunk blobs.
         let ok1 = store_blob(
@@ -337,7 +336,7 @@ mod tests {
                 encryption: Encryption::None,
                 compression: Compression::None,
             },
-            Some(mgmt),
+            mgmt,
             None,
         )
         .unwrap();
@@ -351,7 +350,7 @@ mod tests {
                 encryption: Encryption::None,
                 compression: Compression::None,
             },
-            Some(mgmt),
+            mgmt,
             None,
         )
         .unwrap();
@@ -369,7 +368,7 @@ mod tests {
                 encryption: Encryption::None,
                 compression: Compression::None,
             },
-            Some(mgmt),
+            mgmt,
             None,
         );
         assert!(result.is_ok(), "full store must not error");

@@ -16,7 +16,6 @@
 //! confuse them with production YubiKey credentials.
 
 use super::{DeviceInfo, MgmtAlgo, PivBackend};
-use crate::auxiliaries::{extract_pin_protected_key, OBJ_PRINTED};
 use anyhow::{anyhow, bail, Result};
 use p256::{elliptic_curve::sec1::ToEncodedPoint, PublicKey, SecretKey};
 use rand::rngs::OsRng;
@@ -67,6 +66,29 @@ impl SlotKey {
 }
 
 // ---------------------------------------------------------------------------
+// Fault injection (spec 0022 §5)
+// ---------------------------------------------------------------------------
+
+/// A failure to inject into a [`VirtualPiv`], to test recovery paths.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fault {
+    /// The Nth object write from now (1-based) is rejected; the object is
+    /// left unchanged.
+    WriteFails(usize),
+    /// SET MANAGEMENT KEY is rejected; the key is unchanged.
+    SetManagementKeyRejected,
+    /// SET MANAGEMENT KEY is applied, but reported as failed (lost reply).
+    SetManagementKeyLostReply,
+    /// The card is lost during SET MANAGEMENT KEY, after applying the
+    /// change or not.  Every later authentication fails until
+    /// [`VirtualPiv::clear_faults`] (which simulates reconnecting).
+    CardLostDuringSetManagementKey { applied: bool },
+    /// `generate_certificate` replaces the key in the slot, then fails
+    /// before writing the certificate (the old certificate remains).
+    GenerateCertificateFailsAfterKey,
+}
+
+// ---------------------------------------------------------------------------
 // Internal mutable state
 // ---------------------------------------------------------------------------
 
@@ -89,6 +111,38 @@ struct VirtualState {
     key_slots: HashMap<u8, SlotKey>,
     // PIV data objects: object ID → raw bytes (stored as the value inside 53 wrapper)
     objects: HashMap<u32, Vec<u8>>,
+
+    // Injected faults, and whether the card is "lost" (see `Fault`).
+    faults: Vec<Fault>,
+    card_lost: bool,
+}
+
+impl VirtualState {
+    /// Remove and return the first injected fault matching `pred`.
+    fn take_fault(&mut self, pred: impl Fn(&Fault) -> bool) -> Option<Fault> {
+        let pos = self.faults.iter().position(pred)?;
+        Some(self.faults.remove(pos))
+    }
+
+    /// Count one object write against a pending `WriteFails`; return true
+    /// if this write must fail.
+    fn write_must_fail(&mut self) -> bool {
+        let Some(pos) = self
+            .faults
+            .iter()
+            .position(|f| matches!(f, Fault::WriteFails(_)))
+        else {
+            return false;
+        };
+        if let Fault::WriteFails(n) = &mut self.faults[pos] {
+            *n -= 1;
+            if *n == 0 {
+                self.faults.remove(pos);
+                return true;
+            }
+        }
+        false
+    }
 }
 
 impl VirtualState {
@@ -107,6 +161,8 @@ impl VirtualState {
             mgmt_authenticated: false,
             key_slots: HashMap::new(),
             objects: HashMap::new(),
+            faults: Vec::new(),
+            card_lost: false,
         }
     }
 }
@@ -254,6 +310,19 @@ impl VirtualPiv {
         self.state.lock().unwrap().reader.clone()
     }
 
+    /// Inject a failure (see [`Fault`]).  Faults fire once, in the order
+    /// the matching operations happen.
+    pub fn inject_fault(&self, fault: Fault) {
+        self.state.lock().unwrap().faults.push(fault);
+    }
+
+    /// Drop pending faults and "reconnect" a lost card.
+    pub fn clear_faults(&self) {
+        let mut s = self.state.lock().unwrap();
+        s.faults.clear();
+        s.card_lost = false;
+    }
+
     /// Serialize the current state back to a YAML fixture file.
     ///
     /// This lets subprocess tests persist state written by one `yb` invocation
@@ -337,19 +406,25 @@ impl PivBackend for VirtualPiv {
         Ok(s.objects.get(&id).map(|v| v.len()))
     }
 
-    fn write_object(
-        &self,
-        reader: &str,
-        id: u32,
-        data: &[u8],
-        management_key: Option<&str>,
-        pin: Option<&str>,
-    ) -> Result<()> {
+    fn write_object(&self, reader: &str, id: u32, data: &[u8], management_key: &str) -> Result<()> {
         let mut s = self.state.lock().unwrap();
         check_reader(&s, reader)?;
-        authenticate_for_write(&mut s, management_key, pin)?;
-        s.objects.insert(id, data.to_vec());
+        do_authenticate_management_key(&mut s, management_key)?;
+        if s.write_must_fail() {
+            bail!("virtual: injected failure writing object 0x{id:06x}");
+        }
+        if data.is_empty() {
+            s.objects.remove(&id);
+        } else {
+            s.objects.insert(id, data.to_vec());
+        }
         Ok(())
+    }
+
+    fn authenticate_management_key(&self, reader: &str, management_key: &str) -> Result<()> {
+        let mut s = self.state.lock().unwrap();
+        check_reader(&s, reader)?;
+        do_authenticate_management_key(&mut s, management_key)
     }
 
     fn verify_pin(&self, reader: &str, pin: &str) -> Result<()> {
@@ -462,7 +537,7 @@ impl PivBackend for VirtualPiv {
         reader: &str,
         slot: u8,
         subject: &str,
-        management_key: Option<&str>,
+        management_key: &str,
         pin: Option<&str>,
     ) -> Result<Vec<u8>> {
         use crate::auxiliaries::parse_subject_dn;
@@ -473,14 +548,22 @@ impl PivBackend for VirtualPiv {
         if let Some(p) = pin {
             do_verify_pin(&mut s, p)?;
         }
-        if let Some(key) = management_key {
-            do_authenticate_management_key(&mut s, key)?;
-        } else if !s.mgmt_authenticated {
-            bail!("virtual: management key authentication required");
-        }
+        do_authenticate_management_key(&mut s, management_key)?;
 
         // Generate a fresh key in the slot.
         let slot_key = SlotKey::generate();
+
+        // Like hardware, key generation and certificate import are separate
+        // steps: the key can be replaced while the old certificate remains.
+        if s.take_fault(|f| *f == Fault::GenerateCertificateFailsAfterKey)
+            .is_some()
+        {
+            let old_cert = s.key_slots.get(&slot).and_then(|k| k.cert_der.clone());
+            let mut replaced = slot_key;
+            replaced.cert_der = old_cert;
+            s.key_slots.insert(slot, replaced);
+            bail!("virtual: injected failure writing the certificate for slot 0x{slot:02x}");
+        }
         // Export as PKCS#8 DER so rcgen can build a KeyPair from it.
         use p256::pkcs8::EncodePrivateKey;
         // pkcs8_der must remain alive until key_pair is built; it is zeroed on drop.
@@ -541,9 +624,31 @@ impl PivBackend for VirtualPiv {
         do_authenticate_management_key(&mut s, old_key_hex)?;
         let new_bytes = hex::decode(new_key_hex).map_err(|e| anyhow!("new key hex: {e}"))?;
         algo.check_key_len(&new_bytes)?;
-        s.management_key_hex = new_key_hex.to_owned();
-        s.mgmt_algo = algo;
-        Ok(())
+
+        let fault = s.take_fault(|f| {
+            matches!(
+                f,
+                Fault::SetManagementKeyRejected
+                    | Fault::SetManagementKeyLostReply
+                    | Fault::CardLostDuringSetManagementKey { .. }
+            )
+        });
+        let apply = !matches!(
+            fault,
+            Some(Fault::SetManagementKeyRejected)
+                | Some(Fault::CardLostDuringSetManagementKey { applied: false })
+        );
+        if apply {
+            s.management_key_hex = new_key_hex.to_owned();
+            s.mgmt_algo = algo;
+        }
+        if let Some(Fault::CardLostDuringSetManagementKey { .. }) = fault {
+            s.card_lost = true;
+        }
+        match fault {
+            Some(f) => bail!("virtual: injected SET MANAGEMENT KEY failure ({f:?})"),
+            None => Ok(()),
+        }
     }
 
     fn save_fixture(&self, path: &std::path::Path) -> Result<()> {
@@ -576,6 +681,9 @@ fn do_verify_pin(s: &mut VirtualState, pin: &str) -> Result<()> {
 }
 
 fn do_authenticate_management_key(s: &mut VirtualState, key_hex: &str) -> Result<()> {
+    if s.card_lost {
+        bail!("virtual: card not responding (injected)");
+    }
     // Like the hardware path: a key of the wrong length for the card's
     // algorithm is rejected before any authentication attempt.
     let key_bytes = hex::decode(key_hex).map_err(|e| anyhow!("decoding management key: {e}"))?;
@@ -585,28 +693,4 @@ fn do_authenticate_management_key(s: &mut VirtualState, key_hex: &str) -> Result
     }
     s.mgmt_authenticated = true;
     Ok(())
-}
-
-/// Resolve and authenticate the management key from either a direct hex value
-/// or the PIN-protected PRINTED object, matching write_object behaviour.
-fn authenticate_for_write(
-    s: &mut VirtualState,
-    management_key: Option<&str>,
-    pin: Option<&str>,
-) -> Result<()> {
-    if let Some(key) = management_key {
-        do_authenticate_management_key(s, key)
-    } else if let Some(p) = pin {
-        do_verify_pin(s, p)?;
-        // Read PIN-protected mgmt key from PRINTED object (0x5FC109).
-        let raw = s
-            .objects
-            .get(&OBJ_PRINTED)
-            .cloned()
-            .ok_or_else(|| anyhow!("virtual: no PIN-protected management key stored"))?;
-        let key_hex = extract_pin_protected_key(&raw)?;
-        do_authenticate_management_key(s, &key_hex)
-    } else {
-        bail!("virtual: management_key or pin required for write");
-    }
 }

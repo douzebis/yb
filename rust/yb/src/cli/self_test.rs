@@ -213,10 +213,7 @@ pub fn run(ctx: &mut Context, args: &SelfTestArgs) -> Result<()> {
         .require_pin()?
         .ok_or_else(|| anyhow::anyhow!("PIN is required for self-test"))?;
 
-    let mgmt_key = ctx.management_key_for_write()?.unwrap_or_else(|| {
-        // Default YubiKey management key.
-        "010203040506070801020304050607080102030405060708".to_owned()
-    });
+    let mgmt_key = ctx.management_key_for_write()?;
 
     // Resolve the reader string for NVM measurements (single device assumed).
     let reader = ctx

@@ -42,7 +42,7 @@ fn make_ctx(piv: VirtualPiv) -> Context {
 
 /// Format a store inside the given context's backend.
 fn format_store(ctx: &Context) {
-    Store::format(&ctx.reader, ctx.piv.as_ref(), 8, 0x82, Some(MGMT), None).unwrap();
+    Store::format(&ctx.reader, ctx.piv.as_ref(), 8, 0x82, MGMT).unwrap();
 }
 
 // ---------------------------------------------------------------------------
@@ -59,7 +59,7 @@ mod store_tests {
         let ctx = make_ctx(piv);
         // Generate a certificate so the encrypted path can read the public key.
         ctx.piv
-            .generate_certificate(&ctx.reader, 0x82, "CN=Test", Some(MGMT), None)
+            .generate_certificate(&ctx.reader, 0x82, "CN=Test", MGMT, None)
             .unwrap();
         format_store(&ctx);
 
@@ -521,7 +521,7 @@ mod fsck_tests {
         let piv = with_key_piv();
         let ctx = make_ctx(piv);
         ctx.piv
-            .generate_certificate(&ctx.reader, 0x82, "CN=Test", Some(MGMT), None)
+            .generate_certificate(&ctx.reader, 0x82, "CN=Test", MGMT, None)
             .unwrap();
         format_store(&ctx);
         store_plain(&ctx, "blob", b"the payload bytes");
@@ -545,7 +545,7 @@ mod fsck_tests {
     /// Write raw PIV object bytes for store object at `index`.
     fn write_raw(ctx: &Context, index: u32, data: &[u8]) {
         ctx.piv
-            .write_object(&ctx.reader, OBJECT_ID_ZERO + index, data, Some(MGMT), None)
+            .write_object(&ctx.reader, OBJECT_ID_ZERO + index, data, MGMT)
             .unwrap();
     }
 
@@ -588,7 +588,7 @@ mod fsck_tests {
         let piv = with_key_piv();
         let ctx = make_ctx(piv);
         // Format a 4-object store.
-        Store::format(&ctx.reader, ctx.piv.as_ref(), 4, 0x82, Some(MGMT), None).unwrap();
+        Store::format(&ctx.reader, ctx.piv.as_ref(), 4, 0x82, MGMT).unwrap();
 
         // Write two head objects with the same name by manipulating the store
         // in-memory and syncing.
@@ -618,7 +618,7 @@ mod fsck_tests {
         obj1.blob_name = "dup".to_owned();
         obj1.set_payload(vec![0]);
         store.objects[1] = obj1;
-        store.sync(ctx.piv.as_ref(), Some(MGMT), None).unwrap();
+        store.sync(ctx.piv.as_ref(), MGMT).unwrap();
 
         // Re-read and run detect_anomalies.
         let store2 = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
@@ -641,7 +641,7 @@ mod fsck_tests {
 
         let piv = with_key_piv();
         let ctx = make_ctx(piv);
-        Store::format(&ctx.reader, ctx.piv.as_ref(), 4, 0x82, Some(MGMT), None).unwrap();
+        Store::format(&ctx.reader, ctx.piv.as_ref(), 4, 0x82, MGMT).unwrap();
 
         let mut store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
 
@@ -667,7 +667,7 @@ mod fsck_tests {
         });
         obj1.set_payload(vec![0]);
         store.objects[1] = obj1;
-        store.sync(ctx.piv.as_ref(), Some(MGMT), None).unwrap();
+        store.sync(ctx.piv.as_ref(), MGMT).unwrap();
 
         let store2 = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
         let warnings = detect_anomalies(&store2);
@@ -749,7 +749,7 @@ mod fsck_tests {
         let ctx = make_ctx(piv);
         let cert_der = ctx
             .piv
-            .generate_certificate(&ctx.reader, 0x82, "CN=Test", Some(MGMT), None)
+            .generate_certificate(&ctx.reader, 0x82, "CN=Test", MGMT, None)
             .unwrap();
         format_store(&ctx);
 
@@ -797,7 +797,7 @@ mod format_tests {
         let ctx = make_ctx(piv);
         // Pre-generate a cert in slot 0x82 so verify_certificate passes.
         ctx.piv
-            .generate_certificate(&ctx.reader, 0x82, "CN=Test", Some(MGMT), None)
+            .generate_certificate(&ctx.reader, 0x82, "CN=Test", MGMT, None)
             .unwrap();
 
         let args = FormatArgs {
@@ -817,7 +817,7 @@ mod format_tests {
         let ctx = make_ctx(piv);
         // 130 decimal == 0x82.
         ctx.piv
-            .generate_certificate(&ctx.reader, 0x82, "CN=Test", Some(MGMT), None)
+            .generate_certificate(&ctx.reader, 0x82, "CN=Test", MGMT, None)
             .unwrap();
 
         let args = FormatArgs {
@@ -849,26 +849,27 @@ mod format_tests {
 }
 
 // ---------------------------------------------------------------------------
-// management key algorithm and ADMIN DATA (spec 0021)
+// Card setups shared by the spec 0021 and 0022 tests
 // ---------------------------------------------------------------------------
 
-mod mgmt_key_tests {
+mod cards {
     use super::*;
-    use yb::cli::format::{run as format_run, FormatArgs};
     use yb::cli::store::{run as store_run, StoreArgs};
-    use yb_core::auxiliaries::{AdminData, ProtectionMode, OBJ_ADMIN_DATA, OBJ_PRINTED};
-    use yb_core::store::constants::{DEFAULT_OBJECT_COUNT, DEFAULT_SUBJECT};
-    use yb_core::{MgmtAlgo, PivBackend};
+    use yb_core::auxiliaries::{OBJ_ADMIN_DATA, OBJ_PRINTED};
+    use yb_core::MgmtAlgo;
 
     /// A second 24-byte management key, distinct from `MGMT`.
-    const OTHER_KEY: &str = "a1a2a3a4a5a6a7a8b1b2b3b4b5b6b7b8c1c2c3c4c5c6c7c8";
+    pub const OTHER_KEY: &str = "a1a2a3a4a5a6a7a8b1b2b3b4b5b6b7b8c1c2c3c4c5c6c7c8";
 
     /// ADMIN DATA as written by yb ≤ 0.4.x `format --protect` (flag 0x01),
     /// which is also what ykman writes for a blocked PUK.
-    const ADMIN_LEGACY: [u8; 5] = [0x80, 0x03, 0x81, 0x01, 0x01];
+    pub const ADMIN_LEGACY: [u8; 5] = [0x80, 0x03, 0x81, 0x01, 0x01];
+
+    /// ADMIN DATA in the standard (ykman) layout: flag 0x02.
+    pub const ADMIN_STANDARD: [u8; 5] = [0x80, 0x03, 0x81, 0x01, 0x02];
 
     /// PRINTED object content holding `key_hex`: `88 { 89 <key> }`.
-    fn printed(key_hex: &str) -> Vec<u8> {
+    pub fn printed(key_hex: &str) -> Vec<u8> {
         let key = hex::decode(key_hex).unwrap();
         let mut inner = vec![0x89, key.len() as u8];
         inner.extend(key);
@@ -877,7 +878,7 @@ mod mgmt_key_tests {
         out
     }
 
-    fn read_admin(ctx: &Context) -> Vec<u8> {
+    pub fn read_admin(ctx: &Context) -> Vec<u8> {
         ctx.piv
             .read_object(&ctx.reader, OBJ_ADMIN_DATA)
             .unwrap_or_default()
@@ -885,43 +886,50 @@ mod mgmt_key_tests {
 
     /// Fresh context on the same device, with no explicit management key:
     /// the protection mode is detected at construction.
-    fn reopen(ctx: &Context) -> Context {
+    pub fn reopen(ctx: &Context) -> Context {
         let mut ctx = Context::with_backend(ctx.piv.clone(), Some(PIN.to_owned()), false).unwrap();
         ctx.quiet = true;
         ctx
     }
 
-    /// A formatted card with a key and certificate in slot 0x82.
-    fn formatted_card() -> Context {
-        let ctx = make_ctx(with_key_piv());
+    /// A formatted card (8 objects) with a key and certificate in slot
+    /// 0x82, and the factory management key.  Also returns the backend, for
+    /// fault injection.
+    pub fn formatted_card_with_piv() -> (Arc<VirtualPiv>, Context) {
+        let piv = Arc::new(with_key_piv());
+        let mut ctx = Context::with_backend(piv.clone(), Some(PIN.to_owned()), false).unwrap();
+        ctx.management_key = Some(MGMT.to_owned());
+        ctx.quiet = true;
         ctx.piv
-            .generate_certificate(&ctx.reader, 0x82, "CN=Test", Some(MGMT), None)
+            .generate_certificate(&ctx.reader, 0x82, "CN=Test", MGMT, None)
             .unwrap();
         format_store(&ctx);
-        ctx
+        (piv, ctx)
+    }
+
+    pub fn formatted_card() -> Context {
+        formatted_card_with_piv().1
     }
 
     /// A formatted card whose management key is `OTHER_KEY`, stored in
     /// PRINTED, with the given ADMIN DATA content.
-    fn protected_card(admin: &[u8]) -> Context {
-        let setup = formatted_card();
+    pub fn protected_card_with_piv(admin: &[u8]) -> (Arc<VirtualPiv>, Context) {
+        let (vpiv, setup) = formatted_card_with_piv();
         let (piv, reader) = (setup.piv.as_ref(), setup.reader.as_str());
         piv.set_management_key(reader, MGMT, OTHER_KEY, MgmtAlgo::Tdes)
             .unwrap();
-        piv.write_object(
-            reader,
-            OBJ_PRINTED,
-            &printed(OTHER_KEY),
-            Some(OTHER_KEY),
-            None,
-        )
-        .unwrap();
-        piv.write_object(reader, OBJ_ADMIN_DATA, admin, Some(OTHER_KEY), None)
+        piv.write_object(reader, OBJ_PRINTED, &printed(OTHER_KEY), OTHER_KEY)
             .unwrap();
-        reopen(&setup)
+        piv.write_object(reader, OBJ_ADMIN_DATA, admin, OTHER_KEY)
+            .unwrap();
+        (vpiv, reopen(&setup))
     }
 
-    fn store_one(ctx: &Context, name: &str) -> anyhow::Result<()> {
+    pub fn protected_card(admin: &[u8]) -> Context {
+        protected_card_with_piv(admin).1
+    }
+
+    pub fn store_one(ctx: &Context, name: &str) -> anyhow::Result<()> {
         let tmp = TempDir::new().unwrap();
         let file = tmp.path().join(name);
         std::fs::write(&file, b"secret").unwrap();
@@ -936,6 +944,19 @@ mod mgmt_key_tests {
             },
         )
     }
+}
+
+// ---------------------------------------------------------------------------
+// management key algorithm and ADMIN DATA (spec 0021)
+// ---------------------------------------------------------------------------
+
+mod mgmt_key_tests {
+    use super::cards::*;
+    use super::*;
+    use yb::cli::format::{run as format_run, FormatArgs};
+    use yb_core::auxiliaries::{AdminData, ProtectionMode, OBJ_ADMIN_DATA, OBJ_PRINTED};
+    use yb_core::store::constants::{DEFAULT_OBJECT_COUNT, DEFAULT_SUBJECT};
+    use yb_core::{KeySource, MgmtAlgo, PivBackend};
 
     #[test]
     fn format_protect_on_firmware_57_keeps_aes192() {
@@ -972,7 +993,7 @@ mod mgmt_key_tests {
         // 0x02 set; 0x01 cleared because the PUK is not blocked.
         let admin = AdminData::parse(&read_admin(&ctx)).unwrap();
         assert_eq!(admin.flags, Some(0x02));
-        assert!(!ctx.legacy_migration_due());
+        assert!(!ctx.pending_repairs().any(), "repairs done");
         // Management key and PRINTED are unchanged.
         assert_eq!(
             ctx.piv.read_object(&ctx.reader, OBJ_PRINTED).unwrap(),
@@ -1036,22 +1057,18 @@ mod mgmt_key_tests {
         let setup = formatted_card();
         setup
             .piv
-            .write_object(
-                &setup.reader,
-                OBJ_ADMIN_DATA,
-                &ADMIN_LEGACY,
-                Some(MGMT),
-                None,
-            )
+            .write_object(&setup.reader, OBJ_ADMIN_DATA, &ADMIN_LEGACY, MGMT)
             .unwrap();
-        let mut ctx = reopen(&setup);
+        let ctx = reopen(&setup);
         assert_eq!(ctx.protection, ProtectionMode::LegacyOrPukBlocked);
 
-        assert_eq!(ctx.management_key_for_write().unwrap(), None);
-        assert!(!ctx.legacy_migration_due());
+        // Nothing in PRINTED: the key resolves to the factory default, and
+        // no repair is due.
+        assert_eq!(ctx.management_key_for_write().unwrap(), MGMT);
+        assert_eq!(ctx.management_key_source(), Some(KeySource::FactoryDefault));
+        assert!(!ctx.pending_repairs().any());
 
-        // With the key supplied, writes work and ADMIN DATA is untouched.
-        ctx.management_key = Some(MGMT.to_owned());
+        // Writes work and ADMIN DATA is untouched.
         store_one(&ctx, "blob").unwrap();
         assert_eq!(read_admin(&ctx), ADMIN_LEGACY.to_vec());
     }
@@ -1065,7 +1082,7 @@ mod mgmt_key_tests {
         let setup = formatted_card();
         setup
             .piv
-            .write_object(&setup.reader, OBJ_ADMIN_DATA, &admin, Some(MGMT), None)
+            .write_object(&setup.reader, OBJ_ADMIN_DATA, &admin, MGMT)
             .unwrap();
 
         // Context creation (read-only use) succeeds.
@@ -1085,13 +1102,7 @@ mod mgmt_key_tests {
         // Tag 0x80 claims 5 bytes but only 1 follows.
         setup
             .piv
-            .write_object(
-                &setup.reader,
-                OBJ_ADMIN_DATA,
-                &[0x80, 0x05, 0x81],
-                Some(MGMT),
-                None,
-            )
+            .write_object(&setup.reader, OBJ_ADMIN_DATA, &[0x80, 0x05, 0x81], MGMT)
             .unwrap();
         let ctx = reopen(&setup);
         assert_eq!(ctx.protection, ProtectionMode::Invalid);
@@ -1132,5 +1143,284 @@ mod mgmt_key_tests {
             reloaded.management_key_algorithm(&reader).unwrap(),
             MgmtAlgo::Aes192
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// format sequence and recovery (spec 0022)
+// ---------------------------------------------------------------------------
+
+mod format_safety_tests {
+    use super::cards::*;
+    use super::*;
+    use yb::cli::format::{run as format_run, FormatArgs};
+    use yb::cli::util::{check_blob_signature, SigVerdict};
+    use yb_core::auxiliaries::{read_printed_keys, AdminData, PrintedKeys, OBJ_PRINTED};
+    use yb_core::store::constants::DEFAULT_SUBJECT;
+    use yb_core::{fetch_blob, parse_ec_public_key_from_cert_der, Fault, SlotKeyCheck};
+
+    fn args(generate: bool, protect: bool) -> FormatArgs {
+        FormatArgs {
+            object_count: 8,
+            key_slot: "0x82".to_owned(),
+            generate,
+            subject: DEFAULT_SUBJECT.to_owned(),
+            protect,
+        }
+    }
+
+    /// A card holding one blob; protected (key `OTHER_KEY` in PRINTED) or
+    /// not (factory key).  The context has no explicit management key.
+    fn card_with_blob(protected: bool) -> (Arc<VirtualPiv>, Context) {
+        let (piv, ctx) = if protected {
+            protected_card_with_piv(&ADMIN_STANDARD)
+        } else {
+            let (piv, ctx) = formatted_card_with_piv();
+            (piv, reopen(&ctx))
+        };
+        store_one(&ctx, "precious").unwrap();
+        let ctx = reopen(&ctx);
+        (piv, ctx)
+    }
+
+    fn printed_keys(ctx: &Context) -> PrintedKeys {
+        read_printed_keys(&ctx.reader, ctx.piv.as_ref(), PIN).unwrap()
+    }
+
+    fn blob_names(ctx: &Context) -> Vec<String> {
+        let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+        list_blobs(&store).into_iter().map(|b| b.name).collect()
+    }
+
+    /// Check invariants I1–I4 of spec 0022 §5 after a `yb format` attempt,
+    /// once the card is "reconnected".
+    fn check_invariants(piv: &VirtualPiv, ctx: &Context, outcome: &anyhow::Result<()>, case: &str) {
+        let keys_before = [MGMT.to_owned(), OTHER_KEY.to_owned()];
+        piv.clear_faults();
+        let after = reopen(ctx);
+
+        // I2: the management key is recoverable from PRINTED or is the
+        // factory key; pending repairs are carried out.
+        let key = after
+            .management_key_for_write()
+            .unwrap_or_else(|e| panic!("{case}: I2 violated: {e:#}"));
+        after.complete_pending_repairs();
+        assert!(
+            printed_keys(&after).previous.is_none(),
+            "{case}: repair left tag 8A in PRINTED"
+        );
+
+        // I1: every blob decrypts, or is reported CORRUPTED.
+        let store = Store::from_device(&after.reader, after.piv.as_ref()).unwrap();
+        let vk = after
+            .piv
+            .read_certificate(&after.reader, store.store_key_slot)
+            .ok()
+            .and_then(|c| parse_ec_public_key_from_cert_der(&c).ok())
+            .map(|pk| p256::ecdsa::VerifyingKey::from(&pk));
+        for blob in list_blobs(&store) {
+            let head = store.find_head(&blob.name).unwrap();
+            if check_blob_signature(head, &store, vk.as_ref()) != SigVerdict::Corrupted {
+                fetch_blob(
+                    &store,
+                    after.piv.as_ref(),
+                    &after.reader,
+                    &blob.name,
+                    Some(PIN),
+                    false,
+                )
+                .unwrap_or_else(|e| panic!("{case}: I1 violated for {}: {e:#}", blob.name));
+            }
+        }
+
+        // I3: success implies the store key matches its certificate.
+        if outcome.is_ok() {
+            assert_eq!(
+                after.check_slot_key(0x82).unwrap(),
+                SlotKeyCheck::Match,
+                "{case}: I3 violated"
+            );
+        }
+
+        // I4: no key material in the error.
+        if let Err(e) = outcome {
+            let text = format!("{e:#}");
+            for k in keys_before.iter().chain([&key]) {
+                assert!(!text.contains(k.as_str()), "{case}: I4 violated: {text}");
+            }
+        }
+    }
+
+    #[test]
+    fn invariants_hold_for_every_fault() {
+        let faults = [
+            Fault::WriteFails(1), // B1a
+            Fault::WriteFails(2), // B1c
+            Fault::WriteFails(3), // B1d
+            Fault::WriteFails(4), // B2, first object
+            Fault::WriteFails(8), // B2, midway
+            Fault::SetManagementKeyRejected,
+            Fault::SetManagementKeyLostReply,
+            Fault::CardLostDuringSetManagementKey { applied: true },
+            Fault::CardLostDuringSetManagementKey { applied: false },
+            Fault::GenerateCertificateFailsAfterKey,
+        ];
+        for protected in [false, true] {
+            for fault in faults {
+                let (piv, ctx) = card_with_blob(protected);
+                piv.inject_fault(fault);
+                let outcome = format_run(&ctx, &args(true, true));
+                let case = format!("protected={protected} fault={fault:?}");
+                check_invariants(&piv, &ctx, &outcome, &case);
+            }
+        }
+    }
+
+    #[test]
+    fn rejected_switch_changes_nothing() {
+        for protected in [false, true] {
+            let (piv, ctx) = card_with_blob(protected);
+            let printed_before = ctx.piv.read_object(&ctx.reader, OBJ_PRINTED).ok();
+            piv.inject_fault(Fault::SetManagementKeyRejected);
+            let err = format_run(&ctx, &args(true, true)).unwrap_err();
+            assert!(
+                format!("{err:#}").contains("nothing was changed"),
+                "{err:#}"
+            );
+
+            // PRINTED restored exactly (absent on the unprotected card).
+            assert_eq!(
+                ctx.piv.read_object(&ctx.reader, OBJ_PRINTED).ok(),
+                printed_before
+            );
+            let old_key = if protected { OTHER_KEY } else { MGMT };
+            ctx.piv
+                .authenticate_management_key(&ctx.reader, old_key)
+                .unwrap();
+            assert_eq!(blob_names(&ctx), vec!["precious"]);
+        }
+    }
+
+    #[test]
+    fn lost_reply_completes_the_switch() {
+        let (piv, ctx) = card_with_blob(true);
+        piv.inject_fault(Fault::SetManagementKeyLostReply);
+        format_run(&ctx, &args(false, true)).unwrap();
+
+        let keys = printed_keys(&ctx);
+        assert!(keys.previous.is_none());
+        let new_key = keys.current.unwrap();
+        assert_ne!(new_key, OTHER_KEY);
+        ctx.piv
+            .authenticate_management_key(&ctx.reader, &new_key)
+            .unwrap();
+    }
+
+    #[test]
+    fn interrupted_switch_is_recovered_by_the_next_write() {
+        for protected in [false, true] {
+            for applied in [false, true] {
+                let case = format!("protected={protected} applied={applied}");
+                let (piv, ctx) = card_with_blob(protected);
+                piv.inject_fault(Fault::CardLostDuringSetManagementKey { applied });
+                let err = format_run(&ctx, &args(false, true)).unwrap_err();
+                assert!(
+                    format!("{err:#}").contains("interrupted"),
+                    "{case}: {err:#}"
+                );
+                let keys = printed_keys(&ctx);
+                assert!(keys.current.is_some() && keys.previous.is_some(), "{case}");
+
+                // Reconnect: an ordinary write recovers and repairs.
+                piv.clear_faults();
+                let ctx = reopen(&ctx);
+                store_one(&ctx, "after").unwrap_or_else(|e| panic!("{case}: {e:#}"));
+                let keys = printed_keys(&ctx);
+                assert!(keys.previous.is_none(), "{case}: 8A left behind");
+                if !protected && !applied {
+                    // Back to the factory key: nothing stored, not protected.
+                    assert_eq!(keys.current, None, "{case}");
+                } else {
+                    // Protected with whichever key the card holds.
+                    let admin = AdminData::parse(&read_admin(&ctx)).unwrap();
+                    assert_eq!(admin.flags, Some(0x02), "{case}");
+                    ctx.piv
+                        .authenticate_management_key(&ctx.reader, &keys.current.unwrap())
+                        .unwrap_or_else(|e| panic!("{case}: {e:#}"));
+                }
+                assert!(blob_names(&ctx).contains(&"after".to_owned()), "{case}");
+            }
+        }
+    }
+
+    #[test]
+    fn failed_admin_write_is_repaired_by_the_next_write() {
+        // Unprotected card; B1c (2nd write) fails after the key switch.
+        let (piv, ctx) = card_with_blob(false);
+        piv.inject_fault(Fault::WriteFails(2));
+        let err = format_run(&ctx, &args(false, true)).unwrap_err();
+        assert!(format!("{err:#}").contains("ADMIN DATA"), "{err:#}");
+        assert_eq!(read_admin(&ctx), Vec::<u8>::new(), "flags not written");
+
+        let ctx = reopen(&ctx);
+        store_one(&ctx, "after").unwrap();
+        assert_eq!(read_admin(&ctx), ADMIN_STANDARD.to_vec());
+        assert!(printed_keys(&ctx).previous.is_none());
+    }
+
+    #[test]
+    fn failed_printed_cleanup_is_only_a_warning() {
+        // B1d (3rd write) fails: format succeeds, the next write cleans up.
+        let (piv, ctx) = card_with_blob(true);
+        piv.inject_fault(Fault::WriteFails(3));
+        format_run(&ctx, &args(false, true)).unwrap();
+        assert!(printed_keys(&ctx).previous.is_some());
+
+        let ctx = reopen(&ctx);
+        store_one(&ctx, "after").unwrap();
+        assert!(printed_keys(&ctx).previous.is_none());
+    }
+
+    #[test]
+    fn failed_certificate_leaves_an_empty_store_that_refuses_writes() {
+        let (piv, ctx) = card_with_blob(false);
+        piv.inject_fault(Fault::GenerateCertificateFailsAfterKey);
+        let err = format_run(&ctx, &args(true, false)).unwrap_err();
+        assert!(format!("{err:#}").contains("Do not store data"), "{err:#}");
+        assert!(blob_names(&ctx).is_empty(), "store erased before the key");
+
+        let err = store_one(&reopen(&ctx), "x").unwrap_err();
+        assert!(
+            err.to_string().contains("does not match its certificate"),
+            "{err:#}"
+        );
+    }
+
+    #[test]
+    fn mismatched_slot_key_is_rejected_before_any_write() {
+        let (piv, ctx) = card_with_blob(false);
+        // Replace the slot key but keep the old certificate.
+        piv.inject_fault(Fault::GenerateCertificateFailsAfterKey);
+        assert!(ctx
+            .piv
+            .generate_certificate(&ctx.reader, 0x82, "CN=X", MGMT, None)
+            .is_err());
+
+        let err = format_run(&ctx, &args(false, false)).unwrap_err();
+        let text = format!("{err:#}");
+        assert!(text.contains("nothing was changed"), "{text}");
+        assert!(text.contains("does not match its certificate"), "{text}");
+        assert_eq!(blob_names(&ctx), vec!["precious"], "store untouched");
+    }
+
+    #[test]
+    fn wrong_explicit_key_does_not_fall_through() {
+        let (_piv, mut ctx) = card_with_blob(true);
+        ctx.management_key = Some(MGMT.to_owned()); // the card uses OTHER_KEY
+        let err = format_run(&ctx, &args(false, true)).unwrap_err();
+        let text = format!("{err:#}");
+        assert!(text.contains("YB_MANAGEMENT_KEY"), "{text}");
+        assert!(text.contains("nothing was changed"), "{text}");
+        assert_eq!(blob_names(&ctx), vec!["precious"]);
     }
 }

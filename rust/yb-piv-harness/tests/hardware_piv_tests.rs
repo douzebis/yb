@@ -70,8 +70,7 @@ fn t2_write_read_object() {
     skip_if_absent!(with_vsc(Options::default(), |reader| {
         let piv = hardware_piv();
         let data = b"hello tier-2";
-        piv.write_object(&reader, 0x5F_C105, data, Some(MGMT), None)
-            .unwrap();
+        piv.write_object(&reader, 0x5F_C105, data, MGMT).unwrap();
         let result = piv.read_object(&reader, 0x5F_C105).unwrap();
         assert_eq!(result, data);
     }));
@@ -82,7 +81,7 @@ fn t2_write_read_object() {
 fn t2_write_wrong_mgmt_key() {
     skip_if_absent!(with_vsc(Options::default(), |reader| {
         let piv = hardware_piv();
-        let result = piv.write_object(&reader, 0x5F_C105, b"x", Some("aabbccdd"), None);
+        let result = piv.write_object(&reader, 0x5F_C105, b"x", "aabbccdd");
         assert!(result.is_err());
     }));
 }
@@ -144,7 +143,7 @@ fn t2_generate_certificate() {
     skip_if_absent!(with_vsc(Options::default(), |reader| {
         let piv = hardware_piv();
         let cert_der = piv
-            .generate_certificate(&reader, 0x82, "CN=T2Test", Some(MGMT), None)
+            .generate_certificate(&reader, 0x82, "CN=T2Test", MGMT, None)
             .unwrap();
         assert!(!cert_der.is_empty());
         let read_back = piv.read_certificate(&reader, 0x82).unwrap();

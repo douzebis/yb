@@ -75,17 +75,70 @@ pub(crate) fn decode_tlv_length(data: &[u8]) -> (usize, usize) {
     }
 }
 
-/// Parse `88 <len> [ 89 <len> <key_bytes> ]` from the PRINTED object value.
-pub(crate) fn extract_pin_protected_key(raw: &[u8]) -> Result<String> {
-    let outer = parse_tlv_flat(raw);
-    let inner_bytes = outer
-        .get(&0x88)
-        .ok_or_else(|| anyhow::anyhow!("PRINTED object missing tag 0x88"))?;
-    let inner = parse_tlv_flat(inner_bytes);
-    let key_bytes = inner
-        .get(&0x89)
-        .ok_or_else(|| anyhow::anyhow!("PRINTED object missing tag 0x89 inside 0x88"))?;
-    Ok(hex::encode(key_bytes))
+// ---------------------------------------------------------------------------
+// PRINTED object: PIN-protected management key storage
+// ---------------------------------------------------------------------------
+
+const TAG_PRINTED: u8 = 0x88;
+const TAG_PRINTED_KEY: u8 = 0x89;
+const TAG_PRINTED_PREVIOUS_KEY: u8 = 0x8A;
+
+/// Management keys held in the PIN-protected PRINTED object (0x5FC109),
+/// laid out as ykman's `PivmanProtectedData` — `88 { 89 <key> }` — plus
+/// tag `8A`, which keeps the previous key while a key switch is in
+/// progress (spec 0022 §2, B1a).  ykman and older yb read only tag `89`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PrintedKeys {
+    /// Tag `89`: the stored management key, hex-encoded.
+    pub current: Option<String>,
+    /// Tag `8A`: the previous key, present only after an interrupted
+    /// key switch.
+    pub previous: Option<String>,
+}
+
+impl PrintedKeys {
+    /// Parse PRINTED object content (outer `53` wrapper removed).  Content
+    /// that does not start with tag `88` (e.g. NIST printed information)
+    /// holds no keys.
+    pub fn parse(raw: &[u8]) -> Result<Self> {
+        let mut keys = Self::default();
+        if raw.first() != Some(&TAG_PRINTED) {
+            return Ok(keys);
+        }
+        let Some((_, inner)) = parse_tlv_list(raw)?.into_iter().next() else {
+            return Ok(keys);
+        };
+        for (tag, value) in parse_tlv_list(&inner)? {
+            match tag {
+                TAG_PRINTED_KEY => keys.current = Some(hex::encode(value)),
+                TAG_PRINTED_PREVIOUS_KEY => keys.previous = Some(hex::encode(value)),
+                _ => {}
+            }
+        }
+        Ok(keys)
+    }
+}
+
+/// Encode PRINTED object content holding `current_hex` and, while a key
+/// switch is in progress, `previous_hex`.
+pub fn encode_printed(current_hex: &str, previous_hex: Option<&str>) -> Result<Vec<u8>> {
+    use crate::piv::tlv::encode_tlv;
+    let key = |h: &str| hex::decode(h).map_err(|e| anyhow::anyhow!("management key hex: {e}"));
+    let mut inner = encode_tlv(TAG_PRINTED_KEY, &key(current_hex)?);
+    if let Some(p) = previous_hex {
+        inner.extend(encode_tlv(TAG_PRINTED_PREVIOUS_KEY, &key(p)?));
+    }
+    Ok(encode_tlv(TAG_PRINTED, &inner))
+}
+
+/// Read the management keys stored in PRINTED.  The backend verifies `pin`
+/// in the same session; a missing object holds no keys.  Callers verify the
+/// PIN beforehand, so that a wrong PIN is not mistaken for "no keys".
+pub fn read_printed_keys(reader: &str, piv: &dyn PivBackend, pin: &str) -> Result<PrintedKeys> {
+    match piv.read_printed_object_with_pin(reader, pin) {
+        Ok(raw) => PrintedKeys::parse(&raw),
+        Err(_) => Ok(PrintedKeys::default()),
+    }
 }
 
 /// Parse a `/`-separated subject string like `"CN=foo/O=bar"` into an rcgen `DistinguishedName`.
@@ -359,98 +412,118 @@ pub const PIN_DERIVED_UNSUPPORTED: &str =
     "PIN-derived management key mode is deprecated and not supported. \
      Please migrate to PIN-protected mode.";
 
-/// Rewrite the ADMIN DATA of a card protected by yb ≤ 0.4.x (flag `0x01`)
-/// to the standard layout (flag `0x02`).  The management key and PRINTED
-/// are unchanged.
-pub fn migrate_legacy_admin_data(
-    reader: &str,
-    piv: &dyn PivBackend,
-    management_key: Option<&str>,
-    pin: Option<&str>,
-) -> Result<()> {
-    let payload = admin_data_with_stored_key(reader, piv, true)?;
-    piv.write_object(reader, OBJ_ADMIN_DATA, &payload, management_key, pin)
-}
-
-/// Retrieve the management key stored in the PRINTED object (0x5FC109).
-///
-/// PIN verification and object retrieval must happen in the same PC/SC session
-/// to avoid the card resetting PIN-verified state between calls.
-pub fn get_pin_protected_management_key(
-    reader: &str,
-    piv: &dyn PivBackend,
-    pin: &str,
-) -> Result<String> {
-    let raw = piv.read_printed_object_with_pin(reader, pin)?;
-    extract_pin_protected_key(&raw)
-}
-
 /// Generate a random management key for `algo`, returned as a hex string.
 pub fn generate_random_management_key(algo: MgmtAlgo) -> String {
     let bytes: Vec<u8> = (0..algo.key_len()).map(|_| rand::random::<u8>()).collect();
     hex::encode(bytes)
 }
 
-/// Store `new_key_hex` in PIN-protected mode on the device.
+/// A switch to a new, PIN-protected management key (spec 0022 §2, B1).
+pub struct KeySwitch<'a> {
+    /// The card's current management key.
+    pub old_key: &'a str,
+    /// Whether `old_key` was read from PRINTED (the card was protected).
+    pub old_key_in_printed: bool,
+    /// The new key, `algo.key_len()` bytes, hex-encoded.
+    pub new_key: &'a str,
+    pub algo: MgmtAlgo,
+    /// The card carries the legacy yb `0x01` flag (spec 0021 §4).
+    pub clearing_legacy_flag: bool,
+}
+
+/// Switch to a new management key stored in PIN-protected mode, so that the
+/// card's key is never known only to the card (spec 0022 §2, B1):
 ///
-/// Steps:
-/// 0. Prepare the new ADMIN DATA (read-only); fails before any write if
-///    ADMIN DATA is unparseable or records a PIN-derived key.
-/// 1. Issue SET MANAGEMENT KEY to replace the current key with `new_key_hex`
-///    (algorithm `algo`).
-/// 2. Write the new key into the PRINTED object (0x5FC109) wrapped in the
-///    `88 <n> [ 89 <len> <key_bytes> ]` TLV structure that
-///    `extract_pin_protected_key` expects.
-/// 3. Write ADMIN DATA (0x5FFF00) with flag `0x02` set (ykman layout), see
-///    [`admin_data_with_stored_key`].
+/// - B1a: PRINTED = `88 { 89 <new>, 8A <old> }` (old key authenticates);
+/// - B1b: SET MANAGEMENT KEY; if it reports a failure, find out which key
+///   the card holds instead of guessing;
+/// - B1c: ADMIN DATA with flag `0x02` (new key authenticates);
+/// - B1d: PRINTED = `88 { 89 <new> }` (a failure is only a warning).
 ///
-/// `clearing_legacy_flag` is true when the card is known to carry the
-/// legacy yb `0x01` flag.
+/// ADMIN DATA is prepared before any write, so an unparseable or
+/// PIN-derived ADMIN DATA fails with nothing changed.  Errors describe the
+/// resulting card state and never contain key material.
 pub fn enable_pin_protected_management_key(
     reader: &str,
     piv: &dyn PivBackend,
-    old_key_hex: &str,
-    new_key_hex: &str,
-    algo: MgmtAlgo,
-    clearing_legacy_flag: bool,
+    sw: &KeySwitch<'_>,
 ) -> Result<()> {
-    // Step 0 — prepare ADMIN DATA before changing anything.
-    let admin_payload = admin_data_with_stored_key(reader, piv, clearing_legacy_flag)?;
+    use anyhow::Context as _;
 
-    // Step 1 — swap the management key on the card.
-    piv.set_management_key(reader, old_key_hex, new_key_hex, algo)?;
+    let admin_payload = admin_data_with_stored_key(reader, piv, sw.clearing_legacy_flag)?;
 
-    // Step 2 — encode the new key in the PRINTED object.
-    // Format: 88 <outer_len> [ 89 <len> <key bytes> ]
-    let key_bytes = hex::decode(new_key_hex).map_err(|e| anyhow::anyhow!("key hex: {e}"))?;
-    let inner_value: Vec<u8> = {
-        let mut v = vec![0x89u8, key_bytes.len() as u8];
-        v.extend_from_slice(&key_bytes);
-        v
-    };
-    let printed_payload: Vec<u8> = {
-        let mut v = vec![0x88u8, inner_value.len() as u8];
-        v.extend(inner_value);
-        v
-    };
-    piv.write_object(
-        reader,
-        OBJ_PRINTED,
-        &printed_payload,
-        Some(new_key_hex),
-        None,
-    )?;
+    // B1a — save the new key, keeping the old one until the switch is done.
+    let both = encode_printed(sw.new_key, Some(sw.old_key))?;
+    if let Err(e) = piv.write_object(reader, OBJ_PRINTED, &both, sw.old_key) {
+        return Err(e).context(restored_or_not(
+            reader,
+            piv,
+            sw,
+            "saving the new management key in PRINTED failed",
+        ));
+    }
 
-    // Step 3 — write ADMIN DATA with flag 0x02 (key stored in PRINTED).
-    piv.write_object(
-        reader,
-        OBJ_ADMIN_DATA,
-        &admin_payload,
-        Some(new_key_hex),
-        None,
-    )?;
+    // B1b — switch the card to the new key.
+    if let Err(e) = piv.set_management_key(reader, sw.old_key, sw.new_key, sw.algo) {
+        if piv.authenticate_management_key(reader, sw.old_key).is_ok() {
+            return Err(e).context(restored_or_not(
+                reader,
+                piv,
+                sw,
+                "the YubiKey rejected the new management key",
+            ));
+        }
+        if piv.authenticate_management_key(reader, sw.new_key).is_err() {
+            return Err(e).context(
+                "the management key switch was interrupted and its outcome is unknown \
+                 (was the YubiKey removed?).  PRINTED holds both the previous and the \
+                 new key: once the YubiKey is reconnected, any yb write command or \
+                 `yb format --protect` recovers",
+            );
+        }
+        // The card accepts the new key: the switch happened, only the reply
+        // was lost.  Carry on.
+    }
 
+    // B1c — record the stored key in ADMIN DATA.
+    piv.write_object(reader, OBJ_ADMIN_DATA, &admin_payload, sw.new_key)
+        .context(
+            "the management key was changed and saved in PRINTED, but ADMIN DATA could \
+             not be updated; any yb write command or `yb format --protect` repairs it",
+        )?;
+
+    // B1d — drop the old key from PRINTED.
+    if let Err(e) = encode_printed(sw.new_key, None)
+        .and_then(|only_new| piv.write_object(reader, OBJ_PRINTED, &only_new, sw.new_key))
+    {
+        eprintln!(
+            "Warning: could not remove the previous management key from PRINTED ({e:#}); \
+             the next yb write command removes it"
+        );
+    }
     Ok(())
+}
+
+/// Put PRINTED back as it was before a key switch — `88 { 89 <old> }` if the
+/// old key came from PRINTED, otherwise no object — and describe the
+/// outcome for an error message.
+fn restored_or_not(reader: &str, piv: &dyn PivBackend, sw: &KeySwitch<'_>, what: &str) -> String {
+    let previous = if sw.old_key_in_printed {
+        encode_printed(sw.old_key, None)
+    } else {
+        Ok(Vec::new())
+    };
+    let restored = previous
+        .and_then(|data| piv.write_object(reader, OBJ_PRINTED, &data, sw.old_key))
+        .is_ok();
+    if restored {
+        format!("{what}; nothing was changed")
+    } else {
+        format!(
+            "{what}; the management key is unchanged, but PRINTED could not be \
+             restored: run `yb format --protect` again"
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -554,7 +627,7 @@ mod tests {
         fn card_with_admin(raw: &[u8]) -> (VirtualPiv, String) {
             let piv = VirtualPiv::new();
             let reader = piv.reader_name();
-            piv.write_object(&reader, OBJ_ADMIN_DATA, raw, Some(MGMT), None)
+            piv.write_object(&reader, OBJ_ADMIN_DATA, raw, MGMT)
                 .unwrap();
             (piv, reader)
         }

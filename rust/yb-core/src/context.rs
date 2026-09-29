@@ -12,7 +12,7 @@ use crate::{
 };
 use anyhow::{bail, Context as _, Result};
 use p256::PublicKey;
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::sync::Arc;
 use zeroize::Zeroizing;
 
@@ -45,6 +45,78 @@ pub struct ContextOptions {
     pub allow_defaults: bool,
 }
 
+/// Where the management key used for writes came from (spec 0022 §1
+/// step 4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeySource {
+    /// `YB_MANAGEMENT_KEY` (or the deprecated `--key`, or the factory key
+    /// injected by `--allow-defaults`).
+    Explicit,
+    /// PRINTED tag `89`.
+    Printed,
+    /// PRINTED tag `8A`: the previous key, kept during an interrupted switch.
+    PrintedPrevious,
+    /// The factory default, not stored anywhere.
+    FactoryDefault,
+}
+
+impl KeySource {
+    /// Whether the key was read from the PRINTED object.
+    pub fn is_printed(self) -> bool {
+        matches!(self, Self::Printed | Self::PrintedPrevious)
+    }
+}
+
+/// What to do to PRINTED after resolving the management key.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PrintedRepair {
+    #[default]
+    None,
+    /// Rewrite as `88 { 89 <key> }`, dropping a leftover tag `8A`.
+    Rewrite,
+    /// Delete: the card uses the factory key, which needs no storage.
+    Delete,
+}
+
+/// Repairs due after resolving the management key (spec 0022 §1 step 4).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Repairs {
+    /// ADMIN DATA does not record the stored key in the standard layout
+    /// (legacy yb flag, or an interrupted `--protect`).
+    pub flags: bool,
+    pub printed: PrintedRepair,
+}
+
+impl Repairs {
+    pub fn any(&self) -> bool {
+        self.flags || self.printed != PrintedRepair::None
+    }
+}
+
+/// Outcome of [`Context::check_slot_key`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlotKeyCheck {
+    NoCertificate,
+    Match,
+    Mismatch,
+}
+
+struct ResolvedKey {
+    key: Zeroizing<String>,
+    source: KeySource,
+    repairs: Repairs,
+}
+
+impl ResolvedKey {
+    fn new(key: &str, source: KeySource, repairs: Repairs) -> Self {
+        Self {
+            key: Zeroizing::new(key.to_owned()),
+            source,
+            repairs,
+        }
+    }
+}
+
 pub struct Context {
     pub reader: String,
     pub serial: u32,
@@ -63,10 +135,9 @@ pub struct Context {
     pub quiet: bool,
     /// How the management key is protected, from ADMIN DATA at startup.
     pub protection: ProtectionMode,
-    /// Set when the management key was found through the legacy yb ≤ 0.4.x
-    /// path; the ADMIN DATA rewrite is then due once the command's own
-    /// writes have succeeded (see [`Context::complete_legacy_migration`]).
-    legacy_migration_due: Cell<bool>,
+    /// The management key for writes, once resolved (see
+    /// [`Context::management_key_for_write`]).
+    resolved: RefCell<Option<ResolvedKey>>,
     /// Optional flash handle passed in from the interactive device picker.
     /// Kept alive so the LED continues to flash into the next prompt.
     /// Consumed by [`Context::take_flash`].
@@ -150,7 +221,7 @@ impl Context {
             debug,
             quiet,
             protection,
-            legacy_migration_due: Cell::new(false),
+            resolved: RefCell::new(None),
             flash_handle,
         })
     }
@@ -191,7 +262,7 @@ impl Context {
             debug,
             quiet: false,
             protection,
-            legacy_migration_due: Cell::new(false),
+            resolved: RefCell::new(None),
             flash_handle: None,
         })
     }
@@ -228,94 +299,195 @@ impl Context {
         }
     }
 
-    /// Return the management key to use for write operations.
+    /// Return the management key to use for write operations, after
+    /// checking that the card accepts it (spec 0022 §1 step 4).
     ///
-    /// Priority: explicit --key > PIN-protected retrieval > None (use default).
+    /// This is the single place in yb that reads PRINTED for a key.  The
+    /// first candidate the card accepts wins:
+    /// 1. the explicit key (`YB_MANAGEMENT_KEY`) — if rejected, fail;
+    /// 2. PRINTED tag `89`, then tag `8A` (kept during a key switch), when
+    ///    a PIN is available — whatever the ADMIN DATA flags say;
+    /// 3. the factory default.
     ///
-    /// On a card with the ambiguous legacy flag (`0x01` without `0x02`), the
-    /// PRINTED object decides: if it holds a key, the card was protected by
-    /// yb ≤ 0.4.x — the key is used and an ADMIN DATA migration becomes due;
-    /// otherwise the flag really means "PUK blocked" and the card is treated
-    /// as not protected.
-    pub fn management_key_for_write(&self) -> Result<Option<String>> {
-        self.ensure_supported_protection()?;
-        if let Some(ref k) = self.management_key {
-            return Ok(Some(k.clone()));
+    /// A key found in PRINTED may leave repairs due (see [`Repairs`]),
+    /// carried out by [`Context::complete_pending_repairs`].  The result
+    /// is cached for the rest of the invocation.
+    pub fn management_key_for_write(&self) -> Result<String> {
+        if let Some(r) = self.resolved.borrow().as_ref() {
+            return Ok(r.key.to_string());
         }
-        match self.protection {
-            ProtectionMode::Standard => {
-                let pin = self.require_pin_for_management_key()?;
-                let key = auxiliaries::get_pin_protected_management_key(
-                    &self.reader,
-                    self.piv.as_ref(),
-                    &pin,
-                )?;
-                Ok(Some(key))
-            }
-            ProtectionMode::LegacyOrPukBlocked => {
-                let pin = self.require_pin_for_management_key()?;
+        self.ensure_supported_protection()?;
+        let resolved = self.resolve_management_key()?;
+        let key = resolved.key.to_string();
+        *self.resolved.borrow_mut() = Some(resolved);
+        Ok(key)
+    }
+
+    fn resolve_management_key(&self) -> Result<ResolvedKey> {
+        let piv = self.piv.as_ref();
+        let accepts = |key: &str| piv.authenticate_management_key(&self.reader, key).is_ok();
+
+        if let Some(ref key) = self.management_key {
+            piv.authenticate_management_key(&self.reader, key)
+                .context("the YubiKey rejected the management key from YB_MANAGEMENT_KEY")?;
+            return Ok(ResolvedKey::new(
+                key,
+                KeySource::Explicit,
+                Repairs::default(),
+            ));
+        }
+
+        let printed = match self.require_pin()? {
+            Some(pin) => {
                 // Verify first, so that a wrong PIN is reported as such and
                 // not mistaken for an empty PRINTED object.
-                self.piv.verify_pin(&self.reader, &pin)?;
-                match auxiliaries::get_pin_protected_management_key(
-                    &self.reader,
-                    self.piv.as_ref(),
-                    &pin,
-                ) {
-                    Ok(key) => {
-                        self.legacy_migration_due.set(true);
-                        Ok(Some(key))
-                    }
-                    Err(_) => Ok(None),
-                }
+                piv.verify_pin(&self.reader, &pin)?;
+                auxiliaries::read_printed_keys(&self.reader, piv, &pin)?
             }
-            _ => Ok(None),
-        }
-    }
-
-    fn require_pin_for_management_key(&self) -> Result<String> {
-        self.require_pin()?
-            .ok_or_else(|| anyhow::anyhow!("PIN required to retrieve PIN-protected management key"))
-    }
-
-    /// Whether this card was found to carry the legacy yb ≤ 0.4.x ADMIN DATA
-    /// flag during this invocation.
-    pub fn legacy_migration_due(&self) -> bool {
-        self.legacy_migration_due.get()
-    }
-
-    /// Rewrite a legacy yb ≤ 0.4.x ADMIN DATA object to the standard layout
-    /// (spec 0021 §4), if [`management_key_for_write`] found one.
-    ///
-    /// Call once the command's own writes have succeeded, with the
-    /// management key the command used.  A failure is reported as a warning
-    /// and does not fail the command.
-    ///
-    /// [`management_key_for_write`]: Context::management_key_for_write
-    pub fn complete_legacy_migration(&self, management_key: Option<&str>) {
-        if !self.legacy_migration_due.replace(false) {
-            return;
-        }
-        let pin = self.pin.borrow().as_ref().map(|z| z.as_str().to_owned());
-        match auxiliaries::migrate_legacy_admin_data(
-            &self.reader,
-            self.piv.as_ref(),
-            management_key,
-            pin.as_deref(),
-        ) {
-            Ok(()) => {
-                if !self.quiet {
-                    eprintln!(
-                        "yb: note: upgraded PIN-protected management key metadata \
-                         to the standard (ykman-compatible) layout"
-                    );
-                }
+            None if matches!(
+                self.protection,
+                ProtectionMode::Standard | ProtectionMode::LegacyOrPukBlocked
+            ) =>
+            {
+                bail!("PIN required to retrieve PIN-protected management key")
             }
-            Err(e) => eprintln!(
-                "Warning: could not upgrade the PIN-protected management key \
-                 metadata to the standard layout: {e:#}"
+            None => auxiliaries::PrintedKeys::default(),
+        };
+        let has_printed_keys = printed.current.is_some() || printed.previous.is_some();
+
+        let candidates = [
+            (printed.current.as_deref(), KeySource::Printed),
+            (printed.previous.as_deref(), KeySource::PrintedPrevious),
+            (
+                Some(auxiliaries::DEFAULT_MANAGEMENT_KEY),
+                KeySource::FactoryDefault,
             ),
+        ];
+        for (key, source) in candidates {
+            let Some(key) = key.filter(|k| accepts(k)) else {
+                continue;
+            };
+            let repairs = if key == auxiliaries::DEFAULT_MANAGEMENT_KEY {
+                // The factory key needs no protection: drop any key left in
+                // PRINTED (e.g. a switch from the factory key that did not
+                // take effect).
+                Repairs {
+                    flags: false,
+                    printed: if has_printed_keys {
+                        PrintedRepair::Delete
+                    } else {
+                        PrintedRepair::None
+                    },
+                }
+            } else {
+                Repairs {
+                    flags: self.protection != ProtectionMode::Standard,
+                    printed: if printed.previous.is_some() {
+                        PrintedRepair::Rewrite
+                    } else {
+                        PrintedRepair::None
+                    },
+                }
+            };
+            return Ok(ResolvedKey::new(key, source, repairs));
         }
+        bail!(
+            "the management key is not in PRINTED and is not the factory default; \
+             set YB_MANAGEMENT_KEY"
+        )
+    }
+
+    /// Where the resolved management key came from, once resolved.
+    pub fn management_key_source(&self) -> Option<KeySource> {
+        self.resolved.borrow().as_ref().map(|r| r.source)
+    }
+
+    /// Repairs due from the management key resolution (none before it).
+    pub fn pending_repairs(&self) -> Repairs {
+        self.resolved
+            .borrow()
+            .as_ref()
+            .map(|r| r.repairs)
+            .unwrap_or_default()
+    }
+
+    /// Carry out the repairs found by [`Context::management_key_for_write`]:
+    /// rewrite ADMIN DATA in the standard layout (spec 0021 §4) and/or
+    /// clean up PRINTED (spec 0022 §1 step 4).
+    ///
+    /// Call once the command's own writes have succeeded.  A failure is a
+    /// warning and does not fail the command: the next write retries.
+    pub fn complete_pending_repairs(&self) {
+        let (key, repairs) = match self.resolved.borrow_mut().as_mut() {
+            Some(r) => (r.key.to_string(), std::mem::take(&mut r.repairs)),
+            None => return,
+        };
+        let (reader, piv) = (self.reader.as_str(), self.piv.as_ref());
+        let note = |msg: &str| {
+            if !self.quiet {
+                eprintln!("yb: note: {msg}");
+            }
+        };
+
+        if repairs.flags {
+            match auxiliaries::admin_data_with_stored_key(reader, piv, true)
+                .and_then(|data| piv.write_object(reader, auxiliaries::OBJ_ADMIN_DATA, &data, &key))
+            {
+                Ok(()) if self.protection == ProtectionMode::LegacyOrPukBlocked => note(
+                    "upgraded PIN-protected management key metadata \
+                     to the standard (ykman-compatible) layout",
+                ),
+                Ok(()) => note(
+                    "repaired the PIN-protected management key metadata \
+                     after an interrupted key switch",
+                ),
+                Err(e) => eprintln!(
+                    "Warning: could not update the PIN-protected management key \
+                     metadata: {e:#}"
+                ),
+            }
+        }
+
+        let printed = match repairs.printed {
+            PrintedRepair::None => return,
+            PrintedRepair::Rewrite => auxiliaries::encode_printed(&key, None),
+            PrintedRepair::Delete => Ok(Vec::new()),
+        };
+        match printed
+            .and_then(|data| piv.write_object(reader, auxiliaries::OBJ_PRINTED, &data, &key))
+        {
+            Ok(()) => note("removed a management key left in PRINTED by an interrupted key switch"),
+            Err(e) => eprintln!("Warning: could not clean up PRINTED: {e:#}"),
+        }
+    }
+
+    /// Check that the key in `slot` matches the public key in the slot's
+    /// certificate, by signing a random digest and verifying the signature
+    /// (spec 0022 §1 step 5).  Needs the PIN.
+    pub fn check_slot_key(&self, slot: u8) -> Result<SlotKeyCheck> {
+        use p256::ecdsa::{signature::hazmat::PrehashVerifier, Signature, VerifyingKey};
+
+        let Ok(cert_der) = self.piv.read_certificate(&self.reader, slot) else {
+            return Ok(SlotKeyCheck::NoCertificate);
+        };
+        let public_key = parse_ec_public_key_from_cert_der(&cert_der).with_context(|| {
+            format!("the certificate in slot 0x{slot:02x} does not hold an EC P-256 key")
+        })?;
+        let digest: [u8; 32] = rand::random();
+        let pin = self.require_pin()?;
+        let raw = self
+            .piv
+            .ecdsa_sign(&self.reader, slot, &digest, pin.as_deref())
+            .with_context(|| format!("signing with the key in slot 0x{slot:02x}"))?;
+        let signature = Signature::from_slice(&raw).context("parsing the slot signature")?;
+        let matches = VerifyingKey::from(&public_key)
+            .verify_prehash(&digest, &signature)
+            .is_ok();
+        Ok(if matches {
+            SlotKeyCheck::Match
+        } else {
+            SlotKeyCheck::Mismatch
+        })
     }
 
     /// Take the flash handle passed in from the interactive device picker.

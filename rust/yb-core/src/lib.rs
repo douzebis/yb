@@ -44,7 +44,8 @@ pub mod piv;
 pub mod store;
 
 pub use context::{
-    parse_ec_public_key_from_cert_der, Context, ContextOptions, DevicePicker, OutputOptions,
+    parse_ec_public_key_from_cert_der, Context, ContextOptions, DevicePicker, KeySource,
+    OutputOptions, PrintedRepair, Repairs, SlotKeyCheck,
 };
 pub use nvm::{scan_nvm, NvmUsage};
 pub use orchestrator::{
@@ -52,9 +53,9 @@ pub use orchestrator::{
     Compression, Encryption, StoreOptions,
 };
 pub use piv::hardware::HardwarePiv;
-#[cfg(any(feature = "virtual-piv", feature = "test-utils"))]
-pub use piv::VirtualPiv;
 pub use piv::{DeviceInfo, FlashHandle, MgmtAlgo, PivBackend};
+#[cfg(any(feature = "virtual-piv", feature = "test-utils"))]
+pub use piv::{Fault, VirtualPiv};
 
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;

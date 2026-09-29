@@ -72,8 +72,7 @@ fn test_write_read_object() {
     let mgmt = "010203040506070801020304050607080102030405060708";
     let data = b"hello world";
 
-    piv.write_object(&reader, 0x5F_C105, data, Some(mgmt), None)
-        .unwrap();
+    piv.write_object(&reader, 0x5F_C105, data, mgmt).unwrap();
 
     let result = piv.read_object(&reader, 0x5F_C105).unwrap();
     assert_eq!(result, data);
@@ -84,7 +83,7 @@ fn test_write_read_object() {
 fn test_write_wrong_mgmt_key() {
     let piv = default_piv();
     let reader = piv.reader_name();
-    let result = piv.write_object(&reader, 0x5F_C105, b"x", Some("aabbccdd"), None);
+    let result = piv.write_object(&reader, 0x5F_C105, b"x", "aabbccdd");
     assert!(result.is_err());
 }
 
@@ -183,7 +182,7 @@ fn test_generate_certificate() {
     let mgmt = "010203040506070801020304050607080102030405060708";
 
     let cert_der = piv
-        .generate_certificate(&reader, 0x82, "CN=Test", Some(mgmt), None)
+        .generate_certificate(&reader, 0x82, "CN=Test", mgmt, None)
         .unwrap();
     assert!(!cert_der.is_empty());
 
@@ -229,7 +228,7 @@ fn test_fixture_with_key_loaded() {
 fn formatted_store(piv: &VirtualPiv) -> Store {
     let reader = piv.reader_name();
     let mgmt = "010203040506070801020304050607080102030405060708";
-    Store::format(&reader, piv, 8, 0x82, Some(mgmt), None).unwrap()
+    Store::format(&reader, piv, 8, 0x82, mgmt).unwrap()
 }
 
 /// store_blob + list_blobs + fetch_blob round-trip (unencrypted).
@@ -249,7 +248,7 @@ fn test_store_list_fetch_plain() {
             encryption: Encryption::None,
             compression: Compression::None,
         },
-        Some(mgmt),
+        mgmt,
         None,
     )
     .unwrap();
@@ -289,7 +288,7 @@ fn test_store_fetch_encrypted() {
             encryption: Encryption::Encrypted(&pub_key),
             compression: Compression::None,
         },
-        Some(mgmt),
+        mgmt,
         None,
     )
     .unwrap();
@@ -320,13 +319,13 @@ fn test_remove_blob() {
             encryption: Encryption::None,
             compression: Compression::None,
         },
-        Some(mgmt),
+        mgmt,
         None,
     )
     .unwrap();
     assert_eq!(list_blobs(&store).len(), 1);
 
-    let removed = remove_blob(&mut store, &piv, "to-delete", Some(mgmt), None).unwrap();
+    let removed = remove_blob(&mut store, &piv, "to-delete", mgmt).unwrap();
     assert!(removed);
     assert_eq!(list_blobs(&store).len(), 0);
 }
@@ -359,7 +358,7 @@ fn test_compression_brotli_path() {
             encryption: Encryption::None,
             compression: Compression::Auto,
         },
-        Some(mgmt),
+        mgmt,
         None,
     )
     .unwrap();
@@ -400,7 +399,7 @@ fn test_compression_xz_path() {
             encryption: Encryption::None,
             compression: Compression::Auto,
         },
-        Some(mgmt),
+        mgmt,
         None,
     )
     .unwrap();
@@ -441,7 +440,7 @@ fn test_compression_raw_path() {
             encryption: Encryption::None,
             compression: Compression::Auto,
         },
-        Some(mgmt),
+        mgmt,
         None,
     )
     .unwrap();
@@ -484,7 +483,7 @@ fn test_from_device_missing_objects() {
     buf[OBJECT_COUNT_O] = 5; // claims 5 objects
     buf[STORE_KEY_SLOT_O] = 0x82;
     // age = 0 (empty slot)
-    piv.write_object(&reader, OBJECT_ID_ZERO, &buf, Some(mgmt), None)
+    piv.write_object(&reader, OBJECT_ID_ZERO, &buf, mgmt)
         .unwrap();
 
     use yb_core::store::Store;
@@ -523,14 +522,10 @@ fn test_with_backend_multiple_devices_errors() {
         fn read_object(&self, _r: &str, _id: u32) -> anyhow::Result<Vec<u8>> {
             anyhow::bail!("stub")
         }
-        fn write_object(
-            &self,
-            _r: &str,
-            _id: u32,
-            _d: &[u8],
-            _mk: Option<&str>,
-            _pin: Option<&str>,
-        ) -> anyhow::Result<()> {
+        fn write_object(&self, _r: &str, _id: u32, _d: &[u8], _mk: &str) -> anyhow::Result<()> {
+            anyhow::bail!("stub")
+        }
+        fn authenticate_management_key(&self, _r: &str, _mk: &str) -> anyhow::Result<()> {
             anyhow::bail!("stub")
         }
         fn verify_pin(&self, _r: &str, _pin: &str) -> anyhow::Result<()> {
@@ -559,7 +554,7 @@ fn test_with_backend_multiple_devices_errors() {
             _r: &str,
             _slot: u8,
             _subj: &str,
-            _mk: Option<&str>,
+            _mk: &str,
             _pin: Option<&str>,
         ) -> anyhow::Result<Vec<u8>> {
             anyhow::bail!("stub")
@@ -597,7 +592,7 @@ fn test_remove_nonexistent() {
     let mgmt = "010203040506070801020304050607080102030405060708";
     let mut store = formatted_store(&piv);
 
-    let removed = remove_blob(&mut store, &piv, "ghost", Some(mgmt), None).unwrap();
+    let removed = remove_blob(&mut store, &piv, "ghost", mgmt).unwrap();
     assert!(!removed);
 }
 
@@ -627,7 +622,7 @@ fn test_random_operations() {
                         encryption: Encryption::None,
                         compression: Compression::None,
                     },
-                    Some(mgmt),
+                    mgmt,
                     None,
                 )
                 .unwrap();
@@ -641,7 +636,7 @@ fn test_random_operations() {
                 assert_eq!(result.as_deref(), expected, "fetch '{}' mismatch", op.name);
             }
             OpType::Remove => {
-                let removed = remove_blob(&mut store, &piv, &op.name, Some(mgmt), None).unwrap();
+                let removed = remove_blob(&mut store, &piv, &op.name, mgmt).unwrap();
                 let expected = toy.remove(&op.name);
                 assert_eq!(
                     removed, expected,

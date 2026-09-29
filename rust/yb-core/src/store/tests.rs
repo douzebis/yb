@@ -304,15 +304,11 @@ fn format_zero_objects() {
         fn read_object(&self, _r: &str, _id: u32) -> anyhow::Result<Vec<u8>> {
             bail!("null")
         }
-        fn write_object(
-            &self,
-            _r: &str,
-            _id: u32,
-            _d: &[u8],
-            _mk: Option<&str>,
-            _pin: Option<&str>,
-        ) -> anyhow::Result<()> {
+        fn write_object(&self, _r: &str, _id: u32, _d: &[u8], _mk: &str) -> anyhow::Result<()> {
             Ok(()) // silently drop writes
+        }
+        fn authenticate_management_key(&self, _r: &str, _mk: &str) -> anyhow::Result<()> {
+            Ok(()) // accept any key
         }
         fn verify_pin(&self, _r: &str, _pin: &str) -> anyhow::Result<()> {
             bail!("null")
@@ -340,7 +336,7 @@ fn format_zero_objects() {
             _r: &str,
             _slot: u8,
             _subj: &str,
-            _mk: Option<&str>,
+            _mk: &str,
             _pin: Option<&str>,
         ) -> anyhow::Result<Vec<u8>> {
             bail!("null")
@@ -361,7 +357,7 @@ fn format_zero_objects() {
     }
 
     let piv = NullPiv;
-    let store = Store::format("r", &piv, 0, 0x82, None, None).unwrap();
+    let store = Store::format("r", &piv, 0, 0x82, "").unwrap();
     assert_eq!(store.object_count, 0);
     assert_eq!(store.objects.len(), 0);
     assert_eq!(store.free_count(), 0);

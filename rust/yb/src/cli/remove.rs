@@ -45,9 +45,8 @@ pub fn run(ctx: &Context, args: &RemoveArgs) -> Result<()> {
             store.objects[idx as usize].reset();
         }
     }
-    let pin = ctx.require_pin()?;
-    store.sync(ctx.piv.as_ref(), mgmt_key.as_deref(), pin.as_deref())?;
-    ctx.complete_legacy_migration(mgmt_key.as_deref());
+    store.sync(ctx.piv.as_ref(), &mgmt_key)?;
+    ctx.complete_pending_repairs();
 
     if !ctx.quiet {
         for name in &to_remove {
