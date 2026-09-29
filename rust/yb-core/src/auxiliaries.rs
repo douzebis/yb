@@ -5,7 +5,9 @@
 //! Auxiliary helpers: TLV parsing, default-credential checks, PIN-protected
 //! management-key retrieval.
 
-use crate::piv::mgmt::{parse_retries_remaining, GET_METADATA_MGMT, GET_METADATA_PUK};
+use crate::piv::mgmt::{
+    parse_retries_remaining, GET_METADATA_MGMT, GET_METADATA_PIN, GET_METADATA_PUK,
+};
 use crate::piv::{MgmtAlgo, PivBackend};
 use anyhow::{bail, Result};
 use std::collections::HashMap;
@@ -16,12 +18,10 @@ pub const OBJ_PRINTED: u32 = 0x5F_C109;
 
 /// Factory-default credentials.
 pub const DEFAULT_PIN: &str = "123456";
+pub const DEFAULT_PUK: &str = "12345678";
 /// Factory-default management key: 3DES before firmware 5.7, AES-192 from
 /// firmware 5.7 on (same bytes).
 pub const DEFAULT_MANAGEMENT_KEY: &str = "010203040506070801020304050607080102030405060708";
-
-// APDU bytes for GET_METADATA (YubiKey firmware 5.3+).
-const GET_METADATA_PIN: [u8; 5] = [0x00, 0xF7, 0x00, 0x80, 0x00];
 
 // TLV tag that carries the is_default flag (value 0x01 = is default).
 const TAG_IS_DEFAULT: u8 = 0x05;

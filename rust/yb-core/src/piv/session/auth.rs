@@ -8,11 +8,23 @@ use super::transport::PcscSession;
 use crate::errors::{CardError, CardOp};
 use crate::piv::mgmt::{parse_mgmt_metadata, MgmtAlgo, GET_METADATA_MGMT};
 use crate::piv::tlv::{crypto_ecb, encode_length, encode_tlv, EcbDir};
+use crate::piv::PinRef;
 use anyhow::{bail, Context, Result};
 use std::sync::Once;
 use subtle::ConstantTimeEq;
 
 use super::crypto::tlv_get;
+
+/// A PIN or PUK padded to 8 bytes with 0xFF, as PIV requires.
+fn pad_pin(value: &str, which: PinRef) -> Result<[u8; 8]> {
+    let bytes = value.as_bytes();
+    if bytes.len() > 8 {
+        bail!("{which} too long (max 8 bytes)");
+    }
+    let mut padded = [0xFFu8; 8];
+    padded[..bytes.len()].copy_from_slice(bytes);
+    Ok(padded)
+}
 
 /// The touch-policy warning is printed at most once per process, however
 /// many sessions authenticate.
@@ -22,15 +34,23 @@ impl PcscSession {
     /// VERIFY PIN (P2=0x80 = user PIN reference).
     /// YubiKey PIV requires the PIN padded to 8 bytes with 0xFF.
     pub(crate) fn verify_pin(&mut self, pin: &str) -> Result<()> {
-        let pin_bytes = pin.as_bytes();
-        if pin_bytes.len() > 8 {
-            bail!("PIN too long (max 8 bytes)");
-        }
-        let mut padded = [0xFFu8; 8];
-        padded[..pin_bytes.len()].copy_from_slice(pin_bytes);
         let mut apdu = vec![0x00, 0x20, 0x00, 0x80, 0x08];
-        apdu.extend_from_slice(&padded);
+        apdu.extend_from_slice(&pad_pin(pin, PinRef::Pin)?);
         self.transmit_check(&apdu, CardOp::VerifyPin)?;
+        Ok(())
+    }
+
+    /// CHANGE REFERENCE DATA for the PIN or the PUK: old and new value,
+    /// each padded to 8 bytes with 0xFF.
+    pub(crate) fn change_reference(&mut self, which: PinRef, old: &str, new: &str) -> Result<()> {
+        let op = match which {
+            PinRef::Pin => CardOp::ChangePin,
+            PinRef::Puk => CardOp::ChangePuk,
+        };
+        let mut apdu = vec![0x00, 0x24, 0x00, which.reference(), 0x10];
+        apdu.extend_from_slice(&pad_pin(old, which)?);
+        apdu.extend_from_slice(&pad_pin(new, which)?);
+        self.transmit_check(&apdu, op)?;
         Ok(())
     }
 
@@ -52,7 +72,7 @@ impl PcscSession {
         let algo = match (resp[n - 2], resp[n - 1]) {
             (0x90, 0x00) => {
                 let md = parse_mgmt_metadata(&resp[..n - 2])?;
-                if md.touch_required {
+                if md.touch_required() {
                     TOUCH_WARNING.call_once(|| {
                         eprintln!(
                             "Warning: this YubiKey's management key requires touch; \

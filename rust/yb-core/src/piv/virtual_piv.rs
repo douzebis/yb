@@ -15,7 +15,7 @@
 //! test key material**.  Never use these keys to protect real data and never
 //! confuse them with production YubiKey credentials.
 
-use super::{DeviceInfo, MgmtAlgo, PivBackend};
+use super::{DeviceInfo, MgmtAlgo, PinRef, PivBackend};
 use crate::errors::{CardError, CardOp, ErrCtx, PcscCode, PcscOp};
 use anyhow::{anyhow, bail, Result};
 use p256::{elliptic_curve::sec1::ToEncodedPoint, PublicKey, SecretKey};
@@ -43,6 +43,8 @@ struct SlotKey {
     secret: SecretKey,
     public_point: Vec<u8>, // 65-byte uncompressed P-256 point
     cert_der: Option<Vec<u8>>,
+    /// Generated on the card (vs. imported), as GET METADATA reports it.
+    generated: bool,
 }
 
 impl SlotKey {
@@ -52,11 +54,15 @@ impl SlotKey {
             secret,
             public_point,
             cert_der: None,
+            generated: false,
         }
     }
 
     fn generate() -> Self {
-        Self::from_secret(SecretKey::random(&mut OsRng))
+        Self {
+            generated: true,
+            ..Self::from_secret(SecretKey::random(&mut OsRng))
+        }
     }
 
     fn from_scalar_hex(hex: &str) -> Result<Self> {
@@ -91,6 +97,9 @@ pub enum Fault {
     /// (`SW 6A84`) and, as measured on hardware (spec 0022, M2), deletes
     /// the object.
     StorageFull(usize),
+    /// The next PIN or PUK change is rejected by the card's complexity
+    /// policy (`SW 6985`); nothing changes.
+    ChangeReferenceComplexity,
 }
 
 // ---------------------------------------------------------------------------
@@ -187,7 +196,7 @@ struct Fixture {
     objects: HashMap<String, String>,
 }
 
-#[derive(Deserialize, Serialize, Default)]
+#[derive(Deserialize, Serialize)]
 struct FixtureIdentity {
     #[serde(default = "default_serial")]
     serial: u32,
@@ -195,6 +204,16 @@ struct FixtureIdentity {
     version: String,
     #[serde(default = "default_reader")]
     reader: String,
+}
+
+impl Default for FixtureIdentity {
+    fn default() -> Self {
+        Self {
+            serial: default_serial(),
+            version: default_version(),
+            reader: default_reader(),
+        }
+    }
 }
 
 fn default_serial() -> u32 {
@@ -219,6 +238,12 @@ struct FixtureCredentials {
     /// YubiKeys ship with an AES-192 management key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     management_key_algorithm: Option<String>,
+    /// PIN tries left (default 3); 0 builds a card with a blocked PIN.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pin_retries: Option<u8>,
+    /// PUK tries left (default 3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    puk_retries: Option<u8>,
 }
 
 fn default_pin() -> String {
@@ -236,6 +261,9 @@ struct FixtureSlot {
     private_key_hex: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     cert_der_hex: Option<String>,
+    /// The key was generated on the card (default: imported).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    generated: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -278,6 +306,12 @@ impl VirtualPiv {
         state.pin = fixture.credentials.pin;
         state.puk = fixture.credentials.puk;
         state.management_key_hex = fixture.credentials.management_key;
+        if let Some(n) = fixture.credentials.pin_retries {
+            state.pin_retries = n;
+        }
+        if let Some(n) = fixture.credentials.puk_retries {
+            state.puk_retries = n;
+        }
         if let Some(ref name) = fixture.credentials.management_key_algorithm {
             state.mgmt_algo = MgmtAlgo::from_name(name)
                 .ok_or_else(|| anyhow!("fixture: unknown management_key_algorithm '{name}'"))?;
@@ -287,6 +321,7 @@ impl VirtualPiv {
             let slot_byte = u8::from_str_radix(slot_str.trim_start_matches("0x"), 16)
                 .map_err(|_| anyhow!("invalid slot key in fixture: {slot_str}"))?;
             let mut key = SlotKey::from_scalar_hex(&slot_fixture.private_key_hex)?;
+            key.generated = slot_fixture.generated;
             if let Some(ref cert_hex) = slot_fixture.cert_der_hex {
                 key.cert_der = Some(
                     hex::decode(cert_hex)
@@ -347,6 +382,7 @@ impl VirtualPiv {
                 FixtureSlot {
                     private_key_hex: hex::encode(scalar_bytes),
                     cert_der_hex: key.cert_der.as_deref().map(hex::encode),
+                    generated: key.generated,
                 },
             );
         }
@@ -370,6 +406,8 @@ impl VirtualPiv {
                     MgmtAlgo::Aes192 => Some("AES192".to_owned()),
                     MgmtAlgo::Aes256 => Some("AES256".to_owned()),
                 },
+                pin_retries: (s.pin_retries != 3).then_some(s.pin_retries),
+                puk_retries: (s.puk_retries != 3).then_some(s.puk_retries),
             },
             slots,
             objects,
@@ -449,9 +487,10 @@ impl PivBackend for VirtualPiv {
         do_verify_pin(&mut s, pin)
     }
 
-    /// Emulates GET METADATA (INS 0xF7) for the management key (9B) and the
-    /// PIN/PUK (80/81), including a truthful "is default" flag (tag 0x05);
-    /// every other APDU returns empty data.
+    /// Emulates GET METADATA (INS 0xF7) for the management key (9B), the
+    /// PIN/PUK (80/81), with a truthful "is default" flag (tag 0x05), and
+    /// the key slots (algorithm EC P-256, origin; `6A82` for an empty
+    /// slot).  Every other APDU returns empty data.
     fn send_apdu(&self, reader: &str, apdu: &[u8]) -> Result<Vec<u8>> {
         let s = self.state.lock().unwrap();
         check_reader(&s, reader)?;
@@ -484,6 +523,22 @@ impl PivBackend for VirtualPiv {
                 let default = is_default(&s.puk, &default_puk());
                 Ok(vec![0x05, 0x01, default, 0x06, 0x02, 3, s.puk_retries])
             }
+            [0x00, 0xF7, 0x00, slot, ..] => match s.key_slots.get(slot) {
+                // Algorithm EC P-256; policy (PIN once, touch never); origin.
+                Some(key) => Ok(vec![
+                    0x01,
+                    0x01,
+                    0x11,
+                    0x02,
+                    0x02,
+                    0x02,
+                    0x01,
+                    0x03,
+                    0x01,
+                    if key.generated { 0x01 } else { 0x02 },
+                ]),
+                None => Err(CardError::status(CardOp::Command, 0x6A, 0x82).into()),
+            },
             _ => Ok(vec![]),
         }
     }
@@ -689,6 +744,48 @@ impl PivBackend for VirtualPiv {
             Some(f) => bail!("virtual: injected SET MANAGEMENT KEY failure ({f:?})"),
             None => Ok(()),
         }
+    }
+
+    fn change_reference(&self, reader: &str, which: PinRef, old: &str, new: &str) -> Result<()> {
+        let mut s = self.state.lock().unwrap();
+        check_reader(&s, reader)?;
+        let op = match which {
+            PinRef::Pin => CardOp::ChangePin,
+            PinRef::Puk => CardOp::ChangePuk,
+        };
+        let (current, retries) = match which {
+            PinRef::Pin => (s.pin.clone(), s.pin_retries),
+            PinRef::Puk => (s.puk.clone(), s.puk_retries),
+        };
+        // As the card: blocked, then wrong old value, then policy.
+        if retries == 0 {
+            return Err(CardError::status(op, 0x69, 0x83).into());
+        }
+        if old != current {
+            let left = retries - 1;
+            match which {
+                PinRef::Pin => s.pin_retries = left,
+                PinRef::Puk => s.puk_retries = left,
+            }
+            return Err(CardError::status(op, 0x63, 0xC0 | left).into());
+        }
+        if s.take_fault(|f| *f == Fault::ChangeReferenceComplexity)
+            .is_some()
+        {
+            return Err(CardError::status(op, 0x69, 0x85).into());
+        }
+        match which {
+            PinRef::Pin => {
+                s.pin = new.to_owned();
+                s.pin_retries = 3;
+            }
+            PinRef::Puk => {
+                s.puk = new.to_owned();
+                s.puk_retries = 3;
+            }
+        }
+        s.writes += 1;
+        Ok(())
     }
 
     fn save_fixture(&self, path: &std::path::Path) -> Result<()> {

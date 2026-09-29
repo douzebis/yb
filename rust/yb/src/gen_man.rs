@@ -65,9 +65,9 @@ objects can be tuned at format time (\fB\-\-object\-count\fR).
 .PP
 All write operations (\fBformat\fR, \fBstore\fR, \fBremove\fR) require both the
 PIV PIN and the PIV management key.  \fBfetch\fR requires the PIN for
-encrypted blobs.  \fBlist\fR and \fBfsck\fR never require a PIN — they
-verify blob integrity using only the public key from the store's
-X.509 certificate."#,
+encrypted blobs.  \fBlist\fR and \fBfsck\fR never require a PIN (except
+\fBfsck \-\-check\-key\fR) — they verify blob integrity using only the
+public key from the store's X.509 certificate."#,
             r#".SH ENVIRONMENT
 .TP
 \fBYB_PIN\fR
@@ -83,7 +83,14 @@ Shell name (\fBbash\fR, \fBzsh\fR, \fBfish\fR).  When set, \fByb\fR emits shell
 completion code to stdout and exits.
 .SH EXAMPLES
 .PP
-Provision a new store, generate an ECDH key, and enable PIN-protected mode:
+Set up a YubiKey, guided (from a terminal):
+.RS
+.nf
+yb format
+.fi
+.RE
+.PP
+The same, from a script, on a YubiKey whose PIN and PUK were changed:
 .RS
 .nf
 yb format \-\-generate \-\-protect
@@ -137,17 +144,33 @@ objects.  Any existing \fByb\fR data on the card is erased.
 Each object is written at exactly the size its content requires (9-byte
 sentinel for empty slots, up to 3,063 bytes for occupied slots).
 .PP
+Run without format options from a terminal, \fBformat\fR is \fBguided\fR:
+it shows the state of the YubiKey (as \fByb fsck\fR does), changes a
+factory-default PIN and PUK, keeps or replaces the key in slot 0x82,
+always leaves the management key PIN-protected, shows the plan, and asks
+for confirmation before writing anything.  When the plan destroys blobs or
+an existing key, the confirmation is the YubiKey's serial number.  Any
+format option, or \fB\-\-yes\fR, selects the flag-driven mode described
+below, as does running without a terminal.  \fByb format \-\-yes\fR
+formats with the defaults, without prompting.
+.PP
 By default \fBformat\fR expects an ECDH key to already exist in the chosen
 PIV slot, and checks that it matches the slot's X.509 certificate.  Pass
 \fB\-\-generate\fR to create a new P-256 key pair and a self-signed
 certificate on the card.
 .PP
-Pass \fB\-\-protect\fR to generate a random management key and store it in
-PIN-protected mode (the PRINTED PIV object).  After this, future write
-operations only require the PIN — no \fBYB_MANAGEMENT_KEY\fR or
-\fB\-\-key\fR needed.  The current management key is taken from
+Pass \fB\-\-protect\fR to make sure the management key is PIN-protected.
+If it is not, it is replaced with a random key stored in PIN-protected
+mode (the PRINTED PIV object); if it already is, it is kept.  After this,
+future write operations only require the PIN — no \fBYB_MANAGEMENT_KEY\fR
+or \fB\-\-key\fR needed.  The current management key is taken from
 \fBYB_MANAGEMENT_KEY\fR / \fB\-\-key\fR, else from PRINTED if the card is
 already protected, else the factory default.
+.PP
+Pass \fB\-\-plan\fR to run the checks and print the plan without writing
+anything.  \fB\-\-plan\fR talks to the YubiKey and verifies the PIN; it
+exits with status 1, with the error the real command would give, when a
+check fails.
 .PP
 \fBformat\fR first checks everything it can without writing (PIN,
 management key, slot key) and lists the blobs it will destroy.  It then
@@ -159,10 +182,25 @@ the message says what was done and what to run next.
 command that accesses the store."#,
             r#".SH EXAMPLES
 .PP
-First-time setup \(em generate a key, format, and enable PIN-protected mode:
+First-time setup, guided:
+.RS
+.nf
+yb format
+.fi
+.RE
+.PP
+First-time setup from a script \(em generate a key, format, and enable
+PIN-protected mode:
 .RS
 .nf
 yb format \-\-generate \-\-protect
+.fi
+.RE
+.PP
+Show what that would do, without writing anything:
+.RS
+.nf
+yb format \-\-generate \-\-protect \-\-plan
 .fi
 .RE
 .PP
@@ -397,18 +435,31 @@ yb remove \-\-ignore\-missing maybe.key
 
         "yb-fsck" => (
             r#".PP
-Read the store header and all PIV objects without decrypting any blob,
-then verify every blob's ECDSA signature and print an integrity summary.
-No PIN is required.
+Report the state of the YubiKey (PIN and PUK, management key, store
+slot), then read the store header and all PIV objects without decrypting
+any blob, verify every blob's ECDSA signature and print an integrity
+summary.  No PIN is required, except with \fB\-\-check\-key\fR, which
+checks that the key in the store slot matches its certificate.
 .PP
-\fBfsck\fR exits with status 0 if no blob is CORRUPTED and 1 if any
-blob's signature fails verification or the stored payload is truncated.
-It does not repair damage; use \fByb remove\fR to clean up corrupt blobs."#,
+\fBfsck\fR runs on any YubiKey, including a factory-fresh one or one
+without a store.  It exits with status 1 when the report shows an error
+(blocked PIN, unsupported management key mode, key/certificate mismatch,
+a certificate without an EC P-256 key, an unreadable store, a CORRUPTED
+blob), and 0 otherwise; warnings (e.g. factory-default credentials) do
+not change the exit status.  It does not repair damage; use
+\fByb remove\fR to clean up corrupt blobs."#,
             r#".SH OUTPUT
 Default output (no flags):
 .PP
 .RS
 .nf
+YubiKey <serial> \(em firmware <version>
+  PIN              ok (3/3 tries left)
+  PUK              ok (3/3 tries left)
+  Management key   3DES, PIN-protected
+  Slot 0x82        EC P-256, generated on card, certificate CN=YBLOB ECCP256
+  Key/certificate  not checked (use \-\-check\-key)
+
 Store: <n> objects, slot 0x<xx>, age <n>
 Blobs: <n> stored, <n> objects free (~<n> bytes used by store)
 
@@ -459,6 +510,13 @@ Full object dump for debugging:
 .RS
 .nf
 yb fsck \-\-verbose
+.fi
+.RE
+.PP
+Also check the store key against its certificate (asks for the PIN):
+.RS
+.nf
+yb fsck \-\-check\-key
 .fi
 .RE
 .SH SEE ALSO

@@ -43,6 +43,7 @@ pub mod nvm;
 pub mod orchestrator;
 pub mod piv;
 pub mod policy;
+pub mod report;
 pub mod store;
 
 pub use context::{
@@ -55,7 +56,7 @@ pub use orchestrator::{
     Compression, Encryption, StoreOptions,
 };
 pub use piv::hardware::HardwarePiv;
-pub use piv::{DeviceInfo, FlashHandle, MgmtAlgo, PivBackend};
+pub use piv::{DeviceInfo, FlashHandle, MgmtAlgo, PinRef, PivBackend};
 #[cfg(any(feature = "virtual-piv", feature = "test-utils"))]
 pub use piv::{Fault, VirtualPiv};
 pub use policy::SecretOp;

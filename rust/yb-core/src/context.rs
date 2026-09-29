@@ -94,6 +94,11 @@ impl Repairs {
     }
 }
 
+/// What the resolver reports when no candidate key is accepted: the key
+/// must be supplied (see [`Context::management_key_for_write`]).
+pub const MANAGEMENT_KEY_NOT_FOUND: &str =
+    "the management key is not in PRINTED and is not the factory default";
+
 /// Outcome of [`Context::check_slot_key`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SlotKeyCheck {
@@ -264,6 +269,23 @@ impl Context {
         Ok(resolved)
     }
 
+    /// The PIN known so far (from a non-interactive source, the factory
+    /// default, or an earlier prompt), without prompting.
+    pub fn known_pin(&self) -> Option<String> {
+        self.pin.borrow().as_ref().map(|z| z.as_str().to_owned())
+    }
+
+    /// Replace the cached PIN, e.g. after changing it on the card.
+    pub fn set_pin(&self, pin: &str) {
+        *self.pin.borrow_mut() = Some(Zeroizing::new(pin.to_owned()));
+    }
+
+    /// Detect the factory-default credentials again, after changing some
+    /// of them (spec 0023 §6).
+    pub fn refresh_defaults(&mut self) {
+        self.defaults = probe_card(&self.reader, self.piv.as_ref()).0;
+    }
+
     /// Apply the default-credential policy for `op` (spec 0024): refuse
     /// with `Err`, or return the warnings that apply, printed unless
     /// `--quiet`.  Call once per command, before its first card write.
@@ -390,11 +412,53 @@ impl Context {
             };
             return Ok(ResolvedKey::new(key, source, repairs));
         }
-        Err(
-            YbError::new("the management key is not in PRINTED and is not the factory default")
-                .fix("set YB_MANAGEMENT_KEY")
-                .into(),
-        )
+        Err(YbError::new(MANAGEMENT_KEY_NOT_FOUND)
+            .fix("set YB_MANAGEMENT_KEY")
+            .into())
+    }
+
+    /// Whether the management key is already PIN-protected (spec 0023
+    /// §3a): PRINTED tag `89` holds the key the card accepts, however that
+    /// key was obtained.  The factory key never counts as protected.
+    ///
+    /// Resolves the management key first.  When the key was given
+    /// explicitly, PRINTED is read with the PIN, and the repairs a
+    /// protected card needs (legacy flag, leftover tag `8A`) are recorded
+    /// as for a key read from PRINTED.
+    pub fn management_key_protected(&self) -> Result<bool> {
+        let key = self.management_key_for_write()?;
+        if key.eq_ignore_ascii_case(auxiliaries::DEFAULT_MANAGEMENT_KEY) {
+            return Ok(false);
+        }
+        match self.management_key_source() {
+            Some(KeySource::Printed) => Ok(true),
+            Some(KeySource::Explicit) => {
+                let Some(pin) = self.require_pin()? else {
+                    return Ok(false);
+                };
+                self.piv.verify_pin(&self.reader, &pin)?;
+                let printed =
+                    auxiliaries::read_printed_keys(&self.reader, self.piv.as_ref(), &pin)?;
+                let protected = printed
+                    .current
+                    .as_deref()
+                    .is_some_and(|k| k.eq_ignore_ascii_case(&key));
+                if protected {
+                    if let Some(r) = self.resolved.borrow_mut().as_mut() {
+                        r.repairs = Repairs {
+                            flags: self.protection != ProtectionMode::Standard,
+                            printed: if printed.previous.is_some() {
+                                PrintedRepair::Rewrite
+                            } else {
+                                PrintedRepair::None
+                            },
+                        };
+                    }
+                }
+                Ok(protected)
+            }
+            Some(KeySource::PrintedPrevious | KeySource::FactoryDefault) | None => Ok(false),
+        }
     }
 
     /// Where the resolved management key came from, once resolved.

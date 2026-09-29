@@ -29,8 +29,8 @@ impl OpPat {
 }
 
 /// One catalog entry.  `sw & mask == sw_value` selects the status words.
-/// Texts may use `{tries}` (low nibble of a `63Cx`), `{algo}` (the
-/// management key algorithm yb used) and `{slot}`.
+/// Texts may use `{tries}` (low nibble of a `63Cx`), `{cred}` (PIN or
+/// PUK), `{algo}` (the management key algorithm yb used) and `{slot}`.
 struct Entry {
     op: OpPat,
     sw_value: u16,
@@ -62,12 +62,45 @@ static CATALOG: &[Entry] = &[
               blocked too, only a PIV reset helps, and it erases everything",
     },
     Entry {
+        op: OpPat::Is(|op| *op == CardOp::ChangePin),
+        sw_value: 0x63C0,
+        mask: 0xFFF0,
+        what: "wrong current PIN",
+        why: "{tries}",
+        fix: "",
+    },
+    Entry {
+        op: OpPat::Is(|op| *op == CardOp::ChangePuk),
+        sw_value: 0x63C0,
+        mask: 0xFFF0,
+        what: "wrong current PUK",
+        why: "{tries}",
+        fix: "",
+    },
+    Entry {
+        op: OpPat::Is(|op| matches!(op, CardOp::ChangePin | CardOp::ChangePuk)),
+        sw_value: 0x6983,
+        mask: EXACT,
+        what: "the {cred} is blocked",
+        why: "too many wrong attempts",
+        fix: "",
+    },
+    Entry {
+        op: OpPat::Is(|op| matches!(op, CardOp::ChangePin | CardOp::ChangePuk)),
+        sw_value: 0x6985,
+        mask: EXACT,
+        what: "the new {cred} does not meet this YubiKey's complexity requirement",
+        why: "the YubiKey enforces a PIN complexity policy",
+        fix: "choose a less predictable value (no repeated or sequential digits, \
+              not a common PIN)",
+    },
+    Entry {
         op: OpPat::Is(|op| *op == CardOp::MgmtAuth),
         sw_value: 0x6A80,
         mask: EXACT,
         what: "cannot authenticate with the management key",
         why: "the YubiKey rejected the {algo} algorithm yb used",
-        fix: "`ykman piv info` shows the card's management key algorithm",
+        fix: "`yb fsck` shows the card's management key algorithm",
     },
     Entry {
         op: OpPat::Is(|op| *op == CardOp::MgmtAuth),
@@ -76,8 +109,8 @@ static CATALOG: &[Entry] = &[
         what: "wrong management key",
         why: "the key from YB_MANAGEMENT_KEY or from PRINTED is not the YubiKey's \
               management key",
-        fix: "check YB_MANAGEMENT_KEY; `ykman piv info` shows whether the management key \
-              is PIN-protected",
+        fix: "check YB_MANAGEMENT_KEY; `yb fsck` shows whether the management key is \
+              PIN-protected",
     },
     Entry {
         op: OpPat::Is(|op| *op == CardOp::ReadObject(crate::auxiliaries::OBJ_PRINTED)),
@@ -200,11 +233,16 @@ pub fn explain_pcsc(code: &PcscCode) -> Option<Explanation> {
 }
 
 fn substitute(template: &str, op: &CardOp, sw: u16, err: &CardError) -> String {
+    let cred = if *op == CardOp::ChangePuk {
+        "PUK"
+    } else {
+        "PIN"
+    };
     let tries = (sw & 0x0F) as u8;
     let tries_text = match tries {
-        0 => "no attempts left: the PIN is now blocked".to_owned(),
-        1 => "1 attempt left; one more failure blocks the PIN".to_owned(),
-        n => format!("{n} attempts left before the PIN is blocked"),
+        0 => format!("no attempts left: the {cred} is now blocked"),
+        1 => format!("1 attempt left; one more failure blocks the {cred}"),
+        n => format!("{n} attempts left before the {cred} is blocked"),
     };
     let algo = match err {
         CardError::Status { ctx, .. } => ctx.algo.map(|a| a.to_string()),
@@ -219,6 +257,7 @@ fn substitute(template: &str, op: &CardOp, sw: u16, err: &CardError) -> String {
     };
     template
         .replace("{tries}", &tries_text)
+        .replace("{cred}", cred)
         .replace("{algo}", &algo)
         .replace("{slot}", &slot)
 }
@@ -525,7 +564,7 @@ mod tests {
             render(&e, &env()),
             "Error: cannot authenticate with the management key.\n  \
              The YubiKey rejected the 3DES algorithm yb used.\n  \
-             Try: `ykman piv info` shows the card's management key algorithm.\n  \
+             Try: `yb fsck` shows the card's management key algorithm.\n  \
              (details: management key authentication → SW 6A80)"
         );
     }

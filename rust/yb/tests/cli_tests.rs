@@ -562,6 +562,7 @@ mod fsck_tests {
         let args = FsckArgs {
             verbose: false,
             nvm: false,
+            check_key: false,
         };
         fsck_run(&ctx, &args).unwrap();
     }
@@ -577,6 +578,7 @@ mod fsck_tests {
         let args = FsckArgs {
             verbose: true,
             nvm: false,
+            check_key: false,
         };
         fsck_run(&ctx, &args).unwrap();
     }
@@ -803,12 +805,12 @@ mod format_tests {
             .unwrap();
 
         let args = FormatArgs {
-            object_count: DEFAULT_OBJECT_COUNT,
-
-            key_slot: "0x82".to_owned(),
+            object_count: Some(DEFAULT_OBJECT_COUNT),
+            key_slot: Some("0x82".to_owned()),
             generate: false,
-            subject: DEFAULT_SUBJECT.to_owned(),
+            subject: Some(DEFAULT_SUBJECT.to_owned()),
             protect: false,
+            ..Default::default()
         };
         format_run(&ctx, &args).unwrap();
     }
@@ -823,12 +825,12 @@ mod format_tests {
             .unwrap();
 
         let args = FormatArgs {
-            object_count: DEFAULT_OBJECT_COUNT,
-
-            key_slot: "130".to_owned(),
+            object_count: Some(DEFAULT_OBJECT_COUNT),
+            key_slot: Some("130".to_owned()),
             generate: false,
-            subject: DEFAULT_SUBJECT.to_owned(),
+            subject: Some(DEFAULT_SUBJECT.to_owned()),
             protect: false,
+            ..Default::default()
         };
         format_run(&ctx, &args).unwrap();
     }
@@ -839,12 +841,12 @@ mod format_tests {
         let ctx = make_ctx(piv);
 
         let args = FormatArgs {
-            object_count: DEFAULT_OBJECT_COUNT,
-
-            key_slot: "notanumber".to_owned(),
+            object_count: Some(DEFAULT_OBJECT_COUNT),
+            key_slot: Some("notanumber".to_owned()),
             generate: false,
-            subject: DEFAULT_SUBJECT.to_owned(),
+            subject: Some(DEFAULT_SUBJECT.to_owned()),
             protect: false,
+            ..Default::default()
         };
         assert!(format_run(&ctx, &args).is_err());
     }
@@ -964,11 +966,12 @@ mod mgmt_key_tests {
     fn format_protect_on_firmware_57_keeps_aes192() {
         let ctx = make_ctx(VirtualPiv::from_fixture(&fixture("aes192.yaml")).unwrap());
         let args = FormatArgs {
-            object_count: DEFAULT_OBJECT_COUNT,
-            key_slot: "0x82".to_owned(),
+            object_count: Some(DEFAULT_OBJECT_COUNT),
+            key_slot: Some("0x82".to_owned()),
             generate: true,
-            subject: DEFAULT_SUBJECT.to_owned(),
+            subject: Some(DEFAULT_SUBJECT.to_owned()),
             protect: true,
+            ..Default::default()
         };
         format_run(&ctx, &args).unwrap();
 
@@ -1005,25 +1008,28 @@ mod mgmt_key_tests {
         assert_eq!(reopen(&ctx).protection, ProtectionMode::Standard);
     }
 
-    /// `format --protect` on a card that is already PIN-protected must
-    /// authenticate with the key from PRINTED, not the factory default.
+    /// `format --protect` on a card that is already PIN-protected keeps
+    /// its key (spec 0023 §3a), and repairs a legacy flag.
     fn reprotect(admin: &[u8]) {
         let ctx = protected_card(admin);
         let args = FormatArgs {
-            object_count: DEFAULT_OBJECT_COUNT,
-            key_slot: "0x82".to_owned(),
+            object_count: Some(DEFAULT_OBJECT_COUNT),
+            key_slot: Some("0x82".to_owned()),
             generate: false,
-            subject: DEFAULT_SUBJECT.to_owned(),
+            subject: Some(DEFAULT_SUBJECT.to_owned()),
             protect: true,
+            ..Default::default()
         };
         format_run(&ctx, &args).unwrap();
 
-        // A new random key replaced OTHER_KEY and is stored in PRINTED,
-        // with the standard flag.
-        assert_ne!(
+        // OTHER_KEY is kept, still in PRINTED, with the standard flag.
+        assert_eq!(
             ctx.piv.read_object(&ctx.reader, OBJ_PRINTED).unwrap(),
             printed(OTHER_KEY)
         );
+        ctx.piv
+            .authenticate_management_key(&ctx.reader, OTHER_KEY)
+            .unwrap();
         let admin = AdminData::parse(&read_admin(&ctx)).unwrap();
         assert_eq!(admin.flags, Some(0x02));
         store_one(&reopen(&ctx), "blob").unwrap();
@@ -1117,11 +1123,12 @@ mod mgmt_key_tests {
         let mut ctx = make_ctx(VirtualPiv::from_fixture(&fixture("aes192.yaml")).unwrap());
         ctx.management_key = Some("000102030405060708090a0b0c0d0e0f".to_owned());
         let args = FormatArgs {
-            object_count: DEFAULT_OBJECT_COUNT,
-            key_slot: "0x82".to_owned(),
+            object_count: Some(DEFAULT_OBJECT_COUNT),
+            key_slot: Some("0x82".to_owned()),
             generate: true,
-            subject: DEFAULT_SUBJECT.to_owned(),
+            subject: Some(DEFAULT_SUBJECT.to_owned()),
             protect: false,
+            ..Default::default()
         };
         let err = format_run(&ctx, &args).unwrap_err();
         assert!(
@@ -1163,11 +1170,12 @@ mod format_safety_tests {
 
     fn args(generate: bool, protect: bool) -> FormatArgs {
         FormatArgs {
-            object_count: 8,
-            key_slot: "0x82".to_owned(),
+            object_count: Some(8),
+            key_slot: Some("0x82".to_owned()),
             generate,
-            subject: DEFAULT_SUBJECT.to_owned(),
+            subject: Some(DEFAULT_SUBJECT.to_owned()),
             protect,
+            ..Default::default()
         }
     }
 
@@ -1278,41 +1286,60 @@ mod format_safety_tests {
         }
     }
 
+    /// The key switch only happens on an unprotected card (spec 0023 §3a).
     #[test]
     fn rejected_switch_changes_nothing() {
-        for protected in [false, true] {
-            let (piv, ctx) = card_with_blob(protected);
-            let printed_before = ctx.piv.read_object(&ctx.reader, OBJ_PRINTED).ok();
-            piv.inject_fault(Fault::SetManagementKeyRejected);
-            let err = format_run(&ctx, &args(true, true)).unwrap_err();
-            assert!(
-                format!("{err:#}").contains("nothing was changed"),
-                "{err:#}"
-            );
+        let (piv, ctx) = card_with_blob(false);
+        piv.inject_fault(Fault::SetManagementKeyRejected);
+        let err = format_run(&ctx, &args(true, true)).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("nothing was changed"),
+            "{err:#}"
+        );
 
-            // PRINTED restored exactly (absent on the unprotected card).
-            assert_eq!(
-                ctx.piv.read_object(&ctx.reader, OBJ_PRINTED).ok(),
-                printed_before
-            );
-            let old_key = if protected { OTHER_KEY } else { MGMT };
-            ctx.piv
-                .authenticate_management_key(&ctx.reader, old_key)
-                .unwrap();
-            assert_eq!(blob_names(&ctx), vec!["precious"]);
-        }
+        // PRINTED restored exactly: absent on the unprotected card.
+        assert!(ctx.piv.read_object(&ctx.reader, OBJ_PRINTED).is_err());
+        ctx.piv
+            .authenticate_management_key(&ctx.reader, MGMT)
+            .unwrap();
+        assert_eq!(blob_names(&ctx), vec!["precious"]);
+    }
+
+    /// After an interrupted switch that did not take effect, PRINTED holds
+    /// `89 <new>` (not accepted) and `8A <old>` (the card's key): the key
+    /// is not protected by spec 0023 §3a, so `--protect` switches again.
+    /// A rejected switch then restores PRINTED as `88 { 89 <old> }`.
+    #[test]
+    fn rejected_switch_after_interrupted_switch_restores_printed() {
+        let (piv, ctx) = card_with_blob(true);
+        let stale = yb_core::auxiliaries::encode_printed(MGMT, Some(OTHER_KEY)).unwrap();
+        ctx.piv
+            .write_object(&ctx.reader, OBJ_PRINTED, &stale, OTHER_KEY)
+            .unwrap();
+        let ctx = reopen(&ctx);
+        piv.inject_fault(Fault::SetManagementKeyRejected);
+        let err = format_run(&ctx, &args(false, true)).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("nothing was changed"),
+            "{err:#}"
+        );
+        assert_eq!(
+            ctx.piv.read_object(&ctx.reader, OBJ_PRINTED).unwrap(),
+            printed(OTHER_KEY)
+        );
+        assert_eq!(blob_names(&ctx), vec!["precious"]);
     }
 
     #[test]
     fn lost_reply_completes_the_switch() {
-        let (piv, ctx) = card_with_blob(true);
+        let (piv, ctx) = card_with_blob(false);
         piv.inject_fault(Fault::SetManagementKeyLostReply);
         format_run(&ctx, &args(false, true)).unwrap();
 
         let keys = printed_keys(&ctx);
         assert!(keys.previous.is_none());
         let new_key = keys.current.unwrap();
-        assert_ne!(new_key, OTHER_KEY);
+        assert_ne!(new_key, MGMT);
         ctx.piv
             .authenticate_management_key(&ctx.reader, &new_key)
             .unwrap();
@@ -1320,38 +1347,36 @@ mod format_safety_tests {
 
     #[test]
     fn interrupted_switch_is_recovered_by_the_next_write() {
-        for protected in [false, true] {
-            for applied in [false, true] {
-                let case = format!("protected={protected} applied={applied}");
-                let (piv, ctx) = card_with_blob(protected);
-                piv.inject_fault(Fault::CardLostDuringSetManagementKey { applied });
-                let err = format_run(&ctx, &args(false, true)).unwrap_err();
-                assert!(
-                    format!("{err:#}").contains("interrupted"),
-                    "{case}: {err:#}"
-                );
-                let keys = printed_keys(&ctx);
-                assert!(keys.current.is_some() && keys.previous.is_some(), "{case}");
+        for applied in [false, true] {
+            let case = format!("applied={applied}");
+            let (piv, ctx) = card_with_blob(false);
+            piv.inject_fault(Fault::CardLostDuringSetManagementKey { applied });
+            let err = format_run(&ctx, &args(false, true)).unwrap_err();
+            assert!(
+                format!("{err:#}").contains("interrupted"),
+                "{case}: {err:#}"
+            );
+            let keys = printed_keys(&ctx);
+            assert!(keys.current.is_some() && keys.previous.is_some(), "{case}");
 
-                // Reconnect: an ordinary write recovers and repairs.
-                piv.clear_faults();
-                let ctx = reopen(&ctx);
-                store_one(&ctx, "after").unwrap_or_else(|e| panic!("{case}: {e:#}"));
-                let keys = printed_keys(&ctx);
-                assert!(keys.previous.is_none(), "{case}: 8A left behind");
-                if !protected && !applied {
-                    // Back to the factory key: nothing stored, not protected.
-                    assert_eq!(keys.current, None, "{case}");
-                } else {
-                    // Protected with whichever key the card holds.
-                    let admin = AdminData::parse(&read_admin(&ctx)).unwrap();
-                    assert_eq!(admin.flags, Some(0x02), "{case}");
-                    ctx.piv
-                        .authenticate_management_key(&ctx.reader, &keys.current.unwrap())
-                        .unwrap_or_else(|e| panic!("{case}: {e:#}"));
-                }
-                assert!(blob_names(&ctx).contains(&"after".to_owned()), "{case}");
+            // Reconnect: an ordinary write recovers and repairs.
+            piv.clear_faults();
+            let ctx = reopen(&ctx);
+            store_one(&ctx, "after").unwrap_or_else(|e| panic!("{case}: {e:#}"));
+            let keys = printed_keys(&ctx);
+            assert!(keys.previous.is_none(), "{case}: 8A left behind");
+            if applied {
+                // Protected with the new key.
+                let admin = AdminData::parse(&read_admin(&ctx)).unwrap();
+                assert_eq!(admin.flags, Some(0x02), "{case}");
+                ctx.piv
+                    .authenticate_management_key(&ctx.reader, &keys.current.unwrap())
+                    .unwrap_or_else(|e| panic!("{case}: {e:#}"));
+            } else {
+                // Back to the factory key: nothing stored, not protected.
+                assert_eq!(keys.current, None, "{case}");
             }
+            assert!(blob_names(&ctx).contains(&"after".to_owned()), "{case}");
         }
     }
 
@@ -1373,7 +1398,7 @@ mod format_safety_tests {
     #[test]
     fn failed_printed_cleanup_is_only_a_warning() {
         // B1d (3rd write) fails: format succeeds, the next write cleans up.
-        let (piv, ctx) = card_with_blob(true);
+        let (piv, ctx) = card_with_blob(false);
         piv.inject_fault(Fault::WriteFails(3));
         format_run(&ctx, &args(false, true)).unwrap();
         assert!(printed_keys(&ctx).previous.is_some());
@@ -1502,11 +1527,12 @@ mod default_policy_tests {
 
     fn fmt(protect: bool) -> FormatArgs {
         FormatArgs {
-            object_count: 8,
-            key_slot: "0x82".to_owned(),
+            object_count: Some(8),
+            key_slot: Some("0x82".to_owned()),
             generate: false,
-            subject: DEFAULT_SUBJECT.to_owned(),
+            subject: Some(DEFAULT_SUBJECT.to_owned()),
             protect,
+            ..Default::default()
         }
     }
 
@@ -1565,6 +1591,7 @@ mod default_policy_tests {
                 &FsckArgs {
                     verbose: false,
                     nvm: false,
+                    check_key: false,
                 },
             )
             .unwrap_or_else(|e| panic!("{case}: fsck: {e:#}"));
@@ -1602,7 +1629,10 @@ mod default_policy_tests {
         let warnings = ctx.enforce_default_policy(SecretOp::Store).unwrap();
         assert_eq!(
             warnings,
-            ["Warning: this YubiKey uses the factory-default PIN, PUK and management key."]
+            [
+                "Warning: this YubiKey uses the factory-default PIN, PUK and management key; \
+              run `yb fsck` for details."
+            ]
         );
     }
 
@@ -1612,7 +1642,10 @@ mod default_policy_tests {
         cards::store_one(&ctx, "new").unwrap();
         assert_eq!(
             ctx.enforce_default_policy(SecretOp::Store).unwrap(),
-            ["Warning: this YubiKey uses the factory-default management key."]
+            [
+                "Warning: this YubiKey uses the factory-default management key; run `yb fsck` \
+              for details."
+            ]
         );
     }
 
@@ -1835,6 +1868,538 @@ mod error_render_tests {
         assert!(
             text.ends_with("(details: read certificate of slot 0x82 → SW 6A82)"),
             "{text}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// guided format, --plan and the fsck YubiKey section (spec 0023)
+// ---------------------------------------------------------------------------
+
+mod guided_tests {
+    use super::cards::*;
+    use super::*;
+    use std::collections::VecDeque;
+    use yb::cli::format::{run_with_output as format_with_output, FormatArgs};
+    use yb::cli::fsck::{check as fsck_check, FsckArgs};
+    use yb::cli::guided::{run as guided_run, Cancelled, Prompter};
+    use yb_core::auxiliaries::{
+        detect_default_credentials, read_printed_keys, AdminData, ProtectionMode,
+    };
+    use yb_core::store::constants::OBJECT_ID_ZERO;
+    use yb_core::{Fault, MgmtAlgo, PivBackend, SlotKeyCheck};
+
+    const NEW_PIN: &str = "271828";
+    const NEW_PUK: &str = "31415926";
+
+    /// Answers the flow's questions from a script, and records what it
+    /// says and asks.
+    struct Script {
+        answers: VecDeque<String>,
+        transcript: Vec<String>,
+    }
+
+    impl Script {
+        fn new(answers: &[&str]) -> Self {
+            Self {
+                answers: answers.iter().map(|a| (*a).to_owned()).collect(),
+                transcript: Vec::new(),
+            }
+        }
+
+        fn text(&self) -> String {
+            self.transcript.join("\n")
+        }
+
+        fn next(&mut self, prompt: &str) -> anyhow::Result<String> {
+            self.transcript.push(prompt.to_owned());
+            self.answers
+                .pop_front()
+                .ok_or_else(|| anyhow::anyhow!("script exhausted at: {prompt}"))
+        }
+    }
+
+    impl Prompter for Script {
+        fn say(&mut self, text: &str) {
+            self.transcript.push(text.to_owned());
+        }
+        fn ask(&mut self, prompt: &str) -> anyhow::Result<String> {
+            self.next(prompt)
+        }
+        fn ask_secret(&mut self, prompt: &str) -> anyhow::Result<String> {
+            self.next(prompt)
+        }
+    }
+
+    /// Run the guided flow; the script must be used up exactly.
+    fn guided(ctx: &mut Context, answers: &[&str]) -> (anyhow::Result<()>, Script) {
+        let mut script = Script::new(answers);
+        let outcome = guided_run(ctx, &mut script);
+        assert!(
+            script.answers.is_empty(),
+            "unused answers {:?}\n{}",
+            script.answers,
+            script.text()
+        );
+        (outcome, script)
+    }
+
+    fn is_cancelled(outcome: &anyhow::Result<()>) -> bool {
+        matches!(outcome, Err(e) if e.downcast_ref::<Cancelled>().is_some())
+    }
+
+    /// A card from a YAML fixture string (credentials, slots, objects).
+    fn card_from_yaml(yaml: &str) -> (Arc<VirtualPiv>, TempDir) {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("card.yaml");
+        std::fs::write(&path, yaml).unwrap();
+        (Arc::new(VirtualPiv::from_fixture(&path).unwrap()), tmp)
+    }
+
+    fn context(piv: &Arc<VirtualPiv>, pin: Option<&str>) -> Context {
+        let mut ctx = Context::with_backend(piv.clone(), pin.map(str::to_owned), false).unwrap();
+        ctx.quiet = true;
+        ctx
+    }
+
+    /// The card is set up for yb: PIN-protected management key, the
+    /// store is usable with `pin` only.
+    fn assert_ready(piv: &Arc<VirtualPiv>, pin: &str) {
+        let ctx = context(piv, Some(pin));
+        assert_eq!(ctx.protection, ProtectionMode::Standard);
+        assert_eq!(ctx.check_slot_key(0x82).unwrap(), SlotKeyCheck::Match);
+        store_one(&ctx, "after").unwrap();
+    }
+
+    #[test]
+    fn factory_fresh_card() {
+        let piv = Arc::new(VirtualPiv::new());
+        let mut ctx = context(&piv, None);
+        let (outcome, script) = guided(&mut ctx, &[NEW_PIN, NEW_PIN, NEW_PUK, NEW_PUK, "", "y"]);
+        outcome.unwrap_or_else(|e| panic!("{e:#}\n{}", script.text()));
+        let text = script.text();
+        assert!(text.contains("Your PIN is the factory default"), "{text}");
+        assert!(text.contains("Your PUK is the factory default"), "{text}");
+        assert!(
+            text.contains(
+                "Plan for YubiKey 99999999:\n\
+                 \x20 1. Change PIN\n\
+                 \x20 2. Change PUK\n\
+                 \x20 3. Replace the management key with a random PIN-protected key (3DES)\n\
+                 \x20 4. Create the store: 32 objects, key slot 0x82\n\
+                 \x20 5. Generate a new key in slot 0x82\n"
+            ),
+            "{text}"
+        );
+
+        let reader = piv.reader_name();
+        assert_eq!(
+            detect_default_credentials(&reader, piv.as_ref()),
+            Default::default(),
+            "no factory credential left"
+        );
+        assert_eq!(ctx.known_pin().as_deref(), Some(NEW_PIN));
+        assert_eq!(
+            Store::from_device(&reader, piv.as_ref())
+                .unwrap()
+                .object_count,
+            32
+        );
+        assert_ready(&piv, NEW_PIN);
+    }
+
+    #[test]
+    fn set_up_card_keeps_its_key() {
+        let (piv, setup) = formatted_card_with_piv();
+        store_one(&setup, "old").unwrap();
+        let cert_before = piv.read_certificate(&setup.reader, 0x82).unwrap();
+        let mut ctx = context(&piv, Some(PIN));
+        // Keep the key, 16 objects, confirm with the serial (a blob dies).
+        let (outcome, script) = guided(&mut ctx, &["k", "16", " 88888888 "]);
+        outcome.unwrap_or_else(|e| panic!("{e:#}\n{}", script.text()));
+        let text = script.text();
+        assert!(
+            text.contains("ERASE store — destroys 1 blob: old"),
+            "{text}"
+        );
+        assert!(
+            text.contains("This will destroy 1 blob (old) on YubiKey 88888888."),
+            "{text}"
+        );
+        assert_eq!(
+            piv.read_certificate(&ctx.reader, 0x82).unwrap(),
+            cert_before
+        );
+        assert_ready(&piv, PIN);
+    }
+
+    #[test]
+    fn generating_a_key_needs_the_right_serial() {
+        let (piv, setup) = formatted_card_with_piv();
+        let before = piv.write_count();
+        let mut ctx = context(&piv, Some(PIN));
+        let (outcome, script) = guided(&mut ctx, &["g", "", "12345678"]);
+        assert!(is_cancelled(&outcome), "{outcome:?}");
+        assert!(script
+            .text()
+            .ends_with("Nothing was changed on the YubiKey."));
+        assert_eq!(piv.write_count(), before);
+
+        // The right serial goes through.
+        let cert_before = piv.read_certificate(&setup.reader, 0x82).unwrap();
+        let mut ctx = context(&piv, Some(PIN));
+        let (outcome, _) = guided(&mut ctx, &["g", "", "88888888"]);
+        outcome.unwrap();
+        assert_ne!(
+            piv.read_certificate(&ctx.reader, 0x82).unwrap(),
+            cert_before
+        );
+        assert_ready(&piv, PIN);
+    }
+
+    #[test]
+    fn mismatched_key_asks_before_replacing() {
+        let (piv, setup) = formatted_card_with_piv();
+        // Replace the slot key, keeping the old certificate.
+        piv.inject_fault(Fault::GenerateCertificateFailsAfterKey);
+        assert!(setup
+            .piv
+            .generate_certificate(&setup.reader, 0x82, "CN=X", MGMT, None)
+            .is_err());
+        let before = piv.write_count();
+
+        let mut ctx = context(&piv, Some(PIN));
+        let (outcome, script) = guided(&mut ctx, &["n"]);
+        assert!(is_cancelled(&outcome), "{outcome:?}");
+        assert!(
+            script
+                .text()
+                .contains("Warning: the key in slot 0x82 does not match its certificate."),
+            "{}",
+            script.text()
+        );
+        assert_eq!(piv.write_count(), before);
+
+        let mut ctx = context(&piv, Some(PIN));
+        let (outcome, script) = guided(&mut ctx, &["y", "", "88888888"]);
+        outcome.unwrap_or_else(|e| panic!("{e:#}\n{}", script.text()));
+        assert!(script
+            .text()
+            .contains("REPLACE the key in slot 0x82 with a new one"));
+        assert_ready(&piv, PIN);
+    }
+
+    #[test]
+    fn unusable_certificate_asks_before_replacing() {
+        // Slot 0x82 holds a key and data that is not a certificate.
+        let (piv, _t) = card_from_yaml(
+            "credentials:\n  pin: \"654321\"\n  puk: \"87654321\"\n\
+             slots:\n  \"82\":\n    private_key_hex: \
+             \"64055b21eefa9776a601bd99b0a5aa45c9d29d8ac0106b83844871bc4a9c748c\"\n    \
+             cert_der_hex: \"3003020101\"\n",
+        );
+        let mut ctx = context(&piv, Some(PIN));
+        let (outcome, script) = guided(&mut ctx, &[""]);
+        assert!(is_cancelled(&outcome), "{outcome:?}");
+        let text = script.text();
+        assert!(
+            text.contains("Warning: the certificate in slot 0x82 cannot be parsed."),
+            "{text}"
+        );
+        assert!(
+            text.contains("It may be used by another application."),
+            "{text}"
+        );
+        assert_eq!(piv.write_count(), 0);
+    }
+
+    #[test]
+    fn wrong_current_pin_stops_at_once() {
+        let piv = Arc::new(with_key_piv());
+        let mut ctx = context(&piv, None);
+        let (outcome, _) = guided(&mut ctx, &["000000"]);
+        let text = format!("{:#}", outcome.unwrap_err());
+        assert!(text.contains("nothing was changed"), "{text}");
+        assert_eq!(piv.write_count(), 0);
+    }
+
+    #[test]
+    fn unreadable_store_needs_the_serial() {
+        let (piv, setup) = formatted_card_with_piv();
+        piv.write_object(&setup.reader, OBJECT_ID_ZERO, b"garbage", MGMT)
+            .unwrap();
+        let mut ctx = context(&piv, Some(PIN));
+        let (outcome, script) = guided(&mut ctx, &["k", "", "y"]);
+        assert!(is_cancelled(&outcome), "a plain yes is not enough");
+        assert!(script
+            .text()
+            .contains("This will destroy the unreadable store on YubiKey 88888888."));
+    }
+
+    #[test]
+    fn blocked_pin_stops_before_any_question() {
+        let (piv, _t) = card_from_yaml(
+            "credentials:\n  pin: \"654321\"\n  puk: \"87654321\"\n  pin_retries: 0\n",
+        );
+        let mut ctx = context(&piv, Some(PIN));
+        let (outcome, _) = guided(&mut ctx, &[]);
+        let text = yb_core::errors::render(&outcome.unwrap_err(), &Default::default());
+        assert!(text.contains("the PIN is blocked"), "{text}");
+        assert!(text.contains("ykman piv access unblock-pin"), "{text}");
+        assert_eq!(piv.write_count(), 0);
+    }
+
+    #[test]
+    fn allow_defaults_keeps_the_factory_pin_and_puk() {
+        let piv = Arc::new(VirtualPiv::new());
+        let mut ctx = context(&piv, None);
+        ctx.allow_defaults = true;
+        ctx.quiet = false;
+        let (outcome, script) = guided(&mut ctx, &["", "y"]);
+        outcome.unwrap_or_else(|e| panic!("{e:#}\n{}", script.text()));
+        let text = script.text();
+        assert!(!text.contains("Change PIN"), "{text}");
+        assert!(text.contains("The factory PIN/PUK were kept"), "{text}");
+        let defaults = detect_default_credentials(&piv.reader_name(), piv.as_ref());
+        assert!(defaults.pin && defaults.puk && !defaults.management_key);
+    }
+
+    #[test]
+    fn complexity_rejection_asks_again() {
+        let piv = Arc::new(VirtualPiv::new());
+        piv.inject_fault(Fault::ChangeReferenceComplexity);
+        let mut ctx = context(&piv, None);
+        let (outcome, script) = guided(
+            &mut ctx,
+            &[
+                "111111", "111111", NEW_PUK, NEW_PUK, "", "y", NEW_PIN, NEW_PIN,
+            ],
+        );
+        outcome.unwrap_or_else(|e| panic!("{e:#}\n{}", script.text()));
+        assert!(
+            script
+                .text()
+                .contains("the new PIN does not meet this YubiKey's complexity requirement"),
+            "{}",
+            script.text()
+        );
+        assert_ready(&piv, NEW_PIN);
+    }
+
+    #[test]
+    fn legacy_flag_is_repaired_and_the_key_kept() {
+        let (piv, _) = protected_card_with_piv(&ADMIN_LEGACY);
+        let mut ctx = context(&piv, Some(PIN));
+        let (outcome, script) = guided(&mut ctx, &["k", "", "y"]);
+        outcome.unwrap_or_else(|e| panic!("{e:#}\n{}", script.text()));
+        assert!(script
+            .text()
+            .contains("Keep the PIN-protected management key (3DES)"));
+        let admin = AdminData::parse(&read_admin(&ctx)).unwrap();
+        assert_eq!(admin.flags, Some(0x02));
+        let keys = read_printed_keys(&ctx.reader, piv.as_ref(), PIN).unwrap();
+        assert_eq!(keys.current.as_deref(), Some(OTHER_KEY));
+        assert_ready(&piv, PIN);
+    }
+
+    #[test]
+    fn firmware_57_keeps_aes192() {
+        let piv = Arc::new(VirtualPiv::from_fixture(&fixture("aes192.yaml")).unwrap());
+        let mut ctx = context(&piv, Some(PIN));
+        // The key in slot 0x82 has no certificate: replaced, so the serial.
+        let (outcome, script) = guided(&mut ctx, &["", "77777777"]);
+        outcome.unwrap_or_else(|e| panic!("{e:#}\n{}", script.text()));
+        assert!(script.text().contains("PIN-protected key (AES-192)"));
+        assert_eq!(
+            piv.management_key_algorithm(&ctx.reader).unwrap(),
+            MgmtAlgo::Aes192
+        );
+        assert_ready(&piv, PIN);
+    }
+
+    #[test]
+    fn unknown_management_key_is_asked_for() {
+        // Unprotected card whose key is neither stored nor the factory key.
+        let (piv, setup) = formatted_card_with_piv();
+        piv.set_management_key(&setup.reader, MGMT, OTHER_KEY, MgmtAlgo::Tdes)
+            .unwrap();
+        let mut ctx = context(&piv, Some(PIN));
+        let (outcome, script) = guided(&mut ctx, &["k", OTHER_KEY, "", "y"]);
+        outcome.unwrap_or_else(|e| panic!("{e:#}\n{}", script.text()));
+        assert_ready(&piv, PIN);
+    }
+
+    #[test]
+    fn guided_mode_needs_no_format_flag() {
+        assert!(FormatArgs::default().has_no_format_flags());
+        let flagged = [
+            FormatArgs {
+                generate: true,
+                ..Default::default()
+            },
+            FormatArgs {
+                protect: true,
+                ..Default::default()
+            },
+            FormatArgs {
+                object_count: Some(32),
+                ..Default::default()
+            },
+            FormatArgs {
+                key_slot: Some("0x82".to_owned()),
+                ..Default::default()
+            },
+            FormatArgs {
+                subject: Some("CN=x".to_owned()),
+                ..Default::default()
+            },
+            FormatArgs {
+                yes: true,
+                ..Default::default()
+            },
+            FormatArgs {
+                plan: true,
+                ..Default::default()
+            },
+        ];
+        for args in flagged {
+            assert!(!args.has_no_format_flags(), "{args:?}");
+        }
+    }
+
+    // --plan (spec 0023 §7)
+
+    fn plan_args(generate: bool, protect: bool) -> FormatArgs {
+        FormatArgs {
+            generate,
+            protect,
+            plan: true,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn plan_writes_nothing_and_matches_the_guided_plan() {
+        let (piv, setup) = formatted_card_with_piv();
+        store_one(&setup, "old").unwrap();
+        let before = piv.write_count();
+
+        let ctx = context(&piv, Some(PIN));
+        let mut out = Vec::new();
+        format_with_output(&ctx, &plan_args(true, true), &mut out).unwrap();
+        assert_eq!(piv.write_count(), before);
+        let plan = String::from_utf8(out).unwrap();
+        let plan = &plan[plan.find("Plan for").unwrap()..];
+
+        // Same choices in the guided flow: generate, 32 objects; then say no.
+        let mut ctx = context(&piv, Some(PIN));
+        let (outcome, script) = guided(&mut ctx, &["g", "", "no"]);
+        assert!(is_cancelled(&outcome));
+        assert!(
+            script.text().contains(plan),
+            "{plan}\n---\n{}",
+            script.text()
+        );
+        assert_eq!(piv.write_count(), before);
+    }
+
+    #[test]
+    fn plan_fails_like_the_real_command() {
+        let piv = Arc::new(with_key_piv()); // key without certificate
+        let ctx = context(&piv, Some(PIN));
+        let mut out = Vec::new();
+        let err = format_with_output(&ctx, &plan_args(false, false), &mut out).unwrap_err();
+        let text = format!("{err:#}");
+        assert!(text.contains("nothing was changed"), "{text}");
+        assert!(text.contains("no certificate in slot 0x82"), "{text}");
+        assert_eq!(piv.write_count(), 0);
+    }
+
+    // fsck YubiKey section (spec 0023 §2)
+
+    fn fsck(ctx: &Context, check_key: bool) -> (bool, String) {
+        let mut out = Vec::new();
+        let args = FsckArgs {
+            verbose: false,
+            nvm: false,
+            check_key,
+        };
+        let healthy = fsck_check(ctx, &args, &mut out).unwrap();
+        (healthy, String::from_utf8(out).unwrap())
+    }
+
+    #[test]
+    fn fsck_on_a_factory_card_without_store() {
+        let piv = Arc::new(VirtualPiv::new());
+        let ctx = context(&piv, None);
+        let (healthy, text) = fsck(&ctx, true);
+        assert!(healthy, "{text}");
+        assert!(
+            text.contains("  PIN              warning: factory default (3/3 tries left)"),
+            "{text}"
+        );
+        assert!(
+            text.ends_with("Store: none — run `yb format` to create one\n"),
+            "{text}"
+        );
+        assert_eq!(piv.write_count(), 0);
+    }
+
+    #[test]
+    fn fsck_check_key_reports_a_mismatch() {
+        let (piv, setup) = formatted_card_with_piv();
+        piv.inject_fault(Fault::GenerateCertificateFailsAfterKey);
+        let _ = setup
+            .piv
+            .generate_certificate(&setup.reader, 0x82, "CN=X", MGMT, None);
+        let before = piv.write_count();
+        let ctx = context(&piv, Some(PIN));
+
+        let (healthy, text) = fsck(&ctx, false);
+        assert!(healthy, "not checked without --check-key: {text}");
+        assert!(text.contains("not checked (use --check-key)"), "{text}");
+
+        let (healthy, text) = fsck(&ctx, true);
+        assert!(!healthy);
+        assert!(
+            text.contains("Key/certificate  ERROR: the key does not match its certificate"),
+            "{text}"
+        );
+        assert_eq!(piv.write_count(), before);
+    }
+
+    #[test]
+    fn fsck_unreadable_store_is_an_error() {
+        let (piv, setup) = formatted_card_with_piv();
+        piv.write_object(&setup.reader, OBJECT_ID_ZERO, b"garbage", MGMT)
+            .unwrap();
+        let (healthy, text) = fsck(&context(&piv, Some(PIN)), false);
+        assert!(!healthy);
+        assert!(text.contains("Store: unreadable ("), "{text}");
+    }
+
+    /// The store part is what `yb fsck` printed before spec 0023.
+    #[test]
+    fn fsck_store_output_is_unchanged() {
+        let (piv, setup) = formatted_card_with_piv();
+        store_one(&setup, "blob").unwrap();
+        let (healthy, text) = fsck(&context(&piv, Some(PIN)), false);
+        assert!(healthy);
+        let store_part = &text[text.find("Store:").unwrap()..];
+        let size = Store::from_device(&setup.reader, piv.as_ref())
+            .unwrap()
+            .objects[0]
+            .object_size();
+        assert_eq!(
+            store_part,
+            format!(
+                "Store: 8 objects, slot 0x82, age 1\n\
+                 Blobs: 1 stored, 7 objects free (~{size} bytes used by store)\n\
+                 \n\
+                 \x20 blob                           VERIFIED\n\
+                 \n\
+                 Integrity: 1 verified, 0 unverified, 0 corrupted\n"
+            )
         );
     }
 }

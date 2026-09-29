@@ -12,13 +12,22 @@ use anyhow::{bail, Result};
 use std::fmt;
 
 /// GET METADATA for the management key slot (9B).  Firmware 5.3+.
-pub(crate) const GET_METADATA_MGMT: [u8; 5] = [0x00, 0xF7, 0x00, 0x9B, 0x00];
+pub const GET_METADATA_MGMT: [u8; 5] = [0x00, 0xF7, 0x00, 0x9B, 0x00];
+/// GET METADATA for the PIN (reference 0x80).  Firmware 5.3+.
+pub const GET_METADATA_PIN: [u8; 5] = [0x00, 0xF7, 0x00, 0x80, 0x00];
 /// GET METADATA for the PUK (reference 0x81).  Firmware 5.3+.
-pub(crate) const GET_METADATA_PUK: [u8; 5] = [0x00, 0xF7, 0x00, 0x81, 0x00];
+pub const GET_METADATA_PUK: [u8; 5] = [0x00, 0xF7, 0x00, 0x81, 0x00];
+
+/// GET METADATA for a key slot.  Firmware 5.3+.
+pub(crate) fn get_metadata_apdu(slot: u8) -> [u8; 5] {
+    [0x00, 0xF7, 0x00, slot, 0x00]
+}
 
 // GET METADATA response tags.
 const TAG_ALGORITHM: u8 = 0x01;
 const TAG_POLICY: u8 = 0x02;
+const TAG_ORIGIN: u8 = 0x03;
+const TAG_IS_DEFAULT: u8 = 0x05;
 const TAG_RETRIES: u8 = 0x06;
 
 // Touch policy values (second byte of TAG_POLICY).
@@ -111,12 +120,103 @@ impl fmt::Display for MgmtAlgo {
     }
 }
 
+/// Touch policy of a key, from GET METADATA.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TouchPolicy {
+    Never,
+    Always,
+    Cached,
+}
+
 /// Management key metadata reported by GET METADATA (slot 9B).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct MgmtMetadata {
+pub struct MgmtMetadata {
     pub algo: MgmtAlgo,
+    pub touch: TouchPolicy,
+    /// The key is the factory default.
+    pub is_default: bool,
+}
+
+impl MgmtMetadata {
     /// Touch policy is "always" or "cached": authentication needs a touch.
-    pub touch_required: bool,
+    pub fn touch_required(&self) -> bool {
+        self.touch != TouchPolicy::Never
+    }
+}
+
+/// PIN or PUK metadata reported by GET METADATA (reference 80/81).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CredentialMetadata {
+    /// The value is the factory default.
+    pub is_default: bool,
+    pub retries_total: u8,
+    pub retries_left: u8,
+}
+
+/// Where the key in a slot comes from, per GET METADATA.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyOrigin {
+    Generated,
+    Imported,
+}
+
+/// Key slot metadata reported by GET METADATA.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SlotMetadata {
+    /// PIV algorithm identifier (e.g. `0x11` for EC P-256).
+    pub algorithm: u8,
+    pub origin: Option<KeyOrigin>,
+}
+
+/// Name of a PIV key algorithm identifier, for reports.
+pub fn key_algorithm_name(id: u8) -> String {
+    match id {
+        0x06 => "RSA 1024".to_owned(),
+        0x07 => "RSA 2048".to_owned(),
+        0x05 => "RSA 3072".to_owned(),
+        0x16 => "RSA 4096".to_owned(),
+        0x11 => "EC P-256".to_owned(),
+        0x14 => "EC P-384".to_owned(),
+        0xE0 => "Ed25519".to_owned(),
+        0xE1 => "X25519".to_owned(),
+        other => format!("algorithm 0x{other:02x}"),
+    }
+}
+
+/// PIV algorithm identifier of EC P-256.
+pub const ALGO_ECCP256: u8 = 0x11;
+
+fn is_default_flag(tlv: &std::collections::HashMap<u8, Vec<u8>>) -> bool {
+    tlv.get(&TAG_IS_DEFAULT).map(Vec::as_slice) == Some(&[0x01])
+}
+
+/// Parse the data of a GET METADATA (PIN or PUK) response.
+pub(crate) fn parse_credential_metadata(data: &[u8]) -> Result<CredentialMetadata> {
+    let tlv = crate::auxiliaries::parse_tlv_flat(data);
+    let (retries_total, retries_left) = match tlv.get(&TAG_RETRIES).map(Vec::as_slice) {
+        Some([total, left]) => (*total, *left),
+        _ => bail!("GET METADATA (PIN/PUK): missing retry counters"),
+    };
+    Ok(CredentialMetadata {
+        is_default: is_default_flag(&tlv),
+        retries_total,
+        retries_left,
+    })
+}
+
+/// Parse the data of a GET METADATA (key slot) response.
+pub(crate) fn parse_slot_metadata(data: &[u8]) -> Result<SlotMetadata> {
+    let tlv = crate::auxiliaries::parse_tlv_flat(data);
+    let algorithm = match tlv.get(&TAG_ALGORITHM).map(Vec::as_slice) {
+        Some([id]) => *id,
+        _ => bail!("GET METADATA (key slot): missing algorithm"),
+    };
+    let origin = match tlv.get(&TAG_ORIGIN).map(Vec::as_slice) {
+        Some([0x01]) => Some(KeyOrigin::Generated),
+        Some([0x02]) => Some(KeyOrigin::Imported),
+        _ => None,
+    };
+    Ok(SlotMetadata { algorithm, origin })
 }
 
 /// Parse the data of a GET METADATA (slot 9B) response.
@@ -128,13 +228,15 @@ pub(crate) fn parse_mgmt_metadata(data: &[u8]) -> Result<MgmtMetadata> {
     };
     let algo = MgmtAlgo::from_id(id)
         .ok_or_else(|| anyhow::anyhow!("unsupported management key algorithm 0x{id:02x}"))?;
-    let touch_required = matches!(
-        tlv.get(&TAG_POLICY).map(Vec::as_slice),
-        Some([_, TOUCH_ALWAYS | TOUCH_CACHED])
-    );
+    let touch = match tlv.get(&TAG_POLICY).map(Vec::as_slice) {
+        Some([_, TOUCH_ALWAYS]) => TouchPolicy::Always,
+        Some([_, TOUCH_CACHED]) => TouchPolicy::Cached,
+        _ => TouchPolicy::Never,
+    };
     Ok(MgmtMetadata {
         algo,
-        touch_required,
+        touch,
+        is_default: is_default_flag(&tlv),
     })
 }
 
@@ -202,15 +304,19 @@ mod tests {
         let data = [0x01, 0x01, 0x0A, 0x02, 0x02, 0x00, 0x01, 0x05, 0x01, 0x01];
         let md = parse_mgmt_metadata(&data).unwrap();
         assert_eq!(md.algo, MgmtAlgo::Aes192);
-        assert!(!md.touch_required);
+        assert!(!md.touch_required());
+        assert!(md.is_default);
     }
 
     #[test]
     fn parse_metadata_touch_policy() {
         let always = [0x01, 0x01, 0x03, 0x02, 0x02, 0x00, 0x02];
-        assert!(parse_mgmt_metadata(&always).unwrap().touch_required);
+        assert_eq!(
+            parse_mgmt_metadata(&always).unwrap().touch,
+            TouchPolicy::Always
+        );
         let cached = [0x01, 0x01, 0x03, 0x02, 0x02, 0x00, 0x03];
-        assert!(parse_mgmt_metadata(&cached).unwrap().touch_required);
+        assert!(parse_mgmt_metadata(&cached).unwrap().touch_required());
     }
 
     #[test]
@@ -225,6 +331,26 @@ mod tests {
     #[test]
     fn parse_metadata_requires_algorithm() {
         assert!(parse_mgmt_metadata(&[0x05, 0x01, 0x01]).is_err());
+    }
+
+    #[test]
+    fn parse_credential_and_slot_metadata() {
+        // PIN metadata: default, 3 tries total, 2 left.
+        let md = parse_credential_metadata(&[0x05, 0x01, 0x01, 0x06, 0x02, 0x03, 0x02]).unwrap();
+        assert_eq!(
+            md,
+            CredentialMetadata {
+                is_default: true,
+                retries_total: 3,
+                retries_left: 2
+            }
+        );
+        assert!(parse_credential_metadata(&[0x05, 0x01, 0x01]).is_err());
+        // Slot metadata: EC P-256, generated on the card.
+        let md = parse_slot_metadata(&[0x01, 0x01, 0x11, 0x03, 0x01, 0x01]).unwrap();
+        assert_eq!(md.algorithm, ALGO_ECCP256);
+        assert_eq!(md.origin, Some(KeyOrigin::Generated));
+        assert_eq!(key_algorithm_name(0x07), "RSA 2048");
     }
 
     #[test]

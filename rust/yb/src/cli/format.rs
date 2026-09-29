@@ -1,13 +1,18 @@
-// SPDX-FileCopyrightText: 2025 - 2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+// SPDX-FileCopyrightText: 2025, 2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
 //
 // SPDX-License-Identifier: MIT
 
 //! `yb format`, in two phases (spec 0022): checks that write nothing, then
 //! the changes in an order where no failure leaves blobs behind a replaced
 //! key or a management key that exists nowhere.
+//!
+//! Without format flags, from a terminal, `yb format` is guided (spec
+//! 0023, see [`crate::cli::guided`]); both modes share the plan and Phase B
+//! defined here.
 
 use anyhow::{bail, Context as _, Result};
 use clap::Args;
+use std::io::Write;
 use yb_core::{
     auxiliaries::{
         enable_pin_protected_management_key, generate_random_management_key, KeySwitch,
@@ -15,79 +20,362 @@ use yb_core::{
     },
     errors::YbError,
     list_blobs,
+    report::{CardReport, StorePresence},
     store::{
-        constants::{DEFAULT_OBJECT_COUNT, DEFAULT_SUBJECT, OBJECT_ID_ZERO},
+        constants::{DEFAULT_KEY_SLOT, DEFAULT_OBJECT_COUNT, DEFAULT_SUBJECT},
         Store,
     },
-    Context, SecretOp, SlotKeyCheck,
+    Context, MgmtAlgo, SecretOp, SlotKeyCheck,
 };
 
 use crate::cli::util::quote_name;
 
-#[derive(Args, Debug)]
+#[derive(Args, Debug, Default)]
 pub struct FormatArgs {
-    /// Number of PIV objects to allocate (1–32).
-    #[arg(short = 'c', long = "object-count", default_value_t = DEFAULT_OBJECT_COUNT)]
-    pub object_count: u8,
+    /// Number of PIV objects to allocate (1–32) [default: 32].
+    #[arg(short = 'c', long = "object-count")]
+    pub object_count: Option<u8>,
 
-    /// PIV slot for the ECDH encryption key (decimal or 0x-prefixed hex, e.g. 0x82).
-    #[arg(short = 'k', long = "key-slot", default_value = "0x82")]
-    pub key_slot: String,
+    /// PIV slot for the ECDH encryption key (decimal or 0x-prefixed hex)
+    /// [default: 0x82].
+    #[arg(short = 'k', long = "key-slot")]
+    pub key_slot: Option<String>,
 
     /// Generate a new EC key pair in the chosen slot.
     #[arg(short = 'g', long = "generate")]
     pub generate: bool,
 
-    /// X.509 subject for the self-signed certificate (only with --generate).
-    #[arg(short = 'n', long = "subject", default_value = DEFAULT_SUBJECT)]
-    pub subject: String,
+    /// X.509 subject for the self-signed certificate (only with --generate)
+    /// [default: /CN=YBLOB ECCP256].
+    #[arg(short = 'n', long = "subject")]
+    pub subject: Option<String>,
 
-    /// Set up PIN-protected management key mode.
+    /// Make sure the management key is PIN-protected.
     ///
-    /// Generates a random management key, stores it in the PIN-protected
-    /// PRINTED object, and updates ADMIN DATA so that future write operations
-    /// only require the PIN (no explicit --key needed).
+    /// If it is not, replace it with a random key stored in the
+    /// PIN-protected PRINTED object, so that future write operations only
+    /// require the PIN.  If it already is, keep it.
     /// The current management key is taken from YB_MANAGEMENT_KEY, else from
     /// PRINTED if the YubiKey is already protected, else the factory default.
     #[arg(long = "protect")]
     pub protect: bool,
+
+    /// Format without the guided flow, even from a terminal: keep the key
+    /// in the slot, 32 objects, no protection (unless other flags say
+    /// otherwise).
+    #[arg(long = "yes")]
+    pub yes: bool,
+
+    /// Run the checks and show what the format would do, then stop.
+    ///
+    /// Talks to the YubiKey (and verifies the PIN) but writes nothing.
+    #[arg(long = "plan")]
+    pub plan: bool,
 }
 
+impl FormatArgs {
+    /// No format flag was given: from a terminal, the format is guided
+    /// (spec 0023 §3).
+    pub fn has_no_format_flags(&self) -> bool {
+        !(self.generate
+            || self.protect
+            || self.object_count.is_some()
+            || self.key_slot.is_some()
+            || self.subject.is_some()
+            || self.yes
+            || self.plan)
+    }
+}
+
+/// Flag-driven `yb format` (and `--plan`).
 pub fn run(ctx: &Context, args: &FormatArgs) -> Result<()> {
-    let plan = preflight(ctx, args).context("nothing was changed on the YubiKey")?;
-    apply(ctx, args, plan)
+    run_with_output(ctx, args, &mut std::io::stdout().lock())
+}
+
+/// [`run`], writing the `--plan` output to `out`.
+pub fn run_with_output(ctx: &Context, args: &FormatArgs, out: &mut dyn Write) -> Result<()> {
+    let settings = Settings::from_args(args)?;
+    let report = args.plan.then(|| CardReport::build(ctx, settings.slot));
+    if let Some(ref report) = report {
+        writeln!(out, "{}", report.render(None))?;
+    }
+    let prepared = preflight(ctx, &settings).context("nothing was changed on the YubiKey")?;
+    let store = StorePresence::probe(&ctx.reader, ctx.piv.as_ref());
+
+    if let Some(report) = report {
+        let occupied = report.slot.is_occupied();
+        let plan = FormatPlan {
+            serial: ctx.serial,
+            change_pin: false,
+            change_puk: false,
+            management: ManagementStep::new(ctx, &settings, &prepared)?,
+            erase: EraseStep::from_store(&store),
+            slot_key: match (settings.generate, occupied) {
+                (false, _) => SlotStep::Keep,
+                (true, false) => SlotStep::Generate,
+                (true, true) => SlotStep::Replace,
+            },
+            slot: settings.slot,
+            object_count: settings.object_count,
+        };
+        write!(out, "{}", plan.render())?;
+        return Ok(());
+    }
+
+    // What will be destroyed, shown even with --quiet (spec 0022 §1 step 6).
+    match EraseStep::from_store(&store) {
+        EraseStep::Blobs(names) => {
+            for name in names {
+                eprintln!("will be destroyed: {}", quote_name(&name));
+            }
+        }
+        EraseStep::Unreadable => {
+            eprintln!("Warning: the existing store cannot be parsed; it will be erased")
+        }
+        EraseStep::NoStore | EraseStep::Empty => {}
+    }
+    apply(ctx, &settings, prepared, Vec::new())
+}
+
+/// What to format, from the flags or the guided flow's answers.
+pub(crate) struct Settings {
+    pub object_count: u8,
+    pub slot: u8,
+    pub generate: bool,
+    pub subject: String,
+    pub protect: bool,
+}
+
+impl Settings {
+    fn from_args(args: &FormatArgs) -> Result<Self> {
+        let object_count = args.object_count.unwrap_or(DEFAULT_OBJECT_COUNT);
+        if !(1..=32).contains(&object_count) {
+            bail!("object-count must be 1–32");
+        }
+        let slot = match args.key_slot {
+            Some(ref s) => parse_slot(s)?,
+            None => DEFAULT_KEY_SLOT,
+        };
+        let standard_slots: &[u8] = &[0x9A, 0x9C, 0x9D, 0x9E];
+        if !standard_slots.contains(&slot) && !(0x80u8..=0x95u8).contains(&slot) {
+            eprintln!("Warning: slot 0x{slot:02x} is not a standard PIV key slot");
+        }
+        Ok(Self {
+            object_count,
+            slot,
+            generate: args.generate,
+            subject: args
+                .subject
+                .clone()
+                .unwrap_or_else(|| DEFAULT_SUBJECT.to_owned()),
+            protect: args.protect,
+        })
+    }
 }
 
 /// What Phase A established for Phase B.
-struct Plan {
-    slot: u8,
+pub(crate) struct Prepared {
     /// The card's current management key, accepted by the card.
-    management_key: String,
-    management_key_in_printed: bool,
-    pin: String,
+    pub management_key: String,
+    pub management_key_in_printed: bool,
+    /// The key is already PIN-protected: `--protect` keeps it (spec 0023
+    /// §3a).
+    pub already_protected: bool,
+    pub pin: String,
+}
+
+impl Prepared {
+    /// Resolve the management key (spec 0022 §1 step 4) and, for
+    /// `--protect`, whether it is already protected.
+    pub fn resolve(ctx: &Context, protect: bool, pin: String) -> Result<Self> {
+        let management_key = ctx.management_key_for_write()?;
+        let management_key_in_printed = ctx
+            .management_key_source()
+            .is_some_and(|source| source.is_printed());
+        let already_protected = protect && ctx.management_key_protected()?;
+        Ok(Self {
+            management_key,
+            management_key_in_printed,
+            already_protected,
+            pin,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The plan (spec 0023 §5), shared by the guided flow and --plan
+// ---------------------------------------------------------------------------
+
+pub(crate) enum ManagementStep {
+    /// Leave the management key as it is (no --protect).
+    Keep,
+    /// Replace it with a random PIN-protected key.
+    Protect(MgmtAlgo),
+    /// It is already PIN-protected: keep it.
+    KeepProtected(MgmtAlgo),
+}
+
+impl ManagementStep {
+    pub fn new(ctx: &Context, settings: &Settings, prepared: &Prepared) -> Result<Self> {
+        if !settings.protect {
+            return Ok(Self::Keep);
+        }
+        let algo = ctx.piv.management_key_algorithm(&ctx.reader)?;
+        Ok(if prepared.already_protected {
+            Self::KeepProtected(algo)
+        } else {
+            Self::Protect(algo)
+        })
+    }
+}
+
+pub(crate) enum EraseStep {
+    NoStore,
+    Empty,
+    /// The names of the blobs destroyed.
+    Blobs(Vec<String>),
+    Unreadable,
+}
+
+impl EraseStep {
+    pub fn from_store(store: &StorePresence) -> Self {
+        match store {
+            StorePresence::None => Self::NoStore,
+            StorePresence::Unreadable(_) => Self::Unreadable,
+            StorePresence::Present(store) => {
+                let names: Vec<String> = list_blobs(store).into_iter().map(|b| b.name).collect();
+                if names.is_empty() {
+                    Self::Empty
+                } else {
+                    Self::Blobs(names)
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SlotStep {
+    Keep,
+    /// Generate a key in an empty slot.
+    Generate,
+    /// Replace the key already in the slot.
+    Replace,
+}
+
+pub(crate) struct FormatPlan {
+    pub serial: u32,
+    pub change_pin: bool,
+    pub change_puk: bool,
+    pub management: ManagementStep,
+    pub erase: EraseStep,
+    pub slot_key: SlotStep,
+    pub slot: u8,
+    pub object_count: u8,
+}
+
+impl FormatPlan {
+    /// The steps, in execution order: PIN/PUK, then spec 0022 B1–B3.
+    pub fn steps(&self) -> Vec<String> {
+        let slot = self.slot;
+        let mut steps = Vec::new();
+        if self.change_pin {
+            steps.push("Change PIN".to_owned());
+        }
+        if self.change_puk {
+            steps.push("Change PUK".to_owned());
+        }
+        steps.push(match self.management {
+            ManagementStep::Keep => "Keep the management key (not PIN-protected)".to_owned(),
+            ManagementStep::Protect(algo) => {
+                format!("Replace the management key with a random PIN-protected key ({algo})")
+            }
+            ManagementStep::KeepProtected(algo) => {
+                format!("Keep the PIN-protected management key ({algo})")
+            }
+        });
+        match &self.erase {
+            EraseStep::NoStore => {}
+            EraseStep::Empty => {
+                steps.push("Erase the existing store (it holds no blobs)".to_owned())
+            }
+            EraseStep::Blobs(names) => steps.push(format!(
+                "ERASE store — destroys {}: {}",
+                plural(names.len(), "blob"),
+                quoted_list(names)
+            )),
+            EraseStep::Unreadable => {
+                steps.push("ERASE the existing store (it cannot be read)".to_owned())
+            }
+        }
+        steps.push(format!(
+            "Create the store: {}, key slot 0x{slot:02x}",
+            plural(self.object_count.into(), "object")
+        ));
+        steps.push(match self.slot_key {
+            SlotStep::Keep => format!("Keep existing key in slot 0x{slot:02x}"),
+            SlotStep::Generate => format!("Generate a new key in slot 0x{slot:02x}"),
+            SlotStep::Replace => format!("REPLACE the key in slot 0x{slot:02x} with a new one"),
+        });
+        steps
+    }
+
+    pub fn render(&self) -> String {
+        let mut out = format!("Plan for YubiKey {}:\n", self.serial);
+        for (i, step) in self.steps().iter().enumerate() {
+            out.push_str(&format!("  {}. {step}\n", i + 1));
+        }
+        out
+    }
+
+    /// What the plan destroys, e.g. "1 blob (bar)"; `None` when nothing.
+    pub fn destroys(&self) -> Option<String> {
+        let mut what = Vec::new();
+        match &self.erase {
+            EraseStep::Blobs(names) => what.push(format!(
+                "{} ({})",
+                plural(names.len(), "blob"),
+                quoted_list(names)
+            )),
+            EraseStep::Unreadable => what.push("the unreadable store".to_owned()),
+            EraseStep::NoStore | EraseStep::Empty => {}
+        }
+        if self.slot_key == SlotStep::Replace {
+            what.push(format!("the key in slot 0x{:02x}", self.slot));
+        }
+        (!what.is_empty()).then(|| what.join(" and "))
+    }
+}
+
+fn plural(n: usize, noun: &str) -> String {
+    if n == 1 {
+        format!("1 {noun}")
+    } else {
+        format!("{n} {noun}s")
+    }
+}
+
+fn quoted_list(names: &[String]) -> String {
+    names
+        .iter()
+        .map(|n| quote_name(n))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 // ---------------------------------------------------------------------------
 // Phase A — checks; writes nothing (spec 0022 §1)
 // ---------------------------------------------------------------------------
 
-fn preflight(ctx: &Context, args: &FormatArgs) -> Result<Plan> {
-    // 1. Arguments.
-    if !(1..=32).contains(&args.object_count) {
-        bail!("object-count must be 1–32");
-    }
-    let slot = parse_slot(&args.key_slot)?;
-    let standard_slots: &[u8] = &[0x9A, 0x9C, 0x9D, 0x9E];
-    if !standard_slots.contains(&slot) && !(0x80u8..=0x95u8).contains(&slot) {
-        eprintln!("Warning: slot 0x{slot:02x} is not a standard PIV key slot");
-    }
+fn preflight(ctx: &Context, settings: &Settings) -> Result<Prepared> {
+    let slot = settings.slot;
 
     // 2. Card state: refuse PIN-derived or unparseable ADMIN DATA, and apply
     //    the default-credential policy (spec 0024).  The management key
     //    algorithm is detected by the authentication in 4.
     ctx.ensure_supported_protection()?;
     ctx.enforce_default_policy(SecretOp::Format {
-        protect: args.protect,
+        protect: settings.protect,
     })?;
 
     // 3. PIN.
@@ -98,13 +386,10 @@ fn preflight(ctx: &Context, args: &FormatArgs) -> Result<Plan> {
     ctx.piv.verify_pin(&ctx.reader, &pin)?;
 
     // 4. Management key: resolved and accepted by the card.
-    let management_key = ctx.management_key_for_write()?;
-    let management_key_in_printed = ctx
-        .management_key_source()
-        .is_some_and(|source| source.is_printed());
+    let prepared = Prepared::resolve(ctx, settings.protect, pin)?;
 
     // 5. Store slot (kept as is unless --generate).
-    if !args.generate {
+    if !settings.generate {
         match ctx.check_slot_key(slot)? {
             SlotKeyCheck::Match => {}
             SlotKeyCheck::NoCertificate => {
@@ -122,50 +407,29 @@ fn preflight(ctx: &Context, args: &FormatArgs) -> Result<Plan> {
         }
     }
 
-    // 6. Existing store: what will be destroyed (shown even with --quiet).
-    announce_destroyed_blobs(ctx);
-
-    Ok(Plan {
-        slot,
-        management_key,
-        management_key_in_printed,
-        pin,
-    })
-}
-
-fn announce_destroyed_blobs(ctx: &Context) {
-    match Store::from_device(&ctx.reader, ctx.piv.as_ref()) {
-        Ok(store) => {
-            for blob in list_blobs(&store) {
-                eprintln!("will be destroyed: {}", quote_name(&blob.name));
-            }
-        }
-        Err(_) => {
-            let store_present = ctx
-                .piv
-                .object_size(&ctx.reader, OBJECT_ID_ZERO)
-                .ok()
-                .flatten()
-                .is_some();
-            if store_present {
-                eprintln!("Warning: the existing store cannot be parsed; it will be erased");
-            }
-        }
-    }
+    Ok(prepared)
 }
 
 // ---------------------------------------------------------------------------
 // Phase B — changes (spec 0022 §2)
 // ---------------------------------------------------------------------------
 
-fn apply(ctx: &Context, args: &FormatArgs, plan: Plan) -> Result<()> {
+/// Run Phase B.  `already_done` lists the steps completed before it (the
+/// guided flow's PIN/PUK changes), for failure messages.
+pub(crate) fn apply(
+    ctx: &Context,
+    settings: &Settings,
+    prepared: Prepared,
+    already_done: Vec<String>,
+) -> Result<()> {
     let (reader, piv) = (ctx.reader.as_str(), ctx.piv.as_ref());
-    let slot = plan.slot;
-    let mut phase = PhaseB::new(ctx.quiet);
-    let mut management_key = plan.management_key;
+    let slot = settings.slot;
+    let mut phase = PhaseB::new(ctx.quiet, already_done);
+    let mut management_key = prepared.management_key;
+    let switching = settings.protect && !prepared.already_protected;
 
     // B1 — --protect first: it touches neither the store nor its key.
-    if args.protect {
+    if switching {
         // Keep the card's current algorithm (spec 0021 §3).
         let algo = piv.management_key_algorithm(reader)?;
         let new_key = generate_random_management_key(algo);
@@ -175,7 +439,7 @@ fn apply(ctx: &Context, args: &FormatArgs, plan: Plan) -> Result<()> {
                 piv,
                 &KeySwitch {
                     old_key: &management_key,
-                    old_key_in_printed: plan.management_key_in_printed,
+                    old_key_in_printed: prepared.management_key_in_printed,
                     new_key: &new_key,
                     algo,
                     clearing_legacy_flag: ctx.protection == ProtectionMode::LegacyOrPukBlocked,
@@ -186,6 +450,9 @@ fn apply(ctx: &Context, args: &FormatArgs, plan: Plan) -> Result<()> {
         if !ctx.quiet {
             eprintln!("PIN-protected management key configured ({algo}).");
         }
+    } else if settings.protect && !ctx.quiet {
+        let algo = piv.management_key_algorithm(reader)?;
+        eprintln!("The management key is already PIN-protected ({algo}); keeping it.");
     }
 
     // B2 — erase the store before its key can be replaced.
@@ -195,15 +462,15 @@ fn apply(ctx: &Context, args: &FormatArgs, plan: Plan) -> Result<()> {
             "The store may be partly erased; the key in slot 0x{slot:02x} is unchanged, so \
              intact blobs still decrypt.  Run `yb format` again."
         ),
-        || Store::format(reader, piv, args.object_count, slot, &management_key),
+        || Store::format(reader, piv, settings.object_count, slot, &management_key),
     )?;
-    // B1 already wrote ADMIN DATA and PRINTED when --protect ran.
-    if !args.protect {
+    // B1 already wrote ADMIN DATA and PRINTED when it switched keys.
+    if !switching {
         ctx.complete_pending_repairs();
     }
 
     // B3 — --generate last: its failures only affect an empty store.
-    if args.generate {
+    if settings.generate {
         phase.run(
             &format!("generating a key in slot 0x{slot:02x}"),
             &format!(
@@ -215,9 +482,9 @@ fn apply(ctx: &Context, args: &FormatArgs, plan: Plan) -> Result<()> {
                 piv.generate_certificate(
                     reader,
                     slot,
-                    &args.subject,
+                    &settings.subject,
                     &management_key,
-                    Some(&plan.pin),
+                    Some(&prepared.pin),
                 )?;
                 match ctx.check_slot_key(slot)? {
                     SlotKeyCheck::Match => Ok(()),
@@ -233,7 +500,7 @@ fn apply(ctx: &Context, args: &FormatArgs, plan: Plan) -> Result<()> {
     if !ctx.quiet {
         eprintln!(
             "Store formatted: {} object(s), key slot 0x{slot:02x}",
-            args.object_count
+            settings.object_count
         );
     }
     Ok(())
@@ -248,11 +515,8 @@ struct PhaseB {
 }
 
 impl PhaseB {
-    fn new(quiet: bool) -> Self {
-        Self {
-            quiet,
-            done: Vec::new(),
-        }
+    fn new(quiet: bool, done: Vec<String>) -> Self {
+        Self { quiet, done }
     }
 
     /// Run the step described by `what` (e.g. "erasing the store").

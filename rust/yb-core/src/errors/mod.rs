@@ -24,6 +24,10 @@ use std::fmt;
 pub enum CardOp {
     SelectPiv,
     VerifyPin,
+    /// CHANGE REFERENCE DATA for the PIN.
+    ChangePin,
+    /// CHANGE REFERENCE DATA for the PUK.
+    ChangePuk,
     MgmtAuth,
     SetMgmtKey,
     ReadObject(u32),
@@ -44,6 +48,8 @@ impl CardOp {
         match self {
             Self::SelectPiv => "selecting the PIV application".to_owned(),
             Self::VerifyPin => "PIN verification".to_owned(),
+            Self::ChangePin => "PIN change".to_owned(),
+            Self::ChangePuk => "PUK change".to_owned(),
             Self::MgmtAuth => "management key authentication".to_owned(),
             Self::SetMgmtKey => "changing the management key".to_owned(),
             Self::ReadObject(id) => format!("read object 0x{id:06X}"),

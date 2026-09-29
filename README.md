@@ -143,8 +143,9 @@ completions are activated for the current session automatically.
 ## Quick Start
 
 ```shell
-# One-time setup: generate a P-256 key and enable PIN-protected management key
-yb format --generate --protect
+# One-time setup, guided: changes a factory PIN/PUK, generates a P-256 key,
+# and enables the PIN-protected management key
+yb format
 
 # Stash a secret
 echo "s3cr3t" | yb store -n api-token
@@ -171,7 +172,8 @@ yb resolves the PIN in this order:
 2. `YB_PIN` environment variable
 3. Interactive TTY prompt — deferred until a PIN is actually needed
 
-Commands that never need a PIN (`list`, `fsck`) never prompt.
+Commands that never need a PIN (`list`, `fsck` without `--check-key`) never
+prompt.
 Both perform signature verification using only the public key from the
 store's X.509 certificate.
 
@@ -238,8 +240,10 @@ the available serials and exits.
 ## Security: Default Credential Detection
 
 yb checks for factory-default credentials (PIN `123456`, PUK `12345678`,
-management key `010203...`) and refuses to operate if any are detected.
-Change the PIN and PUK with:
+management key `010203...`).  It refuses to store secrets behind a factory
+PIN or PUK, and warns elsewhere; `yb fsck` reports them.  On a new
+YubiKey, the guided `yb format` changes them.  To change them without
+touching the store:
 
 ```shell
 ykman piv access change-pin
@@ -251,7 +255,8 @@ the management key is replaced with a random value stored on the YubiKey
 itself, protected by your PIN.  yb detects this automatically — no `--key`
 flag is needed for write operations.
 
-Enable it in one step at format time:
+The guided `yb format` always enables it.  From a script, at format time
+(`--protect` keeps a key that is already PIN-protected):
 
 ```shell
 yb format --generate --protect

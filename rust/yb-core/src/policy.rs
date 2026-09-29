@@ -20,7 +20,6 @@ pub enum SecretOp {
     Fetch,
     Store,
     Remove,
-    Fsck,
     Format { protect: bool },
     SelfTest,
 }
@@ -40,7 +39,7 @@ impl SecretOp {
         match self {
             Self::Fetch => (Warn, Silent),
             Self::Store => (Refuse, Warn),
-            Self::Remove | Self::Fsck | Self::Format { protect: false } => (Warn, Warn),
+            Self::Remove | Self::Format { protect: false } => (Warn, Warn),
             // --protect stores the new management key behind the PIN, and
             // replaces the factory management key.
             Self::Format { protect: true } => (Refuse, Silent),
@@ -103,7 +102,7 @@ pub fn default_policy(
         Vec::new()
     } else {
         vec![format!(
-            "Warning: this YubiKey uses the factory-default {}.",
+            "Warning: this YubiKey uses the factory-default {}; run `yb fsck` for details.",
             join(&warned)
         )]
     })
@@ -138,11 +137,10 @@ mod tests {
         ..NONE
     };
 
-    const ALL_OPS: [SecretOp; 7] = [
+    const ALL_OPS: [SecretOp; 6] = [
         SecretOp::Fetch,
         SecretOp::Store,
         SecretOp::Remove,
-        SecretOp::Fsck,
         SecretOp::Format { protect: false },
         SecretOp::Format { protect: true },
         SecretOp::SelfTest,
@@ -166,7 +164,7 @@ mod tests {
                 .collect();
             assert_eq!(
                 got,
-                ["warn", "refuse", "warn", "warn", "warn", "refuse", "refuse"],
+                ["warn", "refuse", "warn", "warn", "refuse", "refuse"],
                 "{creds:?}"
             );
         }
@@ -175,10 +173,7 @@ mod tests {
     #[test]
     fn table_default_management_key() {
         let got: Vec<_> = ALL_OPS.iter().map(|&op| outcome(op, MGMT, false)).collect();
-        assert_eq!(
-            got,
-            ["silent", "warn", "warn", "warn", "warn", "silent", "refuse"]
-        );
+        assert_eq!(got, ["silent", "warn", "warn", "warn", "silent", "refuse"]);
     }
 
     #[test]
@@ -207,7 +202,10 @@ mod tests {
         let w = default_policy(SecretOp::Remove, &all, false).unwrap();
         assert_eq!(
             w,
-            ["Warning: this YubiKey uses the factory-default PIN, PUK and management key."]
+            [
+                "Warning: this YubiKey uses the factory-default PIN, PUK and management key; \
+              run `yb fsck` for details."
+            ]
         );
         let e = default_policy(SecretOp::Store, &all, false).unwrap_err();
         assert!(e

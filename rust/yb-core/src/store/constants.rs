@@ -32,7 +32,6 @@ pub const DEFAULT_OBJECT_COUNT: u8 = 32;
 pub const OBJECT_ID_ZERO: u32 = 0x5f_0000;
 
 /// Default PIV slot used for the ECDH encryption key (slot 0x82).
-#[allow(dead_code)]
 pub const DEFAULT_KEY_SLOT: u8 = 0x82;
 
 /// Default X.509 subject for the self-signed ECDH certificate.

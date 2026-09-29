@@ -42,6 +42,32 @@ pub struct DeviceInfo {
     pub reader: String,
 }
 
+/// The credential changed by [`PivBackend::change_reference`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PinRef {
+    Pin,
+    Puk,
+}
+
+impl PinRef {
+    /// Key reference (P2 of VERIFY / CHANGE REFERENCE DATA).
+    pub fn reference(self) -> u8 {
+        match self {
+            Self::Pin => 0x80,
+            Self::Puk => 0x81,
+        }
+    }
+}
+
+impl std::fmt::Display for PinRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Pin => "PIN",
+            Self::Puk => "PUK",
+        })
+    }
+}
+
 /// Abstract PIV backend.  Both HardwarePiv and EmulatedPiv implement this.
 pub trait PivBackend: Send + Sync {
     /// List connected PC/SC readers.
@@ -139,6 +165,13 @@ pub trait PivBackend: Send + Sync {
         new_key_hex: &str,
         algo: MgmtAlgo,
     ) -> Result<()>;
+
+    /// Change the PIN or the PUK (CHANGE REFERENCE DATA).  Both values are
+    /// at most 8 bytes; the card enforces its own rules on the new one.
+    fn change_reference(&self, reader: &str, which: PinRef, old: &str, new: &str) -> Result<()> {
+        let _ = (reader, which, old, new);
+        anyhow::bail!("changing the {which} is not implemented for this backend")
+    }
 
     /// Return the size in bytes of a PIV data object, or `None` if the object
     /// does not exist.  Used by `scan_nvm` to measure NVM usage without writes.

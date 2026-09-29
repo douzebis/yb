@@ -27,6 +27,10 @@ fn main() {
 
     let result = run(cli);
     if let Err(e) = result {
+        // The guided flow already said that nothing was changed.
+        if e.downcast_ref::<cli::guided::Cancelled>().is_some() {
+            std::process::exit(1);
+        }
         let env = RenderEnv {
             firmware: FIRMWARE.get().cloned(),
             yb_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
@@ -75,11 +79,16 @@ fn run(cli: Cli) -> Result<()> {
 
     let _ = FIRMWARE.set(ctx.firmware.clone());
 
-    // `mut` is only used by the `SelfTest` arm (feature-gated); suppress the
-    // lint when that feature is absent.
-    #[allow(unused_mut)]
     let mut ctx = ctx;
     let result = match cli.command {
+        // Bare `yb format` from a terminal is guided (spec 0023 §3).
+        Commands::Format(args)
+            if args.has_no_format_flags()
+                && atty::is(atty::Stream::Stdin)
+                && atty::is(atty::Stream::Stderr) =>
+        {
+            cli::guided::run(&mut ctx, &mut cli::guided::TtyPrompter)
+        }
         Commands::Format(args) => cli::format::run(&ctx, &args),
         Commands::Store(args) => cli::store::run(&ctx, &args),
         Commands::Fetch(args) => cli::fetch::run(&ctx, &args),

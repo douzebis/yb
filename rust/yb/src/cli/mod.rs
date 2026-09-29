@@ -5,6 +5,7 @@
 pub mod fetch;
 pub mod format;
 pub mod fsck;
+pub mod guided;
 pub mod list;
 pub mod list_readers;
 pub mod picker;

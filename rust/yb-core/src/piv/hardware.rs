@@ -5,7 +5,7 @@
 //! Hardware PIV backend — communicates directly with the YubiKey PIV applet
 //! via PC/SC APDUs (NIST SP 800-73-4).  No external subprocesses required.
 
-use super::{session, tlv, DeviceInfo, FlashHandle, MgmtAlgo, PivBackend};
+use super::{session, tlv, DeviceInfo, FlashHandle, MgmtAlgo, PinRef, PivBackend};
 use crate::errors::{CardError, CardOp, PcscOp};
 use anyhow::{bail, Context, Result};
 use session::{serial_from_reader, version_from_reader, PcscSession, SELECT_PIV};
@@ -87,6 +87,11 @@ impl PivBackend for HardwarePiv {
     fn send_apdu(&self, reader: &str, apdu: &[u8]) -> Result<Vec<u8>> {
         let mut session = PcscSession::open(reader)?;
         session.transmit_check(apdu, CardOp::Command)
+    }
+
+    fn change_reference(&self, reader: &str, which: PinRef, old: &str, new: &str) -> Result<()> {
+        let mut session = PcscSession::open(reader)?;
+        session.change_reference(which, old, new)
     }
 
     fn ecdh(
