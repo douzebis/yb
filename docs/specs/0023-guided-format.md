@@ -6,7 +6,7 @@ SPDX-License-Identifier: MIT
 
 # 0023 — Guided Format and YubiKey Health Report
 
-**Status:** draft
+**Status:** ready
 **App:** yb
 **Implemented in:** <!-- YYYY-MM-DD, fill after implementation -->
 
@@ -16,12 +16,9 @@ SPDX-License-Identifier: MIT
 re-format.  Each time, the user has to piece together the right
 invocation from the man page, the README, and error messages:
 
-- **Default credentials block format without saying what to do.**  yb
-  refuses to run while any factory-default credential is in place.  But
-  `--protect` needs the factory management key, so the documented
-  first-time command `yb format --generate --protect` fails unless the
-  user also knows to add `--allow-defaults`.  Changing the PIN and PUK
-  means switching to ykman.
+- **First-time setup needs another tool.**  Since spec 0024, `yb format
+  --protect` and `yb store` refuse while the PIN or PUK is at its factory
+  value, and yb cannot change them: the user has to switch to ykman.
 - **`--generate` is dangerous and easy to get wrong.**  Leave it out on
   a fresh key and format fails: no certificate.  Add it on a key in use
   and the existing slot-0x82 key, and every blob encrypted to it, is
@@ -34,9 +31,9 @@ invocation from the man page, the README, and error messages:
 
 Separately, no yb command reports the state of the YubiKey itself: PIN
 and PUK status, management key algorithm and protection, and the store
-slot's key and certificate.  `yb fsck` covers only the store.  On a
-factory-fresh card it cannot even run, because the default-credential
-check refuses first.
+slot's key and certificate.  `yb fsck` covers only the store (since spec
+0024 it runs on a factory-fresh card, but only prints a one-line
+warning).
 
 ## Goals
 
@@ -47,8 +44,10 @@ check refuses first.
   - asks for explicit confirmation before anything destructive;
   - runs the plan (spec 0022 sequence);
   - ends with a summary and next steps.
-- The guided flow can change a default PIN and PUK itself, so first-time
-  setup needs neither ykman nor `--allow-defaults`.
+- The guided flow changes a factory PIN and PUK itself, so first-time
+  setup needs no other tool, and ends with a YubiKey that `yb store`
+  accepts.
+- The guided flow always leaves the management key PIN-protected.
 - `yb fsck` gains a **YubiKey section** that reports card-level health,
   from the same code the guided flow uses for its inspection.  It runs
   on factory-fresh cards and on cards without a store.
@@ -65,6 +64,11 @@ check refuses first.
 - PIV reset (`ykman piv reset`).  When the card is blocked, the report
   says so and the flow stops.
 - Choosing the management key algorithm (spec 0021 non-goal).
+- Replacing an already PIN-protected management key with a new one.
+  That is spec 0027 (management key rotation).
+- Reading the YubiKey's management application (form factor, "PIN
+  complexity enforced", FIPS capability).  The card enforces PIN
+  complexity itself (§6).
 - Localization.
 - A separate `yb status` command.  Its role is taken by `yb fsck` (§2).
 
@@ -77,7 +81,7 @@ This is a shared `yb-core` module that builds a `CardReport` from
 
 | Item | Source |
 |---|---|
-| Serial, firmware, form factor | existing device enumeration |
+| Serial, firmware | existing device enumeration |
 | PIN, PUK | GET METADATA (`P2 = 80/81`): default flag, retries left/total |
 | Management key | spec 0021: algorithm, default flag, touch policy, protection mode (standard / legacy-yb (ambiguous) / PIN-derived / none) |
 | Store slot | certificate present?, public key type, subject; GET METADATA on the slot for key presence and origin (generated/imported) where supported |
@@ -103,7 +107,7 @@ items show `unknown (firmware < 5.3)`.
 output unchanged:
 
 ```
-YubiKey 12345678 — YubiKey 5 NFC, firmware 5.4.3
+YubiKey 12345678 — firmware 5.4.3
   PIN              ok (3/3 tries left)
   PUK              ok (3/3 tries left)
   Management key   3DES, PIN-protected
@@ -122,8 +126,9 @@ Integrity: 0 verified, 0 unverified, 1 corrupted
   match check.  A mismatch is an error.
 - **No store**: the store part is replaced with `Store: none — run `yb
   format` to create one`.  That is not an error.
-- **Default credentials**: `fsck` no longer refuses on them.  It reports
-  them as warnings, per the policy in spec 0024.
+- **Default credentials** are reported in this section, as warnings.  The
+  one-line default-credential warning that `fsck` prints since spec
+  0024 is removed; this section replaces it.
 - **Exit status**:
   - 1 if the report has any error, i.e. CORRUPTED blobs as today, plus
     the new card-level errors;
@@ -141,9 +146,14 @@ Guided mode applies when **all** of these hold:
   `-c/--object-count`, `-k/--key-slot`, `-n/--subject`, `--yes`,
   `--dry-run`.
 
-Global options (`--serial`, `--reader`, `--quiet`) select the device or
-reduce output, and do not prevent guided mode.  `--allow-defaults` is
-accepted and ignored in guided mode; the flow handles defaults itself.
+Global options (`--serial`, `--reader`, `--quiet`, `--allow-defaults`)
+do not prevent guided mode.  In guided mode, `--allow-defaults` means
+"allow keeping the factory PIN and PUK" (testing only), the same meaning
+it has everywhere else: accepting factory credentials.
+
+Detecting whether `-c`, `-k` or `-n` was given requires them to be
+optional internally, with their defaults (32, `0x82`, `CN=YBLOB ECCP256`)
+applied in code.
 
 Otherwise `yb format` is **flag-driven**, i.e. exactly today's command,
 plus the spec 0022 sequence and the §8 hints.
@@ -151,6 +161,18 @@ plus the spec 0022 sequence and the §8 hints.
 **`--yes`** (new) forces flag-driven mode.  `yb format --yes` does what
 bare `yb format` does today: keep the existing key in the slot, 32
 objects, no protection.
+
+### 3a. `--protect` means "make sure the key is PIN-protected"
+
+The same rule applies in guided and flag-driven mode:
+
+- **not protected**: the key is replaced by a random key of the card's
+  algorithm, stored behind the PIN (spec 0022 §2, B1);
+- **already protected**: the key is kept; only the repairs the spec 0022
+  resolver finds (legacy flag, interrupted switch) are made.
+
+This amends spec 0022: until now, flag-driven `--protect` always switched
+to a new key.  Replacing a protected key on purpose is spec 0027.
 
 ### 4. Guided flow — questions
 
@@ -169,8 +191,15 @@ whose answer is already settled by the card state are skipped.
      changed."  Prompt for the new PIN twice, 6–8 characters, not
      echoed, and reject `123456`.
    - Otherwise: prompt for the current PIN.
-3. **PUK.**  If it is the factory default: "Change it now? [Y/n]".
-   Declining carries on with a warning.
+3. **PUK.**  Factory default: "Your PUK is the factory default and must
+   be changed" (a default PUK can reset the PIN, spec 0024 §1).  Prompt
+   for the new PUK twice, 6–8 characters, not echoed, and reject
+   `12345678`.
+
+   With `--allow-defaults`, steps 2 and 3 do not require a change: the
+   factory PIN is used as is, and the summary says that `yb store` will
+   refuse until the PIN and PUK are changed (spec 0024), unless it too
+   gets `--allow-defaults`.
 4. **Store slot key.**  The key/certificate match check runs here, now
    that the PIN is known.
    - No key or certificate: "A new key will be generated." (no
@@ -180,14 +209,14 @@ whose answer is already settled by the card state are skipped.
      warns that they become unrecoverable.
    - Mismatch: "The key in slot 0x82 does not match its certificate; a
      new key will be generated."
-5. **Management key.**
-   - Not protected: "Protect the management key with your PIN?
-     (recommended) [Y/n]".  The explanation says that afterwards only
-     the PIN is needed.
-   - Already protected: no question.
-   - Not default, not protected: prompt for it (hex, not echoed).
-   - Factory default, and the user declines protection: refuse, and
-     explain that yb will not operate with the factory management key.
+5. **Management key: no question.**  The guided flow always leaves the
+   key PIN-protected (the `--protect` behavior of §3a):
+   - not protected: it is replaced by a random key of the card's
+     algorithm, stored behind the PIN;
+   - already protected: it is kept.
+
+   yb finds the current key with the spec 0022 resolver.  It prompts for
+   it (hex, not echoed) only when the resolver cannot find it.
 6. **Object count.**  Default 32, with one sentence on the NVM
    trade-off.
 
@@ -201,7 +230,7 @@ marked:
 Plan for YubiKey 12345678:
   1. Change PIN
   2. Change PUK
-  3. Replace management key with a random PIN-protected key (3DES)
+  3. Replace the management key with a random PIN-protected key (3DES)
   4. ERASE store — destroys 1 blob: bar
   5. Keep existing key in slot 0x82
 ```
@@ -227,34 +256,32 @@ Plan for YubiKey 12345678:
 
   Surrounding whitespace is ignored.  Any other input aborts.
 
-An abort, including Ctrl-C at any prompt, prints `Nothing was changed on
-the YubiKey.` and exits 1.
+An explicit "no", or a wrong serial, prints `Nothing was changed on the
+YubiKey.` and exits 1.  Nothing is written before the final confirmation,
+so Ctrl-C at any prompt also leaves the card unchanged; no signal handler
+is installed.
 
 ### 6. Execution and summary
 
 1. **PIN change**: CHANGE REFERENCE DATA `00 24 00 80`, old and new PIN
-   each padded to 8 bytes with `0xFF`.  If ADMIN DATA exists, update its
-   pivman PIN timestamp (tag `0x83`) as ykman does.
+   each padded to 8 bytes with `0xFF`.  ADMIN DATA is not touched: ykman
+   (`pivman_change_pin`) only updates it for PIN-derived keys, which yb
+   rejects.  `Context` then holds the new PIN.
 2. **PUK change**: `00 24 00 81`.
 
    **PIN complexity** (Yubico firmware 5.7+ feature, card-enforced).
-   yb follows ykman 5.9.1 (`_do_change_pin_puk`):
-   - It does not reimplement the complexity rules; the card is the
-     authority.
-   - It reads the "PIN complexity enforced" flag from the management
-     application's device info (tag `0x16`), where available.  The flag
-     is shown in the §2 report and in the PIN prompt ("this YubiKey
-     enforces PIN complexity").
-   - Before sending, it checks only the length: 6–8, or exactly 8 on
-     FIPS-capable PIV.  With complexity enforced, the length is counted
-     in characters; otherwise in bytes.
-   - `SW 6985` on CHANGE REFERENCE DATA is reported as "the new PIN/PUK
-     does not meet this YubiKey's complexity requirement", and the flow
-     prompts again.  Nothing has changed at that point.
-3. **The spec 0022 sequence**, with the default-credential check
-   satisfied: the PIN was just changed, and the factory management key
-   is allowed because step 3 of the plan replaces it.  Progress lines
-   and failure messages are spec 0022's.
+   yb follows ykman 5.9.1 (`_do_change_pin_puk`) and does not
+   reimplement the rules; the card is the authority.  Before sending, yb
+   checks only the length (6–8 bytes); a FIPS YubiKey rejects anything
+   shorter than 8 itself.  `SW 6985` on CHANGE REFERENCE DATA is reported
+   through the spec 0025 catalog ("the new PIN/PUK does not meet this
+   YubiKey's complexity requirement"), and the flow prompts again.
+   Nothing has changed at that point.
+3. **The spec 0022 sequence.**  The guided flow applies its own rules
+   (steps 2, 3 and 5 of §4) instead of the flag-driven spec 0024 policy,
+   as 0024's table foresees.  After steps 1–2, `Context`'s record of the
+   factory credentials is refreshed, so that the later steps see the
+   current state.  Progress lines and failure messages are spec 0022's.
    - A PIN or PUK change followed by a later failure is **not** rolled
      back.  The failure message says the PIN/PUK have already been
      changed.
@@ -311,10 +338,13 @@ would do, run bare `yb format` and answer no at the confirmation.
   prompt.  Use `yb format --yes` for the old behavior.  This goes in the
   changelog and the man page.  Without a terminal (CI, pipes, cron),
   behavior is unchanged.
-- **`yb fsck`** output gains a leading YubiKey section.  It exits 1 on
-  the new card-level errors as well.  It no longer refuses to run on
-  default credentials.  The store part of the output is unchanged.
-  `yb ls` remains the command meant for machine parsing.
+- **`yb fsck`** output gains a leading YubiKey section, which replaces
+  the spec 0024 one-line default-credential warning.  It exits 1 on the
+  new card-level errors as well.  The store part of the output is
+  unchanged.  `yb ls` remains the command meant for machine parsing.
+- **`yb format --protect` on an already-protected YubiKey** no longer
+  replaces the management key (§3a).  The card ends up protected either
+  way.  This goes in the changelog.
 
 **Card**
 
@@ -334,11 +364,17 @@ would do, run bare `yb format` and answer no at the confirmation.
   - set up, generate a new key (serial confirmation required: a wrong
     serial aborts with no writes);
   - key does not match its certificate;
-  - blocked PIN (the flow stops and nothing is written);
+  - blocked PIN (the flow stops and nothing is written); the virtual
+    fixture gains an optional PIN retries field to build it;
+  - factory PIN/PUK kept with `--allow-defaults`;
+  - PIN change rejected with `6985` (a new virtual fault), then
+    accepted;
   - legacy flag `0x01`;
   - firmware 5.7 with AES-192.
 - Guided-mode detection: each format flag, `--yes`, and a non-TTY stdin
   select flag-driven mode.
+- `--protect` (both modes) on an already-protected card keeps the key;
+  on an unprotected card it switches to a random one.
 - `--dry-run` and `fsck` (without `--check-key`) make zero write APDUs,
   checked through the backend's write counter.
 - `fsck`:
@@ -363,4 +399,5 @@ None.  Resolved:
 - [spec 0022](0022-format-sequence.md) — format execution order, key/certificate check
 - [spec 0024](0024-default-credential-policy.md) — default-credential policy
 - [spec 0025](0025-actionable-errors.md) — error message layout
+- [spec 0027](0027-management-key-rotation.md) — replacing a protected management key
 - ykman 5.9.1 `ykman/_cli/piv.py` (`_do_change_pin_puk`), `yubikit/management.py` (`TAG_PIN_COMPLEXITY`)

@@ -174,6 +174,11 @@ write any object.
 
 ### 2. Phase B — changes, in this order
 
+> **Amended by spec 0023 §3a:** `--protect` on an already PIN-protected
+> YubiKey keeps the key (only resolver repairs are made); B1 runs only
+> when the key is not yet protected.  Replacing a protected key on
+> purpose is spec 0027, which reuses B1 unchanged.
+
 **B1 — `--protect`.**  Rearranged so that the new key is always saved
 somewhere before it becomes the card's only key, and the old key stays
 saved until the switch is confirmed.  yb keeps both keys in memory for
