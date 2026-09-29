@@ -372,7 +372,7 @@ mod tests {
             None,
         );
         assert!(result.is_ok(), "full store must not error");
-        assert_eq!(result.unwrap(), false, "full store must return false");
+        assert!(!result.unwrap(), "full store must return false");
 
         // Store must be unchanged — still two blobs.
         assert_eq!(list_blobs(&store).len(), 2, "store must be unmodified");

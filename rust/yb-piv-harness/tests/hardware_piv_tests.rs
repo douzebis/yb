@@ -60,7 +60,7 @@ fn t2_list_devices() {
 fn t2_read_object_missing() {
     skip_if_absent!(with_vsc(Options::default(), |reader| {
         let piv = hardware_piv();
-        assert!(piv.read_object(&reader, 0x5F_C105).is_err());
+        assert!(piv.read_object(reader, 0x5F_C105).is_err());
     }));
 }
 
@@ -70,8 +70,8 @@ fn t2_write_read_object() {
     skip_if_absent!(with_vsc(Options::default(), |reader| {
         let piv = hardware_piv();
         let data = b"hello tier-2";
-        piv.write_object(&reader, 0x5F_C105, data, MGMT).unwrap();
-        let result = piv.read_object(&reader, 0x5F_C105).unwrap();
+        piv.write_object(reader, 0x5F_C105, data, MGMT).unwrap();
+        let result = piv.read_object(reader, 0x5F_C105).unwrap();
         assert_eq!(result, data);
     }));
 }
@@ -81,7 +81,7 @@ fn t2_write_read_object() {
 fn t2_write_wrong_mgmt_key() {
     skip_if_absent!(with_vsc(Options::default(), |reader| {
         let piv = hardware_piv();
-        let result = piv.write_object(&reader, 0x5F_C105, b"x", "aabbccdd");
+        let result = piv.write_object(reader, 0x5F_C105, b"x", "aabbccdd");
         assert!(result.is_err());
     }));
 }
@@ -91,8 +91,8 @@ fn t2_write_wrong_mgmt_key() {
 fn t2_verify_pin() {
     skip_if_absent!(with_vsc(Options::default(), |reader| {
         let piv = hardware_piv();
-        assert!(piv.verify_pin(&reader, "123456").is_ok());
-        assert!(piv.verify_pin(&reader, "wrong").is_err());
+        assert!(piv.verify_pin(reader, "123456").is_ok());
+        assert!(piv.verify_pin(reader, "wrong").is_err());
     }));
 }
 
@@ -101,7 +101,7 @@ fn t2_verify_pin() {
 fn t2_generate_key() {
     skip_if_absent!(with_vsc(Options::default(), |reader| {
         let piv = hardware_piv();
-        let point = piv.generate_key(&reader, 0x82, Some(MGMT)).unwrap();
+        let point = piv.generate_key(reader, 0x82, Some(MGMT)).unwrap();
         assert_eq!(point.len(), 65);
         assert_eq!(point[0], 0x04, "expected uncompressed point");
     }));
@@ -112,7 +112,7 @@ fn t2_generate_key() {
 fn t2_generate_key_no_auth() {
     skip_if_absent!(with_vsc(Options::default(), |reader| {
         let piv = hardware_piv();
-        assert!(piv.generate_key(&reader, 0x82, None).is_err());
+        assert!(piv.generate_key(reader, 0x82, None).is_err());
     }));
 }
 
@@ -123,7 +123,7 @@ fn t2_ecdh() {
         let piv = hardware_piv();
 
         // Generate a key in slot 0x82.
-        piv.generate_key(&reader, 0x82, Some(MGMT)).unwrap();
+        piv.generate_key(reader, 0x82, Some(MGMT)).unwrap();
 
         // Perform ECDH with a software-generated ephemeral key.
         use p256::{ecdh::EphemeralSecret, elliptic_curve::sec1::ToEncodedPoint, PublicKey};
@@ -132,7 +132,7 @@ fn t2_ecdh() {
         let epk: PublicKey = (&ephemeral).into();
         let epk_bytes = epk.to_encoded_point(false).as_bytes().to_vec();
 
-        let secret = piv.ecdh(&reader, 0x82, &epk_bytes, Some("123456")).unwrap();
+        let secret = piv.ecdh(reader, 0x82, &epk_bytes, Some("123456")).unwrap();
         assert_eq!(secret.len(), 32);
     }));
 }
@@ -143,10 +143,10 @@ fn t2_generate_certificate() {
     skip_if_absent!(with_vsc(Options::default(), |reader| {
         let piv = hardware_piv();
         let cert_der = piv
-            .generate_certificate(&reader, 0x82, "CN=T2Test", MGMT, None)
+            .generate_certificate(reader, 0x82, "CN=T2Test", MGMT, None)
             .unwrap();
         assert!(!cert_der.is_empty());
-        let read_back = piv.read_certificate(&reader, 0x82).unwrap();
+        let read_back = piv.read_certificate(reader, 0x82).unwrap();
         assert_eq!(cert_der, read_back);
     }));
 }

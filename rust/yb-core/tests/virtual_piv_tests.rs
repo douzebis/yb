@@ -305,7 +305,7 @@ fn test_store_fetch_encrypted() {
     .unwrap();
 
     let blobs = list_blobs(&store);
-    assert_eq!(blobs[0].is_encrypted, true);
+    assert!(blobs[0].is_encrypted);
 
     let reader = piv.reader_name();
     let fetched = fetch_blob(&store, &piv, &reader, "secret", Some(WITH_KEY_PIN), false)
