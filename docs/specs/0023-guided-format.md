@@ -53,8 +53,8 @@ warning).
   on factory-fresh cards and on cards without a store.
 - `yb format` with flags behaves exactly as today, and `--yes` gives
   scripts today's bare `yb format` behavior.
-- `yb format --dry-run` shows what a flag-driven format would do,
-  without touching the card.
+- `yb format --plan` shows what a flag-driven format would do, in the
+  guided flow's plan format, and writes nothing to the card.
 
 ## Non-goals
 
@@ -70,6 +70,9 @@ warning).
   complexity enforced", FIPS capability).  The card enforces PIN
   complexity itself (§6).
 - Localization.
+- A `--dry-run` option.  A format plan depends on the card (store, slot
+  key, protection), so it cannot be computed without talking to the
+  YubiKey; `--plan` (§7) covers the need, and says what it does.
 - A separate `yb status` command.  Its role is taken by `yb fsck` (§2).
 
 ## Specification
@@ -85,7 +88,11 @@ This is a shared `yb-core` module that builds a `CardReport` from
 | PIN, PUK | GET METADATA (`P2 = 80/81`): default flag, retries left/total |
 | Management key | spec 0021: algorithm, default flag, touch policy, protection mode (standard / legacy-yb (ambiguous) / PIN-derived / none) |
 | Store slot | certificate present?, public key type, subject; GET METADATA on the slot for key presence and origin (generated/imported) where supported |
-| Store | presence, object count, key slot, blobs with integrity verdicts (the existing `fsck` logic) |
+| Store | presence: none / present / unreadable (object 0 exists but cannot be parsed) |
+
+The store's contents (object count, blobs, integrity verdicts) stay with
+the existing `fsck` code in the CLI, which keeps its output unchanged
+(§2); the guided flow uses the store listing for its summary and plan.
 
 Optionally, with the PIN, it adds a **key/certificate match** check
 (spec 0022 Phase A step 5).
@@ -126,9 +133,13 @@ Integrity: 0 verified, 0 unverified, 1 corrupted
   match check.  A mismatch is an error.
 - **No store**: the store part is replaced with `Store: none — run `yb
   format` to create one`.  That is not an error.
+- **Unreadable store** (object 0 exists but cannot be parsed): reported
+  as `Store: unreadable (<reason>)`.  That is an error.
 - **Default credentials** are reported in this section, as warnings.  The
   one-line default-credential warning that `fsck` prints since spec
-  0024 is removed; this section replaces it.
+  0024 is removed; this section replaces it.  `fsck` no longer applies
+  the spec 0024 policy at all: its row (`SecretOp::Fsck`) leaves the
+  table.
 - **Exit status**:
   - 1 if the report has any error, i.e. CORRUPTED blobs as today, plus
     the new card-level errors;
@@ -144,7 +155,7 @@ Guided mode applies when **all** of these hold:
 - stdin and stderr are both terminals;
 - no format-specific flag is given: `-g/--generate`, `--protect`,
   `-c/--object-count`, `-k/--key-slot`, `-n/--subject`, `--yes`,
-  `--dry-run`.
+  `--plan`.
 
 Global options (`--serial`, `--reader`, `--quiet`, `--allow-defaults`)
 do not prevent guided mode.  In guided mode, `--allow-defaults` means
@@ -171,6 +182,12 @@ The same rule applies in guided and flag-driven mode:
 - **already protected**: the key is kept; only the repairs the spec 0022
   resolver finds (legacy flag, interrupted switch) are made.
 
+"Already protected" means: PRINTED tag `89` holds a key that the card
+accepts, however the current key was obtained (PRINTED or
+`YB_MANAGEMENT_KEY`).  ADMIN DATA flags alone do not decide it; a stale
+PRINTED on a card that uses another key counts as not protected.  Format
+has verified the PIN by then, so reading PRINTED costs nothing.
+
 This amends spec 0022: until now, flag-driven `--protect` always switched
 to a new key.  Replacing a protected key on purpose is spec 0027.
 
@@ -190,11 +207,18 @@ whose answer is already settled by the card state are skipped.
    - Factory default: "Your PIN is the factory default and must be
      changed."  Prompt for the new PIN twice, 6–8 characters, not
      echoed, and reject `123456`.
-   - Otherwise: prompt for the current PIN.
+   - Otherwise: prompt for the current PIN (unless `YB_PIN` gives it)
+     and verify it.  A wrong PIN stops the flow at once, as ykman does:
+     the error shows the tries left, and nothing was changed.
+   - Firmware < 5.3 cannot report a factory PIN.  If the PIN entered is
+     `123456`, it is treated as the factory default.
 3. **PUK.**  Factory default: "Your PUK is the factory default and must
    be changed" (a default PUK can reset the PIN, spec 0024 §1).  Prompt
    for the new PUK twice, 6–8 characters, not echoed, and reject
    `12345678`.
+
+   A blocked PUK cannot be changed, and cannot reset the PIN either: it
+   is left alone, even if it was the factory value.
 
    With `--allow-defaults`, steps 2 and 3 do not require a change: the
    factory PIN is used as is, and the summary says that `yb store` will
@@ -207,8 +231,13 @@ whose answer is already settled by the card state are skipped.
    - Key matches certificate: "Keep the existing key (recommended), or
      generate a new one? [K/g]".  If the store holds blobs, choosing `g`
      warns that they become unrecoverable.
-   - Mismatch: "The key in slot 0x82 does not match its certificate; a
-     new key will be generated."
+   - The key does not match its certificate, or the certificate does
+     not hold an EC P-256 key: a warning says what is in the slot, then
+     "Replace the key in slot 0x82?  It may be used by another
+     application.  [y/N]".  Slot 0x82 is a retired key slot that other
+     tools can use (e.g. an RSA key for SSH or a VPN).  `N` stops the
+     flow: `Nothing was changed on the YubiKey.`, exit 1.  `y` makes
+     the plan destructive (§5).
 5. **Management key: no question.**  The guided flow always leaves the
    key PIN-protected (the `--protect` behavior of §3a):
    - not protected: it is replaced by a random key of the card's
@@ -239,8 +268,9 @@ Plan for YubiKey 12345678:
 
 - **Non-destructive plan** (nothing to erase, no existing key replaced):
   `Proceed? [y/N]`.
-- **Destructive plan** (blobs erased, or an existing key in the slot
-  replaced): the user must type the YubiKey's serial number:
+- **Destructive plan** (blobs erased, an unreadable store erased, or an
+  existing key in the slot replaced): the user must type the YubiKey's
+  serial number:
 
   ```
   This will destroy 1 blob (bar) on YubiKey 12345678.
@@ -302,24 +332,36 @@ When the management key was replaced, the summary says how to read it
 back if ever needed (`yubico-piv-tool -a verify-pin -a read-object --id
 0x5fc109`).  It never prints the key.
 
-### 7. `--dry-run`
+### 7. `--plan`
 
-`yb format --dry-run [flags]` is flag-driven.  It:
+`yb format --plan [flags]` is flag-driven, in the spirit of `terraform
+plan`: it runs the checks, shows the plan, and stops.  It:
 
 1. prints the §2 YubiKey section;
-2. prints the plan the flags would carry out (same format as §5);
-3. exits 0.
+2. runs spec 0022 Phase A in full, exactly as the real command would,
+   PIN verification and key/certificate check included.  Phase A writes
+   nothing; like any PIN verification, a wrong PIN uses up one try;
+3. prints the plan the flags would carry out, built by the same code and
+   in the same format as the guided flow's (§5);
+4. exits 0, without running Phase B.
 
-It prompts for nothing and makes no write APDUs.  Steps that depend on
-the PIN are marked `(checked at run time)`.  To see what the guided flow
-would do, run bare `yb format` and answer no at the confirmation.
+If Phase A refuses (e.g. no certificate without `--generate`, or
+`--protect` with a factory PIN), `--plan` fails with the same error as
+the real command, and exits 1.  So `--plan` is also a check that the
+format would go through.
+
+`--plan` has no effect on what the real command does, and the plan can
+still fail at run time (e.g. the card is removed).  To see what the
+guided flow would do, run bare `yb format` and answer no at the
+confirmation.
 
 ### 8. Hints in flag-driven mode
 
-- Default-credential errors from any command add: `Tip: run `yb format`
-  in a terminal for guided setup.`  Default-credential warnings add
-  "run `yb fsck` for details".  Both replace the interim wording of spec
-  0024 §2, which cannot point to features this spec introduces.
+- Default-credential errors keep pointing to `ykman piv access
+  change-pin` / `change-puk`, which keep the store.  They do **not**
+  suggest the guided `yb format`: it erases the store, and a user who
+  kept factory credentials with `--allow-defaults` may have blobs.
+  Default-credential warnings add "run `yb fsck` for details".
 - Error-catalog fixes that point to `ykman piv info` (spec 0025 §2,
   interim wording) point to the `yb fsck` YubiKey section instead.
 - When an existing store is about to be erased, the blobs are listed as
@@ -345,6 +387,8 @@ would do, run bare `yb format` and answer no at the confirmation.
 - **`yb format --protect` on an already-protected YubiKey** no longer
   replaces the management key (§3a).  The card ends up protected either
   way.  This goes in the changelog.
+- New options only: `yb format --yes` and `--plan`, `yb fsck
+  --check-key`.
 
 **Card**
 
@@ -363,7 +407,11 @@ would do, run bare `yb format` and answer no at the confirmation.
   - set up, keep the key;
   - set up, generate a new key (serial confirmation required: a wrong
     serial aborts with no writes);
-  - key does not match its certificate;
+  - key does not match its certificate, and a certificate without a
+    P-256 key: answering `N` stops with no writes, `y` requires the
+    serial;
+  - wrong current PIN: the flow stops with no writes;
+  - unreadable store: serial confirmation required;
   - blocked PIN (the flow stops and nothing is written); the virtual
     fixture gains an optional PIN retries field to build it;
   - factory PIN/PUK kept with `--allow-defaults`;
@@ -375,8 +423,11 @@ would do, run bare `yb format` and answer no at the confirmation.
   select flag-driven mode.
 - `--protect` (both modes) on an already-protected card keeps the key;
   on an unprotected card it switches to a random one.
-- `--dry-run` and `fsck` (without `--check-key`) make zero write APDUs,
-  checked through the backend's write counter.
+- `--plan` and `fsck` (with or without `--check-key`) make zero write
+  APDUs, checked through the backend's write counter.
+- `--plan` prints the same plan lines as the guided flow for the same
+  card and choices, and exits 1 with the real command's error when
+  Phase A refuses.
 - `fsck`:
   - runs on a factory-default card;
   - runs on a card without a store;
@@ -390,6 +441,11 @@ None.  Resolved:
 
 - PIN complexity: follow ykman and let the card enforce it (§6).
 - Default credentials in other commands: covered by spec 0024.
+- `--dry-run` replaced by `--plan` (§7), which says that it talks to the
+  card.
+- Wrong current PIN: stop at once, as ykman does (§4).
+- A slot key that may belong to another application: ask before
+  replacing it (§4).
 
 ## References
 
