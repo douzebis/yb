@@ -4,11 +4,10 @@ Homepage: https://github.com/douzebis/yb
 Changes:
 - Switch from `buildPythonApplication` to `rustPlatform.buildRustPackage`
 - Cargo workspace lives in `rust/` subdirectory (`cargoRoot = "rust"`)
-- System dependency is now `pcsclite` only (replaces opensc, openssl, yubico-piv-tool, yubikey-manager)
+- System dependency is now `pcsclite` only on Linux (replaces opensc, openssl, yubico-piv-tool, yubikey-manager); on macOS, `pcsc-sys` links against `PCSC.framework` via the SDK sysroot automatically
 - Shell completions installed for bash, zsh, and fish via `installShellFiles`
 - Man pages generated and installed via `yb-gen-man` helper binary
 - `passthru.tests.integration`: NixOS VM test using `vsmartcard-vpcd` + `piv-authenticator`, exercising the full PIV stack without physical hardware
-- `badPlatforms = lib.platforms.darwin`: package depends on `pcsclite` (Linux PC/SC stack)
 - `nix-update-script` added for automated version updates
 
 ## Things done
@@ -17,8 +16,8 @@ Changes:
   - [x] x86_64-linux
   - [x] aarch64-linux
   - [ ] x86_64-darwin
-  - [ ] aarch64-darwin
-  - Note: builds successfully on GitHub Actions `macos-15` (aarch64-darwin) and `macos-15-intel` (x86_64-darwin), but `pcsclite` is a Linux-only runtime dependency, hence `badPlatforms = lib.platforms.darwin`
+  - [x] aarch64-darwin
+  - Tested on aarch64-darwin (Apple M1): binary runs, shell completions work
 - Tested, as applicable:
   - [ ] [NixOS tests] in [nixos/tests].
   - [x] [Package tests] at `passthru.tests`.

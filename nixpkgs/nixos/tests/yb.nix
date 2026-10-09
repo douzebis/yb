@@ -1,12 +1,11 @@
 {
   lib,
-  yb,
-  testers,
+  pkgs,
   ybPivHarnessTests,
   testFixtures,
 }:
 
-testers.nixosTest {
+pkgs.testers.nixosTest {
   name = "yb-integration-tests";
   meta.maintainers = with lib.maintainers; [ douzebis ];
 
@@ -22,7 +21,7 @@ testers.nixosTest {
       };
 
       environment.systemPackages = [
-        yb
+        pkgs.yb
         ybPivHarnessTests
       ];
     };
@@ -44,7 +43,7 @@ testers.nixosTest {
     # path baked into CARGO_MANIFEST_DIR is gone at VM runtime).
     out = machine.succeed(
       "RUST_TEST_THREADS=1"
-      + " YB_BIN=${yb}/bin/yb"
+      + " YB_BIN=${pkgs.yb}/bin/yb"
       + " YB_FIXTURE_DIR=${testFixtures}"
       + " yb_cli_tests 2>&1"
     )

@@ -163,22 +163,17 @@ bin=$(ls target/release/deps/${name}-* 2>/dev/null | grep -v '\.' | head -1)
 The sort-by-mtime logic was defensive (pick the newest if multiple matches).
 With `--release` and a clean build, there should only ever be one match.
 
-**Proposal:** Simplify to a glob, drop the mtime sort. Something like:
+**Resolution:** Replaced the mtime-sort pipeline with `find ... ! -name "*.d"`,
+which is portable, explicit, and error-checked:
 ```bash
-bins=( target/release/deps/${name}-+([^.]) )
-cp "${bins[0]}" $out/bin/$name
+bin=$(find target/release/deps -maxdepth 1 -name "$name-*" ! -name "*.d" -type f)
+if [ -z "$bin" ] || [ ! -f "$bin" ]; then
+  echo "ERROR: could not find $name binary" >&2
+  exit 1
+fi
+cp "$bin" $out/bin/$name
 ```
-or even just:
-```bash
-cp target/release/deps/${name}-[^.]* $out/bin/$name
-```
-with a sanity check that exactly one file matched. Using `[^./]` (also
-excluding `/`) is slightly more robust. **Apply.**
 
-**Why `[^.]`:** Rust places several files in `target/release/deps/` that share
-the same `${name}-<hash>` prefix: the test binary (no extension), a `.d`
-depfile, and possibly a `.rmeta` artifact. The pattern `${name}-[^.]*` matches
-only names where the character immediately after the hash contains no dot —
-i.e. the extension-free binary — and excludes `hardware_piv_tests-abc123.d`
-and similar. Without `[^.]`, the glob would match all three and `cp` would
-fail or pick the wrong file.
+Note: bash character-class negation uses `!` not `^` — `[^.]*` is not valid
+in bash globs and would match literally. The `find` approach avoids this
+portability pitfall entirely. **Applied.**

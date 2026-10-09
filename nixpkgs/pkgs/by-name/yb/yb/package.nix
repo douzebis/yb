@@ -9,7 +9,7 @@
   runCommand,
   llvmPackages,
   nix-update-script,
-  callPackage,
+  nixosTests,
   stdenv,
 }:
 
@@ -21,7 +21,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
     owner = "douzebis";
     repo = "yb";
     tag = "v${finalAttrs.version}";
-    hash = "sha256-DsJ3GYow+vvQaoi5Z/IzWC1BwDOmS2l9yeTHuXhRvHU=";
+    hash = "sha256-gX9s1R/75ipaPJFPTBMR2riIxMmw1KfuURx2Up6ovOM=";
   };
 
   cargoRoot = "rust";
@@ -110,12 +110,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
         buildInputs = lib.optionals stdenv.isLinux [ pcsclite ];
 
         LIBCLANG_PATH = "${llvmPackages.libclang.lib}/lib";
-        BINDGEN_EXTRA_CLANG_ARGS =
-          let
-            clangInclude = "${llvmPackages.libclang.lib}/lib/clang";
-            ver = lib.versions.major llvmPackages.release_version;
-          in
-          "-I${clangInclude}/${ver}/include";
+        BINDGEN_EXTRA_CLANG_ARGS = "-I${llvmPackages.libclang.lib}/lib/clang/${lib.versions.major llvmPackages.release_version}/include";
 
         # Skip the normal build — we only want the test binaries.
         buildPhase = ''
@@ -140,7 +135,8 @@ rustPlatform.buildRustPackage (finalAttrs: {
       };
     in
     {
-      tests = callPackage ./tests.nix { inherit ybPivHarnessTests testFixtures; };
+      inherit ybPivHarnessTests testFixtures;
+      tests.integration = nixosTests.yb;
       updateScript = nix-update-script { };
     };
 
