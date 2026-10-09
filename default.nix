@@ -3,9 +3,10 @@
 # SPDX-License-Identifier: MIT
 
 { pkgs ? import (fetchTarball {
-    # Pinned to nixos-25.11 @ a4bf06618f0b5ee50f14ed8f0da77d34ecc19160 (2026-04-29)
-    url    = "https://github.com/NixOS/nixpkgs/archive/a4bf06618f0b5ee50f14ed8f0da77d34ecc19160.tar.gz";
-    sha256 = "0vma331213djanwmb7ibgmi5290952h6ri123xwb66mg58k8r200";
+    # Pinned to nixos-unstable @ e7439b6b14ad3cc35d05608ebca9bce01a25f5f8 (2026-10-08):
+    # close to nixpkgs master, which builds the nixpkgs package (spec 0029).
+    url    = "https://github.com/NixOS/nixpkgs/archive/e7439b6b14ad3cc35d05608ebca9bce01a25f5f8.tar.gz";
+    sha256 = "19y4py973w62z4qb7gzn0chjs67ihxy8rbjb7g71iyk8yz7z5k8z";
   }) {}
 }:
 
@@ -52,7 +53,7 @@ let
     # pcsclite is needed on Linux by all derivations that compile the crate.
     # On macOS, pcsc-sys links against PCSC.framework via the SDK sysroot
     # automatically — no explicit buildInputs entry required.
-    buildInputs = pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.pcsclite ];
+    buildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.pcsclite ];
   };
 
   # Shared dependency cache — rebuilt only when Cargo.lock or dep sources change.
@@ -90,7 +91,7 @@ let
   releaseShell = pkgs.mkShell {
     name = "yb-release";
     nativeBuildInputs = [ pkgs.cargo pkgs.rustc pkgs.pkg-config ];
-    buildInputs = pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.pcsclite ];
+    buildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.pcsclite ];
   };
 
   # ---------------------------------------------------------------------------
@@ -183,7 +184,7 @@ let
       bash-completion
       # Pinned bash to match clap CI (GitHub Actions runner = 5.2.21)
       bash521
-    ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
+    ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
       pcsclite
       ccid
       # Tier-2 test harness (vsmartcard + piv-authenticator)

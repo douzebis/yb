@@ -78,7 +78,7 @@ pub fn run(ctx: &Context, args: &ListArgs) -> Result<()> {
 
     // Sort.
     if args.sort_time {
-        blobs.sort_by(|a, b| b.mtime.cmp(&a.mtime)); // newest first
+        blobs.sort_by_key(|b| std::cmp::Reverse(b.mtime)); // newest first
     }
     // Default sort (by name ascending) is already applied by list_blobs.
 
