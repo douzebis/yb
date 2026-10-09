@@ -112,10 +112,11 @@ rustPlatform.buildRustPackage (finalAttrs: {
     description = "Secure blob storage on a YubiKey";
     longDescription = ''
       Command-line tool for storing encrypted binary blobs on a YubiKey using
-      the PIV application. Uses hybrid encryption (ECDH + AES-256-GCM) with
-      hardware-backed keys, supports PIN-protected management key setup
-      (--protect), glob-pattern blob listing, and shell completions for bash,
-      zsh, and fish.
+      the PIV application. Blobs are encrypted with ECDH (the private key
+      never leaves the YubiKey) and AES-256-GCM, and signed. Includes a
+      guided setup (yb format), a health report of the YubiKey and the store
+      (yb fsck), management key rotation, glob-pattern blob selection, and
+      shell completions for bash, zsh, and fish.
     '';
     homepage = "https://github.com/douzebis/yb";
     changelog = "https://github.com/douzebis/yb/blob/v${finalAttrs.version}/CHANGELOG.md";

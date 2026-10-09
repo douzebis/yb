@@ -23,9 +23,9 @@ All notable changes to yb are recorded here.  The format follows
   the new `yb rotate-management-key`.
 - **Factory-default credentials are handled per command.**  yb refuses
   only when it is about to put a secret behind a credential that does not
-  protect it: `yb store` and `yb format --protect` refuse while the PIN or
-  PUK is the factory value; `fetch`, `rm` and `format` warn; `ls` says
-  nothing.  Previously every command refused.  `--allow-defaults` still
+  protect it: `yb store`, `yb format --protect` and
+  `yb rotate-management-key` refuse while the PIN or PUK is the factory
+  value; `fetch`, `rm` and `format` warn; `ls` says nothing.  Previously every command refused.  `--allow-defaults` still
   turns refusals into warnings.
 - **`yb fsck` output starts with a YubiKey section**, and `fsck` exits
   with status 1 on card-level errors too (e.g. a blocked PIN, or a slot
@@ -55,8 +55,8 @@ All notable changes to yb are recorded here.  The format follows
   on one without a store.  `yb fsck --check-key` also checks that the
   slot key matches its certificate (asks for the PIN).
 - Support for YubiKey firmware 5.7 and later, whose management key is
-  AES-192 by default.  yb reads the key's algorithm from the YubiKey and
-  keeps it when it sets a new key.
+  AES-192 by default (0.4.2 failed on them with `SW 6A80`).  yb reads the
+  key's algorithm from the YubiKey and keeps it when it sets a new key.
 
 ### Changed
 
@@ -93,6 +93,19 @@ All notable changes to yb are recorded here.  The format follows
 - The tests of the published `yb` and `yb-core` crates pass from the
   crates.io tarballs alone (they read files outside their package, or
   lost a feature they needed), for distributions that build from them.
+
+### For packagers
+
+- The tier-2 test programs (`hardware_piv_tests`, `yb_cli_tests`) are
+  binaries of the `yb-piv-harness` crate (feature `integration-tests`),
+  built by a plain `cargo build`; they need pcscd with a virtual smart
+  card (vsmartcard-vpcd), and take `--test-threads=1`.
+- Test fixtures are compiled into `yb-core` (feature `virtual-piv`); the
+  `YB_FIXTURE_DIR` variable is gone.  `YB_BIN` still points
+  `yb_cli_tests` at the `yb` binary under test.
+- The version is set once, in `rust/Cargo.toml` (`workspace.package`).
+- yb's own repository builds and tests with the nixpkgs recipe, staged in
+  `nixpkgs/` (see `nixpkgs/README.md`).
 
 ## [0.4.2] — 2026-04-30
 
