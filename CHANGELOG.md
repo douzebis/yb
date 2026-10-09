@@ -10,6 +10,15 @@ All notable changes to yb are recorded here.  The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and yb uses
 [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- The installation instructions cover NixOS and the build requirements
+  of `cargo install` (shown on crates.io), with the error you get without
+  them; `--locked` is recommended rather than required.
+- The `yb` and `yb-core` crates include the MIT license text.
+
 ## [0.5.0] — 2026-10-09
 
 ### Upgrade notes

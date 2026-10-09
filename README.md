@@ -14,6 +14,11 @@ binary blobs directly within a [YubiKey](https://www.yubico.com/products/)
 using its PIV application. Blobs are stored under human-friendly names,
 optionally encrypted with hardware-backed hybrid cryptography.
 
+> **Installing with `cargo install`?**  It builds yb from source.  On Linux,
+> install `pkg-config` and the PC/SC library (pcsclite) first; on NixOS,
+> build in a `nix-shell` that provides them.  See
+> [Installation](#installation).  On macOS, nothing extra is needed.
+
 **GitHub**: https://github.com/douzebis/yb
 
 ---
@@ -31,13 +36,23 @@ optionally encrypted with hardware-backed hybrid cryptography.
 - **Management key kept on the YubiKey**, unlocked by the PIN: writes need
   only the PIN
 - **Shell completions** for bash, zsh, and fish (dynamic blob-name completion)
-- No runtime dependencies beyond PC/SC — a single static binary
+- No runtime dependencies beyond PC/SC — a single binary
 
 ---
 
 ## Installation
 
-### NixOS / nix-shell
+### NixOS / Nix
+
+yb is packaged in nixpkgs (which may lag behind crates.io):
+
+```nix
+# configuration.nix
+environment.systemPackages = [ pkgs.yb ];
+services.pcscd.enable = true;
+```
+
+Or try it without installing: `nix-shell -p yb`.
 
 Build and install from the repo:
 
@@ -53,9 +68,10 @@ activated automatically:
 nix-shell
 ```
 
-### cargo install (Debian, Arch, Fedora, macOS, …)
+### cargo install (Debian, Arch, Fedora, NixOS, macOS, …)
 
-First, install the PC/SC development library for your distribution:
+`cargo install` builds yb from source.  On Linux, it needs `pkg-config` and
+the PC/SC development library; install them first:
 
 ```shell
 # Debian / Ubuntu
@@ -76,12 +92,32 @@ Then:
 cargo install --locked yb
 ```
 
-`--locked` is required: it uses the dependency versions that were tested at
-release time.  Without it, Cargo may resolve newer transitive dependency
-versions that require a more recent Rust toolchain than the one you have.
+On NixOS, libraries are not installed globally: build in a shell that
+provides them, in one step:
 
-Runtime requirement: a PC/SC daemon must be running (`pcscd` on Linux).
-No other external tools are needed.
+```shell
+nix-shell -p cargo rustc pkg-config pcsclite --run 'cargo install --locked yb'
+```
+
+`--locked` is recommended: it uses the dependency versions yb was tested
+with at release time.  Plain `cargo install yb` (as shown on crates.io)
+works too; it picks the newest compatible versions, which may need a more
+recent Rust toolchain than yours.
+
+Runtime requirement: a PC/SC daemon must be running (`pcscd` on Linux; on
+NixOS, `services.pcscd.enable = true;`).  No other external tools are
+needed.
+
+**Troubleshooting:**
+
+- *The build fails with `Could not find a PCSC library` … `The pkg-config
+  command could not be found`.*  `pkg-config` or the PC/SC library is
+  missing: install them as above (on NixOS, use the `nix-shell` line).
+- *`yb --version` answers `No such option: --version`, or `yb ls` reports
+  `Store has bad object size`.*  An older yb (the 0.1.x Python version)
+  comes first on your `PATH`.  Check with `type -a yb`: `cargo install`
+  puts yb in `~/.cargo/bin`.  Remove the old one, or put `~/.cargo/bin`
+  first on your `PATH`.
 
 > **Man pages:** `cargo install` does not install man pages.  To generate
 > them locally, run:
