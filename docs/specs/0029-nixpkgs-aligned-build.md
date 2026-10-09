@@ -237,6 +237,13 @@ the staged directory keeps that one line in `nixpkgs/README.md`.
   `yb-core.workspace = true`.  `yb-piv-harness` keeps its own (unpublished).
   The two lines sit together in one file (crates.io needs a version on the
   path dependency, and cargo cannot derive it from `workspace.package`).
+- Between releases, the version is the next one with a `-dev` suffix
+  (e.g. `0.5.0-dev`), so builds from `main` do not claim to be the last
+  release.  The staged `package.nix` keeps the version nixpkgs ships; the
+  staging check (§8) requires it to be older than the `-dev` version, and
+  equal to the version at a release.  `publish.yaml`'s tag check means a
+  `-dev` version is never published.  (Added after implementation,
+  2026-10-09.)
 - `default.nix` reads it: `cargoVersion = (lib.importTOML
   ./rust/Cargo.toml).workspace.package.version`.
 - `package.nix` keeps a literal `version`, which `nix-update` edits.  CI

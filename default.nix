@@ -130,16 +130,24 @@ let
       });
   });
 
-  # The staged files must pass nixpkgs's formatter, and carry the version
-  # being released (spec 0029 §8).
+  # The staged files must pass nixpkgs's formatter, and carry the right
+  # version (spec 0029 §8).  Between releases, rust/Cargo.toml has the next
+  # version with a `-dev` suffix and the staged package.nix the version
+  # nixpkgs ships, which must be older; for a release, both are equal.
   stagedPackage = ./nixpkgs/pkgs/by-name/yb/yb/package.nix;
   stagedVersion = (pkgs.callPackage stagedPackage { }).version;
+  nextRelease = pkgs.lib.removeSuffix "-dev" cargoVersion;
+  stagedVersionOk =
+    if nextRelease != cargoVersion
+    then builtins.compareVersions stagedVersion nextRelease < 0
+    else stagedVersion == cargoVersion;
   nixpkgsStagingCheck = pkgs.runCommand "yb-nixpkgs-staging-check" {
     nativeBuildInputs = [ pkgs.nixfmt ];
   } (''
     nixfmt --check ${stagedPackage} ${./nixpkgs/nixos/tests/yb.nix}
-  '' + pkgs.lib.optionalString (stagedVersion != cargoVersion) ''
-    echo "staged package.nix has version ${stagedVersion}, rust/Cargo.toml has ${cargoVersion}" >&2
+  '' + pkgs.lib.optionalString (!stagedVersionOk) ''
+    echo "staged package.nix has version ${stagedVersion}, which does not fit" \
+      "rust/Cargo.toml's ${cargoVersion} (equal for a release, older during development)" >&2
     exit 1
   '' + ''
     touch $out

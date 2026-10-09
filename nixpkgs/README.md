@@ -14,7 +14,10 @@ the repository's `default.nix` builds them from the local source
 what a nixpkgs PR submits.  Keep them in nixpkgs style (nixfmt, no SPDX
 header: their licensing is declared in `REUSE.toml`), and copy them into
 nixpkgs verbatim.  `nix-build -A nixpkgs-staging-check` checks the
-formatting and that `version` matches `rust/Cargo.toml`.
+formatting and the version: between releases, `rust/Cargo.toml` has the
+next version with a `-dev` suffix (e.g. `0.5.0-dev`) and the staged
+`version` is the one nixpkgs ships, which must be older; for a release,
+both are equal.
 
 The test is registered in `nixos/tests/all-tests.nix` with:
 
@@ -27,9 +30,10 @@ The other files (`pr-description.md`, `review-response.md`,
 
 ## Releasing
 
-1. In `rust/Cargo.toml`, bump `workspace.package.version` and the
-   `yb-core` version under `workspace.dependencies`; run `cargo update -w`.
-   Rename `[Unreleased]` in `CHANGELOG.md`.  Set the same `version` in
+1. In `rust/Cargo.toml`, drop the `-dev` suffix from
+   `workspace.package.version` and from the `yb-core` version under
+   `workspace.dependencies`; run `cargo update -w`.  Rename `[Unreleased]`
+   in `CHANGELOG.md`.  Set the same `version` in
    `pkgs/by-name/yb/yb/package.nix` (the check above requires it).
 2. Commit, tag `vX.Y.Z`, push the tag.
 3. crates.io: `.github/workflows/publish.yaml` packages and tests the
@@ -46,6 +50,9 @@ The other files (`pr-description.md`, `review-response.md`,
      (`yb: A.B.C -> X.Y.Z`).
 5. Copy the updated `package.nix` back here (with its new `hash` and
    `cargoHash`), and commit.
+6. Start the next cycle: set `rust/Cargo.toml` to the next version with a
+   `-dev` suffix (both lines), `cargo update -w`, add an `[Unreleased]`
+   section to `CHANGELOG.md`, commit.
 
 ## One-time setup for publishing
 
