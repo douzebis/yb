@@ -11,6 +11,17 @@
 
 let
   # ---------------------------------------------------------------------------
+  # BASH 5.2.21 — pinned to match the GitHub Actions runner used by clap CI,
+  # so that bash shell-integration tests behave identically locally.
+  # nixpkgs @ 15ee47600479 is the last commit before the 5.2p21 -> 5.2p26 bump.
+  # ---------------------------------------------------------------------------
+  pkgs-bash521 = import (fetchTarball {
+    url    = "https://github.com/NixOS/nixpkgs/archive/15ee47600479b11a9674252a48c14db8fe0961be.tar.gz";
+    sha256 = "0bd54880nvmhc6mc492b544kl45ganc2acqfd91dmi5yyvrkg5qb";
+  }) {};
+  bash521 = pkgs-bash521.bashInteractive;
+
+  # ---------------------------------------------------------------------------
   # CRANE (Rust build framework)
   # ---------------------------------------------------------------------------
   crane = pkgs.callPackage (pkgs.fetchgit {
@@ -116,7 +127,7 @@ let
     postInstall = ''
       installShellCompletion --cmd yb \
         --bash <(YB_COMPLETE=bash $out/bin/yb | sed \
-          -e '/^\s*) )$/a\    compopt -o filenames 2>/dev/null' \
+          -e 's|-o nospace -o bashdefault|-o nospace -o filenames -o bashdefault|g' \
           -e 's|words\[COMP_CWORD\]="$2"|local _cur="''${COMP_LINE:0:''${COMP_POINT}}"; _cur="''${_cur##* }"; words[COMP_CWORD]="''${_cur}"|') \
         --zsh  <(YB_COMPLETE=zsh  $out/bin/yb) \
         --fish <(YB_COMPLETE=fish $out/bin/yb)
@@ -157,6 +168,9 @@ let
       gh
       mandoc
       poppler-utils
+      bash-completion
+      # Pinned bash to match clap CI (GitHub Actions runner = 5.2.21)
+      bash521
     ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
       pcsclite
       ccid
@@ -173,6 +187,9 @@ let
       # Detected by ~/.claude/hooks/claude-hook-post-edit-lint to confirm
       # that the active nix-shell belongs to this repo.
       export NIXSHELL_REPO="${toString ./.}"
+
+      # Ensure pinned bash 5.2.21 takes precedence over the system bash.
+      export PATH="${bash521}/bin:$PATH"
 
       # Required by littlefs2-sys (pulled in by piv-authenticator)
       export LIBCLANG_PATH=${pkgs.llvmPackages.libclang.lib}/lib
@@ -195,7 +212,7 @@ let
       # the freshly built binary.
       if command -v yb &>/dev/null; then
         source <(YB_COMPLETE=bash yb | sed \
-          -e '/^\s*) )$/a\    compopt -o filenames 2>/dev/null' \
+          -e 's|-o nospace -o bashdefault|-o nospace -o filenames -o bashdefault|g' \
           -e 's|words\[COMP_CWORD\]="$2"|local _cur="''${COMP_LINE:0:''${COMP_POINT}}"; _cur="''${_cur##* }"; words[COMP_CWORD]="''${_cur}"|')
       fi
 
