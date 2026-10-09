@@ -10,6 +10,8 @@ All notable changes to yb are recorded here.  The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and yb uses
 [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
 ## [0.5.1] — 2026-10-09
 
 ### Fixed
