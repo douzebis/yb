@@ -334,10 +334,16 @@ upload never starts on its own:
      `crates-io`**, whose protection rule requires the maintainer's
      approval, and which only tags `v*` may use.  The job waits until the
      maintainer approves it in the GitHub UI (or rejects it: nothing is
-     published).  It then runs `cargo publish --workspace --exclude
-     yb-piv-harness --locked --no-verify`, which publishes `yb-core`, then
-     `yb`.  `--no-verify`: `verify` already built and tested the packages
-     from the same tagged source and lock file.
+     published).  It then runs `scripts/publish-crates`, which publishes
+     `yb-core`, then `yb` (`cargo publish -p … --locked --no-verify`;
+     `--no-verify`: `verify` already built and tested the packages from the
+     same tagged source and lock file).
+- **Resumable:** `scripts/publish-crates` skips a crate already on
+  crates.io at this version (crates.io API: 200 skip, 404 publish,
+  anything else stops).  If the upload fails halfway (`yb-core` published,
+  `yb` not), re-running the `publish` job finishes the release; nothing
+  needs doing by hand, which matters as both crates are set to "trusted
+  publishing only".
 - **Authentication:** crates.io **trusted publishing**.  At each run,
   the `publish` job exchanges a GitHub OIDC token, scoped to this
   repository, this workflow and the `crates-io` environment, for a
@@ -350,9 +356,16 @@ upload never starts on its own:
   commit hash.
 - `cargo publish` packages again from the same tagged source and lock
   file, so what it uploads matches what `verify` checked.
-- **Dry run:** triggered by hand (`workflow_dispatch`) on a tag, the
-  workflow runs `cargo publish --dry-run` by default, without
-  authenticating; this is how it is exercised before the first release.
+- **No separate dry run.**  A dry run cannot test what is new at the
+  first release, the trusted-publishing setup (it skips authentication),
+  and the rest is already exercised: `scripts/check-crates` runs in CI on
+  every push, and the tag check, approval gate and tag rule run before any
+  upload.  Allowing dry runs before a tag exists would mean loosening the
+  workflow (non-tag refs, bypassing the environment).  The first real run
+  is the 0.5.0 release, stopped at the approval; a wrong trusted-publisher
+  setting fails at the authentication step, before any upload.  (A
+  pre-release such as `0.5.0-rc.1` is the way to rehearse the whole chain,
+  if ever needed.)
 
 A tag pushed by mistake is harmless: reject (or ignore) the pending
 approval and delete the tag.
@@ -375,10 +388,12 @@ token) stays possible as a fallback, e.g. if GitHub is unavailable.
 - `scripts/check-crates` produces `yb-core-X.Y.Z.crate` and
   `yb-X.Y.Z.crate`, and the tests of both pass from their unpacked
   `.crate` files alone; a broken `readme` path makes it fail.
+- `scripts/publish-crates` skips crates already published at the current
+  version (checked locally at 0.4.2: both skipped, nothing uploaded), and
+  crates.io answers 404 for an unpublished version.
 - `publish.yaml` refuses a tag that differs from the Cargo version, and
-  publishes nothing until approved; a rejected approval publishes
-  nothing.  Before the 0.5.0 release, it is exercised on a test tag with
-  `cargo publish --dry-run` in place of the upload.
+  publishes nothing until approved.  Its first real run is the 0.5.0
+  release.
 
 ## Open questions
 

@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+#
+# SPDX-License-Identifier: MIT
+
+# Publish yb-core, then yb, to crates.io, skipping a crate already published
+# at this version: if an upload fails halfway, running it again finishes the
+# release (spec 0029 §9).
+#
+# Run from the repository root, in the release shell, after
+# scripts/check-crates; .github/workflows/publish.yaml runs it with a
+# short-lived token from crates.io trusted publishing (CARGO_REGISTRY_TOKEN).
+
+set -euo pipefail
+
+manifest=rust/Cargo.toml
+if [ ! -f "$manifest" ]; then
+    echo "publish-crates: run from the repository root" >&2
+    exit 1
+fi
+
+pkgid=$(cargo pkgid --manifest-path "$manifest" -p yb-core)
+version=${pkgid##*[#@]}
+
+# 0 if crate@version is on crates.io, 1 if not; fails on any other answer.
+published() {
+    local status
+    status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+        --user-agent "yb publish-crates (https://github.com/douzebis/yb)" \
+        "https://crates.io/api/v1/crates/$1/$version")
+    case "$status" in
+        200) return 0 ;;
+        404) return 1 ;;
+        *)
+            echo "publish-crates: crates.io answered $status for $1 $version" >&2
+            exit 1
+            ;;
+    esac
+}
+
+# In dependency order.  `check-crates` already built and tested the
+# packages from this source and lock file, hence --no-verify.
+for crate in yb-core yb; do
+    if published "$crate"; then
+        echo "$crate $version is already on crates.io: skipped"
+    else
+        cargo publish --manifest-path "$manifest" -p "$crate" --locked --no-verify
+    fi
+done

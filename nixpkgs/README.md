@@ -36,7 +36,8 @@ The other files (`pr-description.md`, `review-response.md`,
    crates (`scripts/check-crates`), then waits for approval in the
    `crates-io` environment.
    Inspect the `crates` artifact, approve; it publishes `yb-core`, then
-   `yb`.
+   `yb` (`scripts/publish-crates`).  If it fails halfway, re-run the
+   `publish` job: crates already published are skipped.
 4. nixpkgs, in a checkout of `master`:
    - copy the two staged files;
    - `nix-update yb` (sets `version`, `hash` and `cargoHash`);
@@ -53,4 +54,6 @@ The other files (`pr-description.md`, `review-response.md`,
   tags `v*`.
 - crates.io, for each of `yb` and `yb-core`: a trusted publisher with
   repository `douzebis/yb`, workflow `publish.yaml`, environment
-  `crates-io`.
+  `crates-io`; "trusted publishing only" on.
+
+Both are in place (2026-10-09).
