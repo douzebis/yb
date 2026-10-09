@@ -272,6 +272,13 @@ Documented in `nixpkgs/README.md`:
 - `check` job: Crane fmt, clippy, unit tests (unchanged).
 - `build` job: `nix-build -A yb` on the four platforms (the nixpkgs
   recipe; its check phase runs the `yb` crate tests).
+- Platforms (amended 2026-10-09): the Nix jobs run on x86_64-linux,
+  aarch64-linux and aarch64-darwin.  nixpkgs 26.11 (`nixos-unstable`,
+  which yb's `default.nix` now pins) dropped x86_64-darwin, so Intel macOS
+  has a separate `intel-macos` job with plain cargo (`dtolnay/
+  rust-toolchain`, `cargo test -p yb-core -p yb`): `cargo install yb`
+  from crates.io still works there.  It goes when GitHub retires the
+  `macos-15-intel` runner (August 2027).
 - `integration` job: `nix-build -A integration-tests` (staged VM test).
 - New `packaging` job (Linux): `nix-build -A nixpkgs-staging-check` (the
   staged files pass `nixfmt --check`, as nixpkgs CI requires, and the

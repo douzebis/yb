@@ -19,8 +19,6 @@ jobs:
           - os: ubuntu-latest
           - os: ubuntu-24.04-arm
           - os: macos-15
-          - os: macos-15-intel
-            skip-clippy: true
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
@@ -32,7 +30,6 @@ jobs:
         run: nix-build -A rust-fmt
 
       - name: Check lints (clippy)
-        if: ${{ !matrix.skip-clippy }}
         run: nix-build -A rust-clippy
 
       - name: Run unit tests (tier-1)
@@ -45,7 +42,6 @@ jobs:
         include:
           - os: ubuntu-latest
           - os: ubuntu-24.04-arm
-          - os: macos-15-intel
           - os: macos-15
     runs-on: ${{ matrix.os }}
     needs: check
@@ -57,6 +53,21 @@ jobs:
 
       - name: Build yb with the staged nixpkgs recipe
         run: nix-build -A yb
+
+  # Intel macOS, without Nix: nixpkgs dropped x86_64-darwin in 26.11, but
+  # `cargo install yb` from crates.io still works there.  Plain cargo with a
+  # stable toolchain; PC/SC comes from macOS.  GitHub retires this runner in
+  # August 2027.
+  intel-macos:
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run unit tests (tier-1)
+        run: cargo test --locked --manifest-path rust/Cargo.toml -p yb-core -p yb
 
   # Release artifacts: the crates.io packages (built and tested from the
   # .crate files alone) and the staged nixpkgs files (nixfmt, version).
