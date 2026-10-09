@@ -6,7 +6,7 @@ SPDX-License-Identifier: MIT
 
 # 0029 — Build and Test with the nixpkgs Recipe
 
-**Status:** draft
+**Status:** in-progress
 **App:** yb
 **Implemented in:** <!-- YYYY-MM-DD, fill after implementation -->
 
@@ -79,9 +79,10 @@ test, built from the local source.
 - No `testFixtures` / `YB_FIXTURE_DIR` plumbing.
 - One place for the version.
 - yb and yb-core stay published on crates.io (both at 0.4.2, published by
-  hand).  A Nix target checks that they package and build as crates.io
-  will see them; a tag-triggered workflow on a GitHub-hosted runner
-  publishes them, after the maintainer's approval (§9).
+  hand).  A script, run with a Nix-pinned toolchain, checks that they
+  package, build and test as crates.io will see them; a tag-triggered
+  workflow on a GitHub-hosted runner publishes them, after the
+  maintainer's approval (§9).
 
 ## Non-goals
 
@@ -144,7 +145,8 @@ Exposed attributes:
 | `yb` (and `default`) | staged `package.nix`, local source |
 | `integration-tests` | staged `nixos/tests/yb.nix`, against `yb` |
 | `rust-fmt`, `rust-clippy`, `rust-tests` | Crane, unchanged |
-| `crates` | Crane: `cargo package` of `yb-core` and `yb`, `.crate` files in `$out` (§9) |
+| `release-shell` | toolchain for `scripts/check-crates` and the crates.io upload (§9) |
+| `nixpkgs-staging-check` | `nixfmt` and version of the staged files (§8) |
 | `dev-shell` | unchanged |
 | `yb-rust` | alias of `yb`, kept for compatibility, then removed |
 
@@ -164,14 +166,18 @@ with a fake hash, copy the reported one).
 targets of `yb-piv-harness`, required feature `integration-tests`, using
 `libtest-mimic`:
 
-- each binary lists its tests as trials; test bodies are unchanged;
+- each binary lists its tests as trials; test bodies are unchanged
+  (libtest-mimic catches panics, so `assert!` still fails a test);
 - the binaries keep libtest's output and options (`test result: ok`,
-  filters, `--test-threads`), so the VM script keeps working; it passes
-  `--test-threads=1` instead of relying on `RUST_TEST_THREADS=1`, unless
-  `libtest-mimic` is confirmed to honor the variable;
-- `cargo test -p yb-piv-harness --features integration-tests` still runs
-  them locally (each bin also has `test = false`, and a thin `[[test]]`
-  wrapper or `cargo run --bin` is documented; to settle in review).
+  filters, `--test-threads`).  libtest-mimic does not read
+  `RUST_TEST_THREADS`, so the VM script passes `--test-threads=1`;
+- binaries cannot use dev-dependencies: the test-only dependencies
+  (`yb-core`, `p256`, `rand`, `tempfile`, `libtest-mimic`) become optional
+  dependencies enabled by `integration-tests`;
+- each bin has `test = false`; `cargo test` does not run them (it never
+  could: they need pcscd with a virtual reader).  Locally, in the
+  nix-shell: `cargo run -p yb-piv-harness --features integration-tests
+  --bin <name>`.
 
 The `ybPivHarnessTests` derivation in `package.nix` then uses the default
 phases:
@@ -192,19 +198,29 @@ No custom `buildPhase`, no `installPhase`, no `find`.
 
 ### 5. Fixtures compiled in, bindgen hook
 
-- The harness embeds its fixtures with `include_str!` and writes them to
-  the per-test temp dir it already uses.  `YB_FIXTURE_DIR`,
-  `passthru.testFixtures` and the fixture lines of the VM test go away.
-  (`YB_BIN` stays: the binary under test is a runtime input.)
-- The `yb` crate's tests do the same.  `rust/yb/tests/cli_tests.rs`
-  reads its fixtures from `CARGO_MANIFEST_DIR/../yb-core/tests/fixtures`,
-  a path into the other crate: it exists in the repository, but not in
-  the published `yb` crate, so `cargo test` on the crate downloaded from
-  crates.io fails (distribution packagers, e.g. Debian and Fedora, build
-  from those tarballs and run the tests).  The fixtures are embedded with
-  `include_str!` and written to the temp dir the tests already use; the
-  cross-crate path disappears.  (`yb-core`'s fixtures are inside its own
-  crate, and are fine.)
+- The fixtures are compiled into `yb-core`, which owns them
+  (`rust/yb-core/tests/fixtures/`, part of its package):
+  `yb_core::piv::virtual_piv::fixtures::{DEFAULT, WITH_KEY, AES192}`, and
+  `VirtualPiv::from_fixture_yaml` loads one.  Other crates use them from
+  there, never through a path outside their own package.
+  (`include_str!` in each crate, as first drafted, would not work: in the
+  published `yb` crate, a path into `../yb-core/` does not exist.)
+- The harness writes `WITH_KEY` to the per-test temp dir it already uses.
+  `YB_FIXTURE_DIR`, `passthru.testFixtures` and the fixture lines of the
+  VM test go away.  (`YB_BIN` stays: the binary under test is a runtime
+  input.)
+- The `yb` crate's tests use `from_fixture_yaml(fixtures::…)` instead of
+  reading `CARGO_MANIFEST_DIR/../yb-core/tests/fixtures`, which does not
+  exist in the published `yb` crate (so `cargo test` on the crate
+  downloaded from crates.io failed; distribution packagers, e.g. Debian
+  and Fedora, build from those tarballs and run the tests).
+- Found while testing the packaged crates (§9): `yb-core`'s
+  `virtual_piv_tests` needs the `test-utils` feature, which a self
+  dev-dependency (`yb-core = { path = "." … }`) turned on.  cargo drops
+  path dev-dependencies without a version from the published crate, so
+  the test no longer compiled there.  The test target now declares
+  `required-features = ["test-utils"]`; `cargo test --features
+  test-utils` runs it from the crate alone.
 - `rustPlatform.bindgenHook` replaces the hand-set `LIBCLANG_PATH` and
   `BINDGEN_EXTRA_CLANG_ARGS` (needed by `littlefs2-sys`, under
   `piv-authenticator`).  The dev shell keeps its own settings for local
@@ -219,6 +235,8 @@ the staged directory keeps that one line in `nixpkgs/README.md`.
   `[workspace.dependencies] yb-core = { path = "yb-core", version = "…" }`;
   `yb` and `yb-core` use `version.workspace = true` and
   `yb-core.workspace = true`.  `yb-piv-harness` keeps its own (unpublished).
+  The two lines sit together in one file (crates.io needs a version on the
+  path dependency, and cargo cannot derive it from `workspace.package`).
 - `default.nix` reads it: `cargoVersion = (lib.importTOML
   ./rust/Cargo.toml).workspace.package.version`.
 - `package.nix` keeps a literal `version`, which `nix-update` edits.  CI
@@ -248,10 +266,10 @@ Documented in `nixpkgs/README.md`:
 - `build` job: `nix-build -A yb` on the four platforms (the nixpkgs
   recipe; its check phase runs the `yb` crate tests).
 - `integration` job: `nix-build -A integration-tests` (staged VM test).
-- New step: the staged `package.nix` `version` equals
-  `workspace.package.version`, and `nixfmt --check` passes on the staged
-  files (nixpkgs CI requires nixfmt).
-- New step in the `check` job: `nix-build -A crates` (§9), on Linux.
+- New `packaging` job (Linux): `nix-build -A nixpkgs-staging-check` (the
+  staged files pass `nixfmt --check`, as nixpkgs CI requires, and the
+  staged `version`, evaluated by Nix, equals `workspace.package.version`),
+  then `scripts/check-crates` in the release shell (§9).
 - New workflow `publish.yaml`, on tags only, upload gated by approval
   (§9).
 
@@ -261,33 +279,44 @@ Documented in `nixpkgs/README.md`:
 `publish = false`).  Publishing needs the network and a credential, so it
 cannot happen inside a Nix build; the work is split in two.
 
-**Nix target `crates`** (verification, no upload):
+**Verification: `scripts/check-crates`**, run with network access in
+the release shell (`nix-shell default.nix -A release-shell --run
+scripts/check-crates`; the dev shell works too):
 
-- built with **Crane**, like the other checks (fmt, clippy, tests): it
-  reuses Crane's vendored dependencies and its compiled-dependency cache;
-- runs `cargo package --workspace --exclude yb-piv-harness --locked`
-  offline, on the vendored dependencies.  Since Rust 1.90, packaging a
-  workspace resolves `yb`'s dependency on the not-yet-published `yb-core`
-  through a local overlay registry, in dependency order.  `cargo package`
-  then unpacks each `.crate` and compiles it on its own;
-- **to be tried first:** cargo treats packaging specially when crates.io
-  is replaced by a vendored source (`cargo publish` refuses outright), so
-  whether `cargo package` works offline that way is only known by trying.
-  **Fallback** if it does not: `cargo package --no-verify` (still builds
-  the `.crate` files and checks metadata and included files), then, in the
-  same derivation, unpack the `.crate` files and compile them against the
-  vendored dependencies: the same guarantee, a few more lines of Nix;
-- with the `yb` fixtures embedded (§5), it also runs the packaged
-  crates' tests, as a distribution packager would;
-- this builds each `.crate` exactly as crates.io will unpack it: only the
-  packaged files, path dependencies turned into versioned ones, the
-  packaged `Cargo.lock` that `cargo install --locked yb` uses;
-- outputs the `.crate` files in `$out`, so they can be inspected (size,
-  file list, `Cargo.toml` as rewritten by cargo).
+1. `cargo package --workspace --exclude yb-piv-harness --locked`.
+   Online, cargo packages `yb` against the not-yet-published `yb-core`
+   through its own temporary registry (Rust 1.90+), and verifies each
+   `.crate` by building it on its own.
+2. Each `.crate` is unpacked outside the workspace and its tests run
+   there, as a distribution packager would: `yb-core` with `--features
+   test-utils` (§5); `yb` with `yb-core` patched to the unpacked `yb-core`
+   crate (`--config patch.crates-io.yb-core.path=…`), since that version is
+   not on crates.io yet at release time.
+3. The `.crate` files stay in `rust/target/package/`.
+
+Extra arguments go to `cargo package` (e.g. `--allow-dirty` to check
+uncommitted changes; publishing always runs on a clean tagged checkout).
+
+`release-shell` is a `mkShell` with cargo, rustc, pkg-config and (Linux)
+pcsclite: the toolchain is pinned by the nixpkgs pin, the dependencies by
+`Cargo.lock` (`--locked`, checksums verified by cargo).  `mkShell` sets
+`PKG_CONFIG_PATH`, which `pcsc-sys` needs to find pcsclite.
 
 It catches what the other targets cannot: a file missing from the package
 (e.g. `readme = "../../README.md"`), a path dependency without a version,
-metadata crates.io rejects.
+metadata crates.io rejects, tests that only pass inside the workspace.
+
+**Why not inside a Nix build** (tried first, rejected): Nix builds run
+offline on vendored dependencies.  Plain `cargo package` refuses when
+crates.io is replaced by a vendored source; with `--registry crates-io`,
+`yb` still cannot be packaged, as cargo's temporary registry for the
+unpublished `yb-core` does not combine with a vendored source (and
+`--no-verify` fails the same way).  Making it work meant re-implementing
+that registry in shell (package `yb-core`, splice it into a copy of the
+vendored sources): fragile, and an anti-pattern.  A fixed-output
+derivation (Nix's way to grant network access) needs its output hash in
+advance and is not meant to run tests.  Packaging is a networked cargo
+task; Nix provides the toolchain.
 
 **Workflow `.github/workflows/publish.yaml`** (upload), on a
 GitHub-hosted runner, gated by the maintainer's approval.
@@ -298,15 +327,17 @@ upload never starts on its own:
 - **Trigger:** a pushed tag `v*`.
 - **Two jobs:**
   1. `verify` (no approval, no credential): checks that the tag equals
-     `workspace.package.version`, then runs `nix-build -A crates` and
-     keeps the `.crate` files as a workflow artifact, for inspection
-     before approving.
+     `workspace.package.version`, then runs `scripts/check-crates` in the
+     release shell and keeps the `.crate` files as a workflow artifact, for
+     inspection before approving.
   2. `publish` (needs `verify`): runs in the GitHub **environment
      `crates-io`**, whose protection rule requires the maintainer's
      approval, and which only tags `v*` may use.  The job waits until the
      maintainer approves it in the GitHub UI (or rejects it: nothing is
      published).  It then runs `cargo publish --workspace --exclude
-     yb-piv-harness --locked`, which publishes `yb-core`, then `yb`.
+     yb-piv-harness --locked --no-verify`, which publishes `yb-core`, then
+     `yb`.  `--no-verify`: `verify` already built and tested the packages
+     from the same tagged source and lock file.
 - **Authentication:** crates.io **trusted publishing**.  At each run,
   the `publish` job exchanges a GitHub OIDC token, scoped to this
   repository, this workflow and the `crates-io` environment, for a
@@ -319,6 +350,9 @@ upload never starts on its own:
   commit hash.
 - `cargo publish` packages again from the same tagged source and lock
   file, so what it uploads matches what `verify` checked.
+- **Dry run:** triggered by hand (`workflow_dispatch`) on a tag, the
+  workflow runs `cargo publish --dry-run` by default, without
+  authenticating; this is how it is exercised before the first release.
 
 A tag pushed by mistake is harmless: reject (or ignore) the pending
 approval and delete the tag.
@@ -338,11 +372,9 @@ token) stays possible as a fallback, e.g. if GitHub is unavailable.
 - In a nixpkgs checkout at `master`, the staged files build with a
   `cargoHash` instead of the local override (dry run of §7, without
   opening a PR).
-- `nix-build -A crates` produces `yb-core-X.Y.Z.crate` and
-  `yb-X.Y.Z.crate`; breaking `readme` or removing `yb-core`'s version
-  makes it fail.
-- The tests of the packaged `yb` crate pass from its unpacked `.crate`
-  alone (fixtures embedded, §5).
+- `scripts/check-crates` produces `yb-core-X.Y.Z.crate` and
+  `yb-X.Y.Z.crate`, and the tests of both pass from their unpacked
+  `.crate` files alone; a broken `readme` path makes it fail.
 - `publish.yaml` refuses a tag that differs from the Cargo version, and
   publishes nothing until approved; a rejected approval publishes
   nothing.  Before the 0.5.0 release, it is exercised on a test tag with
@@ -350,21 +382,14 @@ token) stays possible as a fallback, e.g. if GitHub is unavailable.
 
 ## Open questions
 
-Resolved:
+None.  Resolved:
 
-- `crates` target: built with Crane; plain `cargo package` tried first,
-  with the `--no-verify` + unpack-and-build fallback (§9).
-- `yb`'s test fixtures: embedded, fixed in this spec (§5).
-
-Still open:
-
-- Harness binaries: `libtest-mimic`, or plain `[[bin]]` targets with a
-  hand-written runner?  (`libtest-mimic` keeps libtest's output and flags,
-  which the VM script relies on.)
-- How `cargo test` keeps running the harness tests locally once they are
-  binaries (§4).
-- Should `yb-rust` stay as an alias for a while (scripts, docs), or be
-  removed at once?
+- crates.io verification: a script run with network access and a
+  Nix-pinned toolchain, not a Nix build (§9).
+- `yb`'s test fixtures: compiled into `yb-core` and used from there (§5).
+- Harness binaries: `libtest-mimic`; run locally with `cargo run --bin`
+  (§4).
+- `yb-rust` stays, as an alias of `yb`.
 
 ## References
 

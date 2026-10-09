@@ -267,6 +267,25 @@ struct FixtureSlot {
 }
 
 // ---------------------------------------------------------------------------
+// Test fixtures
+// ---------------------------------------------------------------------------
+
+/// The test fixtures of `yb-core/tests/fixtures`, compiled in.  Other
+/// crates' tests use them from here, so that they need no path outside
+/// their own package (spec 0029 §5).  Test data: only with the
+/// `virtual-piv` feature.
+#[cfg(any(feature = "virtual-piv", test))]
+pub mod fixtures {
+    /// Factory-default credentials, no key.
+    pub const DEFAULT: &str = include_str!("../../tests/fixtures/default.yaml");
+    /// A set-up card (PIN 654321, PUK 87654321, factory management key)
+    /// with a key in slot 0x82 and no certificate.
+    pub const WITH_KEY: &str = include_str!("../../tests/fixtures/with_key.yaml");
+    /// Like `WITH_KEY`, on firmware 5.7.1 with an AES-192 management key.
+    pub const AES192: &str = include_str!("../../tests/fixtures/aes192.yaml");
+}
+
+// ---------------------------------------------------------------------------
 // VirtualPiv
 // ---------------------------------------------------------------------------
 
@@ -295,8 +314,14 @@ impl VirtualPiv {
     pub fn from_fixture(path: &Path) -> Result<Self> {
         let text =
             std::fs::read_to_string(path).map_err(|e| anyhow!("reading fixture {path:?}: {e}"))?;
+        Self::from_fixture_yaml(&text).map_err(|e| anyhow!("fixture {path:?}: {e}"))
+    }
+
+    /// Load a `VirtualPiv` from fixture YAML text, e.g. one of the
+    /// `fixtures` constants (feature `virtual-piv`).
+    pub fn from_fixture_yaml(text: &str) -> Result<Self> {
         let fixture: Fixture =
-            serde_yaml::from_str(&text).map_err(|e| anyhow!("parsing fixture {path:?}: {e}"))?;
+            serde_yaml::from_str(text).map_err(|e| anyhow!("parsing fixture: {e}"))?;
 
         let mut state = VirtualState::default_state(
             fixture.identity.serial,

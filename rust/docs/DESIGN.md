@@ -640,10 +640,11 @@ subprocess tests.
 
 Feature flag: `integration-tests`.  Crate: `yb-piv-harness`.
 
-Run with:
+The two test programs are binaries (`libtest-mimic`), built by the staged
+nixpkgs recipe and run by its NixOS VM test (`nix-build -A
+integration-tests`, spec 0029).  In the nix-shell, with a virtual reader:
 ```
-BINDGEN_EXTRA_CLANG_ARGS="-I${LIBCLANG_PATH}/clang/19/include" \
-  cargo test -p yb-piv-harness --features integration-tests
+cargo run -p yb-piv-harness --features integration-tests --bin hardware_piv_tests
 ```
 
 #### `hardware_piv_tests` (10 tests, serialized)
@@ -659,7 +660,7 @@ The harness crate provides `with_vsc(f)`:
 - **External card mode** (VM): the vpcd socket is already running;
   `with_vsc` connects to it.
 
-Tests are serialized (`RUST_TEST_THREADS=1`) — shared virtual card state.
+Tests are serialized (`--test-threads=1`) — shared virtual card state.
 
 #### `yb_cli_tests` (36 tests) — spec 0009
 
@@ -679,17 +680,18 @@ executable via `YB_BIN` env var (injected in the VM `testScript`) or
 falls back to `<CARGO_MANIFEST_DIR>/../target/debug/yb` for local runs.
 
 **Fixture-per-test pattern:** each test calls `Fixture::new()` which
-copies `with_key.yaml` to a `TempDir`, then calls `Fixture::format()`
+writes `with_key.yaml` (compiled into `yb-core`) to a `TempDir`, then calls `Fixture::format()`
 (runs `yb format -g`) to initialize the store, then runs the actual
 test steps.
 
-Both test binaries are extracted by `harnessTestBin` and placed in
-`$out/bin/`.  The VM `testScript` runs both with `RUST_TEST_THREADS=1`:
+Both binaries are built by the `ybPivHarnessTests` passthru of the staged
+`package.nix`.  The VM `testScript` (`nixpkgs/nixos/tests/yb.nix`) runs
+both serialized:
 
 ```python
-out = machine.succeed("RUST_TEST_THREADS=1 hardware_piv_tests 2>&1")
+out = machine.succeed("hardware_piv_tests --test-threads=1 2>&1")
 out = machine.succeed(
-    f"RUST_TEST_THREADS=1 YB_BIN={ybRust}/bin/yb yb_cli_tests 2>&1"
+  "YB_BIN=${pkgs.yb}/bin/yb yb_cli_tests --test-threads=1 2>&1"
 )
 ```
 

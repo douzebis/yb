@@ -8,10 +8,9 @@
 //! constructed `Args` structs and a `Context` built from `VirtualPiv`.
 //! No real YubiKey is required.
 
-use std::path::Path;
 use std::sync::Arc;
 use tempfile::TempDir;
-use yb_core::{list_blobs, store::Store, Context, VirtualPiv};
+use yb_core::{list_blobs, piv::virtual_piv::fixtures, store::Store, Context, VirtualPiv};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -22,15 +21,8 @@ const MGMT: &str = "010203040506070801020304050607080102030405060708";
 /// PIN: they represent a card that has been set up, spec 0024 §4a).
 const PIN: &str = "654321";
 
-fn fixture(name: &str) -> std::path::PathBuf {
-    // Fixtures live in yb-core's test directory.
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../yb-core/tests/fixtures")
-        .join(name)
-}
-
 fn with_key_piv() -> VirtualPiv {
-    VirtualPiv::from_fixture(&fixture("with_key.yaml")).unwrap()
+    VirtualPiv::from_fixture_yaml(fixtures::WITH_KEY).unwrap()
 }
 
 /// Build a Context backed by the given VirtualPiv, with management key + PIN
@@ -964,7 +956,7 @@ mod mgmt_key_tests {
 
     #[test]
     fn format_protect_on_firmware_57_keeps_aes192() {
-        let ctx = make_ctx(VirtualPiv::from_fixture(&fixture("aes192.yaml")).unwrap());
+        let ctx = make_ctx(VirtualPiv::from_fixture_yaml(fixtures::AES192).unwrap());
         let args = FormatArgs {
             object_count: Some(DEFAULT_OBJECT_COUNT),
             key_slot: Some("0x82".to_owned()),
@@ -1120,7 +1112,7 @@ mod mgmt_key_tests {
 
     #[test]
     fn key_of_wrong_length_is_rejected_before_authentication() {
-        let mut ctx = make_ctx(VirtualPiv::from_fixture(&fixture("aes192.yaml")).unwrap());
+        let mut ctx = make_ctx(VirtualPiv::from_fixture_yaml(fixtures::AES192).unwrap());
         ctx.management_key = Some("000102030405060708090a0b0c0d0e0f".to_owned());
         let args = FormatArgs {
             object_count: Some(DEFAULT_OBJECT_COUNT),
@@ -1142,7 +1134,7 @@ mod mgmt_key_tests {
 
     #[test]
     fn fixture_round_trips_management_key_algorithm() {
-        let piv = VirtualPiv::from_fixture(&fixture("aes192.yaml")).unwrap();
+        let piv = VirtualPiv::from_fixture_yaml(fixtures::AES192).unwrap();
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("saved.yaml");
         piv.save_fixture(&path).unwrap();
@@ -2205,7 +2197,7 @@ mod guided_tests {
 
     #[test]
     fn firmware_57_keeps_aes192() {
-        let piv = Arc::new(VirtualPiv::from_fixture(&fixture("aes192.yaml")).unwrap());
+        let piv = Arc::new(VirtualPiv::from_fixture_yaml(fixtures::AES192).unwrap());
         let mut ctx = context(&piv, Some(PIN));
         // The key in slot 0x82 has no certificate: replaced, so the serial.
         let (outcome, script) = guided(&mut ctx, &["", "77777777"]);
@@ -2513,7 +2505,7 @@ mod rotation_tests {
 
     #[test]
     fn keeps_aes192() {
-        let mut ctx = make_ctx(VirtualPiv::from_fixture(&fixture("aes192.yaml")).unwrap());
+        let mut ctx = make_ctx(VirtualPiv::from_fixture_yaml(fixtures::AES192).unwrap());
         ctx.management_key = None;
         rotate(&ctx).unwrap();
         assert_eq!(

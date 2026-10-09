@@ -90,6 +90,9 @@ All notable changes to yb are recorded here.  The format follows
 - Blob-name completion honors `--serial` and `--reader`; with several
   YubiKeys connected and no selector, it offers no names instead of names
   from the wrong key.
+- The tests of the published `yb` and `yb-core` crates pass from the
+  crates.io tarballs alone (they read files outside their package, or
+  lost a feature they needed), for distributions that build from them.
 
 ## [0.4.2] — 2026-04-30
 

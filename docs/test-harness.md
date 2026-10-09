@@ -78,22 +78,27 @@ services.pcscd.plugins = [ pkgs.ccid pkgs.vsmartcard-vpcd ];
 `vsmartcard-vpcd` is a virtual PC/SC reader daemon; `piv-authenticator` (the
 `yb-piv-harness` crate) talks to it to emulate a real YubiKey at the APDU level.
 
-The two test binaries (`hardware_piv_tests`, `yb_cli_tests`) are compiled in the
-nix `harnessTestBin` derivation (with `--features integration-tests`) and
-injected into the VM image.  They are never run locally by `cargo test`.
+The two test programs (`hardware_piv_tests`, `yb_cli_tests`) are binaries of
+the `yb-piv-harness` crate (feature `integration-tests`), using
+`libtest-mimic` for libtest's output and flags.  They are built by the
+`ybPivHarnessTests` derivation of the staged nixpkgs recipe
+(`nixpkgs/pkgs/by-name/yb/yb/package.nix`) and run by its VM test
+(`nixpkgs/nixos/tests/yb.nix`, spec 0029).  `cargo test` does not run them;
+in a nix-shell with a virtual reader, run them with
+`cargo run -p yb-piv-harness --features integration-tests --bin <name>`.
 
 ### Test locations
 
 | File | Binary | What is tested |
 |---|---|---|
-| `rust/yb-piv-harness/tests/hardware_piv_tests.rs` | `hardware_piv_tests` | Real APDU round-trips via vsmartcard-vpcd: key gen, ECDH, object read/write, PIN verify |
-| `rust/yb-piv-harness/tests/yb_cli_tests.rs` | `yb_cli_tests` | End-to-end subprocess tests: the compiled `yb` binary is invoked via `std::process::Command`; stdout/stderr and exit codes are checked |
+| `rust/yb-piv-harness/src/bin/hardware_piv_tests.rs` | `hardware_piv_tests` | Real APDU round-trips via vsmartcard-vpcd: key gen, ECDH, object read/write, PIN verify |
+| `rust/yb-piv-harness/src/bin/yb_cli_tests.rs` | `yb_cli_tests` | End-to-end subprocess tests: the compiled `yb` binary is invoked via `std::process::Command`; stdout/stderr and exit codes are checked |
 
 ### How `yb_cli_tests` work
 
 Each test:
-1. Copies `with_key.yaml` into a per-test `TempDir` (from `YB_FIXTURE_DIR` in the
-   VM, or from `CARGO_MANIFEST_DIR` in a local run).
+1. Writes `with_key.yaml` into a per-test `TempDir` (the fixture is compiled
+   into `yb-core`: `yb_core::piv::virtual_piv::fixtures::WITH_KEY`).
 2. Runs `yb` with `YB_FIXTURE=<tmpdir>/fixture.yaml`, `YB_MANAGEMENT_KEY`, and
    `YB_PIN` set.
 3. After each command the fixture file is updated in-place (via `save_fixture`) so
@@ -104,17 +109,13 @@ This layer catches argument-parsing bugs, shell-completion output, PIN/key
 env-var resolution, deprecation warnings, and `--quiet` behavior — none of which
 are reachable from the direct-call tier.
 
-### Fixture path resolution
+### Fixtures
 
-`YB_FIXTURE_DIR` is injected by the nix VM test script:
-
-```python
-"YB_FIXTURE_DIR=${testFixtures}"
-```
-
-where `testFixtures` is a nix derivation that copies the YAML files into the nix
-store (needed because `CARGO_MANIFEST_DIR` is a build-sandbox path that doesn't
-exist at VM runtime).
+The YAML fixtures live in `rust/yb-core/tests/fixtures/` and are compiled
+into `yb-core` (`yb_core::piv::virtual_piv::fixtures`, loaded with
+`VirtualPiv::from_fixture_yaml`).  Tests in other crates, and the harness
+binaries in the VM, use them from there: no path outside a crate's own
+package, no fixture files to ship (spec 0029 §5).
 
 ---
 
@@ -332,6 +333,10 @@ nix-build -A integration-tests
 
 # Tier-1 only via nix (skips VM):
 nix-build -A rust-tests
+
+# The crates.io packages, built and tested from the .crate files alone
+# (needs the network; --allow-dirty with uncommitted changes):
+nix-shell default.nix -A release-shell --run scripts/check-crates
 
 # Tier-3 (real YubiKey, destructive — manual only):
 yb --serial <SERIAL> self-test [--count 200] [--seed 42]

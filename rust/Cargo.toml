@@ -6,6 +6,15 @@
 resolver = "2"
 members = ["yb-core", "yb", "yb-piv-harness"]
 
+# The version of yb and yb-core, in one place (spec 0029 §6).  default.nix
+# reads it; bump both lines together (crates.io needs a version on the
+# path dependency).
+[workspace.package]
+version = "0.4.2"
+
+[workspace.dependencies]
+yb-core = { path = "yb-core", version = "0.4.2" }
+
 # Required by piv-authenticator (used in yb-piv-harness).
 [patch.crates-io]
 trussed = { git = "https://github.com/trussed-dev/trussed", rev = "6bba8fde36d05c0227769eb63345744e87d84b2b" }

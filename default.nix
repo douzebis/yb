@@ -40,10 +40,13 @@ let
       || pkgs.lib.hasSuffix ".yaml" path;
   };
 
+  # The version, from the workspace manifest (spec 0029 §6).
+  cargoVersion = (pkgs.lib.importTOML ./rust/Cargo.toml).workspace.package.version;
+
   rustCommon = {
     src        = rustSrc;
     pname      = "yb";
-    version    = "0.4.2";
+    version    = cargoVersion;
     strictDeps = true;
     nativeBuildInputs = [ pkgs.cargo pkgs.rustc pkgs.pkg-config ];
     # pcsclite is needed on Linux by all derivations that compile the crate.
@@ -77,74 +80,75 @@ let
   });
 
   # ---------------------------------------------------------------------------
-  # TIER-2 HARNESS TESTS (compiled, not run — executed inside the NixOS VM)
+  # CRATES.IO RELEASE SHELL (spec 0029 §9)
   # ---------------------------------------------------------------------------
-  harnessCommon = rustCommon // {
-    nativeBuildInputs = rustCommon.nativeBuildInputs ++ [
-      pkgs.llvmPackages.libclang
-    ];
-    LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
-    # bindgen (used by littlefs2-sys) needs clang built-in headers.
-    BINDGEN_EXTRA_CLANG_ARGS =
-      let clangInclude = "${pkgs.llvmPackages.libclang.lib}/lib/clang";
-          version      = pkgs.lib.versions.major pkgs.llvmPackages.release_version;
-      in "-I${clangInclude}/${version}/include";
+  # The pinned toolchain for scripts/check-crates and the crates.io upload.
+  # These run cargo outside the Nix sandbox: packaging a workspace whose crates
+  # depend on each other needs cargo's own temporary registry, which needs
+  # the network.  mkShell's setup hooks set PKG_CONFIG_PATH, so pcsc-sys
+  # finds pcsclite when the packaged crates are compiled.
+  releaseShell = pkgs.mkShell {
+    name = "yb-release";
+    nativeBuildInputs = [ pkgs.cargo pkgs.rustc pkgs.pkg-config ];
+    buildInputs = pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.pcsclite ];
   };
 
-  # Build the tier-2 test binary using crane's cargoTest with --no-run, then
-  # extract the compiled binary from the cargo artifact output.
-  # Inherit from rustDeps (not a harness-specific deps derivation) to avoid
-  # stale test binaries appearing in the inherited target/ cache.
-  harnessTestBin = crane.cargoTest (harnessCommon // {
-    pname              = "yb-harness-test-bin";
-    cargoArtifacts     = rustDeps;
-    cargoExtraArgs     = "-p yb-piv-harness --features integration-tests";
-    cargoTestExtraArgs = "--no-run";
-    installPhase = ''
-      mkdir -p $out/bin
-      for name in hardware_piv_tests yb_cli_tests; do
-        bin=$(find target/release/deps -maxdepth 1 -name "$name-*" ! -name "*.d" -type f)
-        if [ -z "$bin" ] || [ ! -f "$bin" ]; then
-          echo "ERROR: could not find $name binary" >&2
-          exit 1
-        fi
-        echo "Installing $bin -> $out/bin/$name"
-        cp "$bin" $out/bin/$name
-      done
-    '';
+  # ---------------------------------------------------------------------------
+  # RELEASE PACKAGE AND VM TEST — the staged nixpkgs recipe (spec 0029 §2)
+  # ---------------------------------------------------------------------------
+  # Same layout as the GitHub tarball that nixpkgs fetches (rust/ inside the
+  # repository root), restricted to what the build reads.
+  localSource = pkgs.lib.cleanSourceWith {
+    src    = pkgs.lib.cleanSource ./.;
+    filter = path: type:
+      let rel = pkgs.lib.removePrefix (toString ./. + "/") (toString path);
+      in (rel == "rust" || pkgs.lib.hasPrefix "rust/" rel)
+         && !(pkgs.lib.hasPrefix "rust/target" rel);
+  };
+
+  # nixpkgs with yb replaced by the staged recipe built from local source,
+  # so that the VM test (which installs pkgs.yb) sees the local build.
+  pkgsLocal = pkgs.extend (final: prev: {
+    yb = (final.callPackage ./nixpkgs/pkgs/by-name/yb/yb/package.nix { })
+      .overrideAttrs (finalAttrs: old: {
+        version   = cargoVersion;
+        src       = localSource;
+        # From Cargo.lock: no hash to update when crates.io dependencies
+        # change.  Git dependencies (all under the harness's
+        # piv-authenticator) need one hash each; to refresh one, set it to
+        # pkgs.lib.fakeHash and copy the hash the build reports.
+        cargoDeps = final.rustPlatform.importCargoLock {
+          lockFile     = ./rust/Cargo.lock;
+          outputHashes = {
+            "piv-authenticator-0.5.3"    = "sha256-QEQmm8ORw+o92l6qf8psUETi6zeWwyBR8dQwjPRYq5s=";
+            "trussed-0.1.0"              = "sha256-EML8BrRLICrh5OquItL226gk5PF9sAq6Nx+nngnHQww=";
+            "trussed-auth-backend-0.1.0" = "sha256-80XwpB+zU87wMoK+wX22QOGXeO1iXFknmtyzvlOhmns=";
+            "trussed-rsa-alloc-0.3.0"    = "sha256-1AgAQb2Txfx+E7YI8XVBsgCmJaFZNXqGpXO/sjJB3pk=";
+            "trussed-staging-0.3.2"      = "sha256-kMvVJ/f7S33wl14iJHantfWmoOGTpkSgYm72FenJewY=";
+          };
+        };
+      });
   });
 
-  # ---------------------------------------------------------------------------
-  # RUST PACKAGE
-  # ---------------------------------------------------------------------------
-  ybRust = crane.buildPackage (rustCommon // {
-    pname          = "yb-rust";
-    cargoArtifacts = rustDeps;
-    cargoExtraArgs = "-p yb --features self-test";
+  # The staged files must pass nixpkgs's formatter, and carry the version
+  # being released (spec 0029 §8).
+  stagedPackage = ./nixpkgs/pkgs/by-name/yb/yb/package.nix;
+  stagedVersion = (pkgs.callPackage stagedPackage { }).version;
+  nixpkgsStagingCheck = pkgs.runCommand "yb-nixpkgs-staging-check" {
+    nativeBuildInputs = [ pkgs.nixfmt ];
+  } (''
+    nixfmt --check ${stagedPackage} ${./nixpkgs/nixos/tests/yb.nix}
+  '' + pkgs.lib.optionalString (stagedVersion != cargoVersion) ''
+    echo "staged package.nix has version ${stagedVersion}, rust/Cargo.toml has ${cargoVersion}" >&2
+    exit 1
+  '' + ''
+    touch $out
+  '');
 
-    nativeBuildInputs = rustCommon.nativeBuildInputs ++ [ pkgs.installShellFiles ];
-
-    postInstall = ''
-      installShellCompletion --cmd yb \
-        --bash <(YB_COMPLETE=bash $out/bin/yb | sed \
-          -e 's|-o nospace -o bashdefault|-o nospace -o filenames -o bashdefault|g' \
-          -e 's|words\[COMP_CWORD\]="$2"|local _cur="''${COMP_LINE:0:''${COMP_POINT}}"; _cur="''${_cur##* }"; words[COMP_CWORD]="''${_cur}"|') \
-        --zsh  <(YB_COMPLETE=zsh  $out/bin/yb) \
-        --fish <(YB_COMPLETE=fish $out/bin/yb)
-
-      # Generate and install man pages.
-      $out/bin/yb-gen-man $out/share/man/man1
-    '';
-
-    meta = with pkgs.lib; {
-      description  = "Secure blob storage on a YubiKey (Rust port)";
-      homepage     = "https://github.com/douzebis/yb";
-      license      = licenses.mit;
-      maintainers  = with maintainers; [ ];
-      mainProgram  = "yb";
-      platforms    = platforms.unix;
-    };
-  });
+  # Built as nixpkgs's nixos/tests/all-tests.nix does.
+  integrationTests = pkgsLocal.callPackage ./nixpkgs/nixos/tests/yb.nix {
+    inherit (pkgsLocal.yb.passthru) ybPivHarnessTests;
+  };
 
   # ---------------------------------------------------------------------------
   # DEVELOPMENT SHELL
@@ -251,66 +255,17 @@ EOF
     '';
   };
 
-  # Fixture files needed by yb_cli_tests at runtime in the NixOS VM.
-  # crane.filterCargoSources strips .yaml from the build sandbox, so the
-  # compile-time CARGO_MANIFEST_DIR path is gone by VM time; we ship the
-  # fixtures as a separate store path and inject YB_FIXTURE_DIR instead.
-  testFixtures = pkgs.runCommand "yb-test-fixtures" {} ''
-    mkdir -p $out
-    cp ${./rust/yb-core/tests/fixtures/with_key.yaml} $out/with_key.yaml
-    cp ${./rust/yb-core/tests/fixtures/default.yaml}  $out/default.yaml
-  '';
-
-  # ---------------------------------------------------------------------------
-  # NIXOS VM INTEGRATION TEST (tier-1 + tier-2)
-  # ---------------------------------------------------------------------------
-  integrationTests = pkgs.testers.nixosTest {
-    name = "yb-integration-tests";
-
-    nodes.machine = { config, pkgs, ... }: {
-      services.pcscd = {
-        enable  = true;
-        plugins = [ pkgs.ccid pkgs.vsmartcard-vpcd ];
-      };
-      environment.systemPackages = [ harnessTestBin ybRust ];
-    };
-
-    testScript = ''
-      machine.start()
-      machine.wait_for_unit("pcscd.socket")
-
-      # Tier-2: hardware PIV tests. with_vsc connects to vpcd in-process (each
-      # test gets a fresh RAM-backed virtual card). RUST_TEST_THREADS=1
-      # serialises tests to avoid concurrent vpcd connections.
-      out = machine.succeed("RUST_TEST_THREADS=1 hardware_piv_tests 2>&1")
-      print(out)
-      if "test result: ok" not in out:
-        raise Exception("Tier-2 hardware_piv_tests failed:\n" + out)
-
-      # Tier-2: CLI subprocess tests. YB_BIN points to the Nix-built binary so
-      # the pre-built yb_cli_tests binary can find it (CARGO_BIN_EXE_yb is
-      # baked at compile time and would point to the wrong store path).
-      # YB_FIXTURE_DIR points to fixtures in the nix store (the build-sandbox
-      # path baked into CARGO_MANIFEST_DIR is gone at VM runtime).
-      out = machine.succeed(
-        "RUST_TEST_THREADS=1 YB_BIN=${ybRust}/bin/yb"
-        + " YB_FIXTURE_DIR=${testFixtures}"
-        + " yb_cli_tests 2>&1"
-      )
-      print(out)
-      if "test result: ok" not in out:
-        raise Exception("Tier-2 yb_cli_tests failed:\n" + out)
-    '';
-  };
-
 in
 {
-  default           = ybRust;
-  yb-rust           = ybRust;
+  default           = pkgsLocal.yb;
+  yb                = pkgsLocal.yb;     # staged nixpkgs recipe, local source
+  yb-rust           = pkgsLocal.yb;     # legacy alias of yb
   devShell          = dev-shell;        # legacy alias
   dev-shell         = dev-shell;
   rust-fmt          = rustFmt;
   rust-clippy       = rustClippy;
   rust-tests        = rustTests;        # tier-1 only (fast)
-  integration-tests = integrationTests; # tier-1 + tier-2 via NixOS VM
+  nixpkgs-staging-check = nixpkgsStagingCheck; # nixfmt + version of nixpkgs/
+  release-shell     = releaseShell;     # toolchain for scripts/check-crates
+  integration-tests = integrationTests; # staged nixpkgs VM test (tier-2)
 }

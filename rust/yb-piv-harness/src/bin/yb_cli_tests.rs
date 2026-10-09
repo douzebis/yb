@@ -10,9 +10,10 @@
 //! and stdout/stderr content — the layers that the direct-call tests in
 //! `rust/yb/tests/cli_tests.rs` do not reach.
 //!
-//! Requires the `integration-tests` feature (same as `hardware_piv_tests`).
-
-#![cfg(feature = "integration-tests")]
+//! A binary (libtest-mimic) built with the `integration-tests` feature,
+//! like `hardware_piv_tests` (spec 0029 §4).  Run with:
+//!   cargo build -p yb
+//!   cargo run -p yb-piv-harness --features integration-tests --bin yb_cli_tests
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -26,22 +27,9 @@ const MGMT: &str = "010203040506070801020304050607080102030405060708";
 /// PIN of the `with_key.yaml` fixture (not the factory PIN, spec 0024 §4a).
 const PIN: &str = "654321";
 
-/// Path to the `with_key.yaml` fixture file.
-///
-/// Resolution order:
-/// 1. `YB_FIXTURE_DIR` env var (set by NixOS VM, points to fixtures in the
-///    nix store since the cargo build sandbox path is gone at VM runtime).
-/// 2. Compile-time path relative to `CARGO_MANIFEST_DIR` (works in a normal
-///    `cargo test` run where the source tree is intact).
-fn fixture_src() -> std::path::PathBuf {
-    if let Ok(dir) = std::env::var("YB_FIXTURE_DIR") {
-        return std::path::PathBuf::from(dir).join("with_key.yaml");
-    }
-    std::path::PathBuf::from(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../yb-core/tests/fixtures/with_key.yaml"
-    ))
-}
+/// The `with_key.yaml` fixture, compiled into `yb-core`, so that this
+/// binary needs no source tree at run time (spec 0029 §5).
+use yb_core::piv::virtual_piv::fixtures::WITH_KEY as WITH_KEY_FIXTURE;
 
 // ---------------------------------------------------------------------------
 // Binary path
@@ -76,10 +64,10 @@ struct Fixture {
 }
 
 impl Fixture {
-    /// Copy with_key.yaml into a fresh TempDir.
+    /// Write with_key.yaml into a fresh TempDir.
     fn new() -> Self {
         let dir = TempDir::new().unwrap();
-        std::fs::copy(fixture_src(), dir.path().join("fixture.yaml")).unwrap();
+        std::fs::write(dir.path().join("fixture.yaml"), WITH_KEY_FIXTURE).unwrap();
         Self { dir }
     }
 
@@ -151,7 +139,6 @@ fn tmp_file(dir: &Path, name: &str, content: &[u8]) -> PathBuf {
 // format
 // ---------------------------------------------------------------------------
 
-#[test]
 fn format_creates_store() {
     let f = Fixture::new();
     f.format();
@@ -163,7 +150,6 @@ fn format_creates_store() {
 // store / list
 // ---------------------------------------------------------------------------
 
-#[test]
 fn store_and_list() {
     let f = Fixture::new();
     f.format();
@@ -173,7 +159,6 @@ fn store_and_list() {
     assert!(stdout.contains("hello.txt"), "list output: {stdout}");
 }
 
-#[test]
 fn store_multiple_files_list() {
     let f = Fixture::new();
     f.format();
@@ -190,7 +175,6 @@ fn store_multiple_files_list() {
     assert!(stdout.contains("beta.bin"));
 }
 
-#[test]
 fn store_name_override() {
     let f = Fixture::new();
     f.format();
@@ -206,7 +190,6 @@ fn store_name_override() {
 // fetch
 // ---------------------------------------------------------------------------
 
-#[test]
 fn store_and_fetch_stdout() {
     let f = Fixture::new();
     f.format();
@@ -216,7 +199,6 @@ fn store_and_fetch_stdout() {
     assert_eq!(stdout.as_bytes(), b"hello world");
 }
 
-#[test]
 fn store_and_fetch_to_output_dir() {
     let f = Fixture::new();
     f.format();
@@ -232,7 +214,6 @@ fn store_and_fetch_to_output_dir() {
     assert_eq!(written, b"payload");
 }
 
-#[test]
 fn fetch_glob_pattern() {
     let f = Fixture::new();
     f.format();
@@ -251,7 +232,6 @@ fn fetch_glob_pattern() {
     assert!(!out_dir.path().join("other").exists());
 }
 
-#[test]
 fn store_encrypted_fetch_with_pin() {
     let f = Fixture::new();
     f.format();
@@ -265,14 +245,12 @@ fn store_encrypted_fetch_with_pin() {
     assert_eq!(stdout.as_bytes(), b"topsecret");
 }
 
-#[test]
 fn fetch_missing_exits_1() {
     let f = Fixture::new();
     f.format();
     f.err(&[], &["fetch", "ghost"]);
 }
 
-#[test]
 fn fetch_stdout_multi_match_exits_1() {
     let f = Fixture::new();
     f.format();
@@ -285,7 +263,6 @@ fn fetch_stdout_multi_match_exits_1() {
 // remove
 // ---------------------------------------------------------------------------
 
-#[test]
 fn remove_single_blob() {
     let f = Fixture::new();
     f.format();
@@ -297,7 +274,6 @@ fn remove_single_blob() {
     assert!(!stdout.contains("target"));
 }
 
-#[test]
 fn remove_glob() {
     let f = Fixture::new();
     f.format();
@@ -313,14 +289,12 @@ fn remove_glob() {
     assert!(stdout.contains("keep"));
 }
 
-#[test]
 fn remove_missing_exits_1() {
     let f = Fixture::new();
     f.format();
     f.err(&[], &["remove", "ghost"]);
 }
 
-#[test]
 fn remove_ignore_missing() {
     let f = Fixture::new();
     f.format();
@@ -331,7 +305,6 @@ fn remove_ignore_missing() {
 // fsck
 // ---------------------------------------------------------------------------
 
-#[test]
 fn fsck_clean_store() {
     let f = Fixture::new();
     f.format();
@@ -342,7 +315,6 @@ fn fsck_clean_store() {
     assert!(stdout.contains("VERIFIED"), "fsck output: {stdout}");
 }
 
-#[test]
 fn fsck_verbose() {
     let f = Fixture::new();
     f.format();
@@ -355,7 +327,6 @@ fn fsck_verbose() {
 // list flags
 // ---------------------------------------------------------------------------
 
-#[test]
 fn list_long_format() {
     let f = Fixture::new();
     f.format();
@@ -368,7 +339,6 @@ fn list_long_format() {
     assert!(stdout.contains('P'), "expected P flag: {stdout}");
 }
 
-#[test]
 fn list_sort_reverse() {
     let f = Fixture::new();
     f.format();
@@ -390,7 +360,6 @@ fn list_sort_reverse() {
 // argument / flag tests
 // ---------------------------------------------------------------------------
 
-#[test]
 fn quiet_suppresses_stderr() {
     let f = Fixture::new();
     f.format();
@@ -402,7 +371,6 @@ fn quiet_suppresses_stderr() {
     );
 }
 
-#[test]
 fn pin_from_env() {
     let f = Fixture::new();
     f.format();
@@ -414,7 +382,6 @@ fn pin_from_env() {
     assert_eq!(stdout.as_bytes(), b"secret");
 }
 
-#[test]
 fn pin_from_stdin() {
     let f = Fixture::new();
     f.format();
@@ -452,7 +419,6 @@ fn pin_from_stdin() {
     assert_eq!(stdout.as_bytes(), b"pintest");
 }
 
-#[test]
 fn deprecated_pin_flag_warns() {
     let f = Fixture::new();
     f.format();
@@ -476,7 +442,6 @@ fn deprecated_pin_flag_warns() {
     );
 }
 
-#[test]
 fn deprecated_key_flag_warns() {
     let f = Fixture::new();
     f.format();
@@ -497,7 +462,6 @@ fn deprecated_key_flag_warns() {
     );
 }
 
-#[test]
 fn deprecated_extract_flag_warns() {
     let f = Fixture::new();
     f.format();
@@ -520,7 +484,6 @@ fn deprecated_extract_flag_warns() {
 // error paths
 // ---------------------------------------------------------------------------
 
-#[test]
 fn store_no_name_stdin_exits_1() {
     let f = Fixture::new();
     f.format();
@@ -528,7 +491,6 @@ fn store_no_name_stdin_exits_1() {
     f.err(&[], &["store"]);
 }
 
-#[test]
 fn store_duplicate_basename_exits_1() {
     let f = Fixture::new();
     f.format();
@@ -586,7 +548,6 @@ fn complete(
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
-#[test]
 fn completion_script_bash_exits_0() {
     let f = Fixture::new();
     let out = Command::new(yb_bin())
@@ -602,7 +563,6 @@ fn completion_script_bash_exits_0() {
     );
 }
 
-#[test]
 fn completion_script_zsh_exits_0() {
     let f = Fixture::new();
     let out = Command::new(yb_bin())
@@ -618,7 +578,6 @@ fn completion_script_zsh_exits_0() {
     );
 }
 
-#[test]
 fn completion_script_fish_exits_0() {
     let f = Fixture::new();
     let out = Command::new(yb_bin())
@@ -634,7 +593,6 @@ fn completion_script_fish_exits_0() {
     );
 }
 
-#[test]
 fn completion_subcommands_listed() {
     // Completing "yb <Tab>" should return subcommand names.
     let f = Fixture::new();
@@ -647,7 +605,6 @@ fn completion_subcommands_listed() {
     assert!(candidates.contains("fsck"), "subcommands: {candidates}");
 }
 
-#[test]
 fn completion_blob_names_fetch() {
     // After storing a blob, completing "yb fetch <Tab>" should return its name.
     let f = Fixture::new();
@@ -660,7 +617,6 @@ fn completion_blob_names_fetch() {
     assert!(candidates.contains("beta.txt"), "candidates: {candidates}");
 }
 
-#[test]
 fn completion_blob_names_prefix_filtered() {
     // Completing "yb fetch al<Tab>" should return only matching blobs.
     let f = Fixture::new();
@@ -676,7 +632,6 @@ fn completion_blob_names_prefix_filtered() {
     );
 }
 
-#[test]
 fn completion_blob_names_list() {
     let f = Fixture::new();
     f.format();
@@ -686,7 +641,6 @@ fn completion_blob_names_list() {
     assert!(candidates.contains("myblob"), "candidates: {candidates}");
 }
 
-#[test]
 fn completion_blob_names_remove() {
     let f = Fixture::new();
     f.format();
@@ -696,7 +650,6 @@ fn completion_blob_names_remove() {
     assert!(candidates.contains("removeme"), "candidates: {candidates}");
 }
 
-#[test]
 fn completion_no_blobs_returns_empty() {
     // A formatted but empty store should return no blob-name candidates.
     let f = Fixture::new();
@@ -714,7 +667,6 @@ fn completion_no_blobs_returns_empty() {
 // list-readers
 // ---------------------------------------------------------------------------
 
-#[test]
 fn list_readers_with_fixture() {
     let f = Fixture::new();
     // list-readers does not need a formatted store.
@@ -724,4 +676,58 @@ fn list_readers_with_fixture() {
         stdout.contains("Virtual YubiKey"),
         "list-readers output: {stdout}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Runner (libtest-mimic: libtest's output and flags, spec 0029 §4)
+// ---------------------------------------------------------------------------
+
+fn main() {
+    macro_rules! test {
+        ($f:ident) => {
+            libtest_mimic::Trial::test(stringify!($f), || {
+                $f();
+                Ok(())
+            })
+        };
+    }
+    let tests = vec![
+        test!(format_creates_store),
+        test!(store_and_list),
+        test!(store_multiple_files_list),
+        test!(store_name_override),
+        test!(store_and_fetch_stdout),
+        test!(store_and_fetch_to_output_dir),
+        test!(fetch_glob_pattern),
+        test!(store_encrypted_fetch_with_pin),
+        test!(fetch_missing_exits_1),
+        test!(fetch_stdout_multi_match_exits_1),
+        test!(remove_single_blob),
+        test!(remove_glob),
+        test!(remove_missing_exits_1),
+        test!(remove_ignore_missing),
+        test!(fsck_clean_store),
+        test!(fsck_verbose),
+        test!(list_long_format),
+        test!(list_sort_reverse),
+        test!(quiet_suppresses_stderr),
+        test!(pin_from_env),
+        test!(pin_from_stdin),
+        test!(deprecated_pin_flag_warns),
+        test!(deprecated_key_flag_warns),
+        test!(deprecated_extract_flag_warns),
+        test!(store_no_name_stdin_exits_1),
+        test!(store_duplicate_basename_exits_1),
+        test!(completion_script_bash_exits_0),
+        test!(completion_script_zsh_exits_0),
+        test!(completion_script_fish_exits_0),
+        test!(completion_subcommands_listed),
+        test!(completion_blob_names_fetch),
+        test!(completion_blob_names_prefix_filtered),
+        test!(completion_blob_names_list),
+        test!(completion_blob_names_remove),
+        test!(completion_no_blobs_returns_empty),
+        test!(list_readers_with_fixture),
+    ];
+    libtest_mimic::run(&libtest_mimic::Arguments::from_args(), tests).exit();
 }

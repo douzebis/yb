@@ -8,8 +8,8 @@
 //! `pcscd` via `vpcd`.  Requires `vsmartcard-vpcd` installed and `pcscd`
 //! running.  Tests are skipped gracefully if `vpcd` is unavailable.
 //!
-//! Run with:
-//!   cargo test -p yb-piv-harness --features integration-tests
+//! A binary (libtest-mimic), spec 0029 §4.  Run with:
+//!   cargo run -p yb-piv-harness --features integration-tests --bin hardware_piv_tests
 
 use yb_core::piv::hardware::HardwarePiv;
 use yb_core::piv::PivBackend;
@@ -31,7 +31,6 @@ macro_rules! skip_if_absent {
 }
 
 /// list_readers returns a reader that contains the virtual card.
-#[test]
 fn t2_list_readers() {
     skip_if_absent!(with_vsc(Options::default(), |reader| {
         let piv = hardware_piv();
@@ -44,7 +43,6 @@ fn t2_list_readers() {
 }
 
 /// list_devices returns exactly one device.
-#[test]
 fn t2_list_devices() {
     skip_if_absent!(with_vsc(Options::default(), |_reader| {
         let piv = hardware_piv();
@@ -56,7 +54,6 @@ fn t2_list_devices() {
 }
 
 /// read_object errors on an unpopulated object ID.
-#[test]
 fn t2_read_object_missing() {
     skip_if_absent!(with_vsc(Options::default(), |reader| {
         let piv = hardware_piv();
@@ -65,7 +62,6 @@ fn t2_read_object_missing() {
 }
 
 /// write_object + read_object round-trip with the default 3DES management key.
-#[test]
 fn t2_write_read_object() {
     skip_if_absent!(with_vsc(Options::default(), |reader| {
         let piv = hardware_piv();
@@ -77,7 +73,6 @@ fn t2_write_read_object() {
 }
 
 /// write_object with a wrong management key is rejected.
-#[test]
 fn t2_write_wrong_mgmt_key() {
     skip_if_absent!(with_vsc(Options::default(), |reader| {
         let piv = hardware_piv();
@@ -87,7 +82,6 @@ fn t2_write_wrong_mgmt_key() {
 }
 
 /// verify_pin succeeds with the default PIN, fails with a wrong PIN.
-#[test]
 fn t2_verify_pin() {
     skip_if_absent!(with_vsc(Options::default(), |reader| {
         let piv = hardware_piv();
@@ -97,7 +91,6 @@ fn t2_verify_pin() {
 }
 
 /// generate_key returns a 65-byte uncompressed P-256 point.
-#[test]
 fn t2_generate_key() {
     skip_if_absent!(with_vsc(Options::default(), |reader| {
         let piv = hardware_piv();
@@ -108,7 +101,6 @@ fn t2_generate_key() {
 }
 
 /// generate_key without management key auth is rejected.
-#[test]
 fn t2_generate_key_no_auth() {
     skip_if_absent!(with_vsc(Options::default(), |reader| {
         let piv = hardware_piv();
@@ -117,7 +109,6 @@ fn t2_generate_key_no_auth() {
 }
 
 /// ecdh with a software ephemeral key returns a 32-byte shared secret.
-#[test]
 fn t2_ecdh() {
     skip_if_absent!(with_vsc(Options::default(), |reader| {
         let piv = hardware_piv();
@@ -138,7 +129,6 @@ fn t2_ecdh() {
 }
 
 /// generate_certificate stores a cert that can be read back.
-#[test]
 fn t2_generate_certificate() {
     skip_if_absent!(with_vsc(Options::default(), |reader| {
         let piv = hardware_piv();
@@ -149,4 +139,32 @@ fn t2_generate_certificate() {
         let read_back = piv.read_certificate(reader, 0x82).unwrap();
         assert_eq!(cert_der, read_back);
     }));
+}
+
+// ---------------------------------------------------------------------------
+// Runner (libtest-mimic: libtest's output and flags, spec 0029 §4)
+// ---------------------------------------------------------------------------
+
+fn main() {
+    macro_rules! test {
+        ($f:ident) => {
+            libtest_mimic::Trial::test(stringify!($f), || {
+                $f();
+                Ok(())
+            })
+        };
+    }
+    let tests = vec![
+        test!(t2_list_readers),
+        test!(t2_list_devices),
+        test!(t2_read_object_missing),
+        test!(t2_write_read_object),
+        test!(t2_write_wrong_mgmt_key),
+        test!(t2_verify_pin),
+        test!(t2_generate_key),
+        test!(t2_generate_key_no_auth),
+        test!(t2_ecdh),
+        test!(t2_generate_certificate),
+    ];
+    libtest_mimic::run(&libtest_mimic::Arguments::from_args(), tests).exit();
 }

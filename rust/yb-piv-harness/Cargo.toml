@@ -15,12 +15,27 @@ path = "src/lib.rs"
 
 [features]
 default           = []
-integration-tests = ["dep:piv-authenticator", "dep:vpicc", "dep:stoppable_thread"]
+integration-tests = [
+    "dep:piv-authenticator",
+    "dep:vpicc",
+    "dep:stoppable_thread",
+    "dep:libtest-mimic",
+    "dep:yb-core",
+    "dep:p256",
+    "dep:rand",
+    "dep:tempfile",
+]
 
 [dependencies]
 pcsc             = "2"
 vpicc            = { version = "0.1.0", optional = true }
 stoppable_thread = { version = "0.2", optional = true }
+# Used by the test binaries (src/bin), hence regular optional dependencies.
+libtest-mimic    = { version = "0.8", optional = true }
+yb-core          = { path = "../yb-core", features = ["virtual-piv"], optional = true }
+p256             = { version = "0.13", features = ["ecdh"], optional = true }
+rand             = { version = "0.8", optional = true }
+tempfile         = { version = "3", optional = true }
 
 [dependencies.piv-authenticator]
 git      = "https://github.com/trussed-dev/piv-authenticator"
@@ -28,16 +43,16 @@ rev      = "a4a4204e7089a6a5a99907877576cc40c75825ab"
 features = ["vpicc"]
 optional = true
 
-[dev-dependencies]
-yb-core  = { path = "../yb-core", features = ["virtual-piv"] }
-p256     = { version = "0.13", features = ["ecdh"] }
-rand     = "0.8"
-tempfile = "3"
-
-[[test]]
+# The tier-2 tests are binaries (libtest-mimic), not `cargo test` targets:
+# they need pcscd with a virtual smart card, and are run by the NixOS VM
+# test (spec 0029 §4).  Locally:
+#   cargo run -p yb-piv-harness --features integration-tests --bin hardware_piv_tests
+[[bin]]
 name              = "hardware_piv_tests"
 required-features = ["integration-tests"]
+test              = false
 
-[[test]]
+[[bin]]
 name              = "yb_cli_tests"
 required-features = ["integration-tests"]
+test              = false

@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+#
+# SPDX-License-Identifier: MIT
+
+# Package yb-core and yb as crates.io will receive them, and test them from
+# the .crate files alone (spec 0029 §9).
+#
+# Run from the repository root, with network access, in the release shell:
+#   nix-shell default.nix -A release-shell --run scripts/check-crates
+# (the dev shell works too).  Extra arguments go to `cargo package`.
+#
+# 1. `cargo package` builds each .crate and verifies it by compiling it on
+#    its own; yb is built against the packaged yb-core.
+# 2. Each .crate is unpacked outside the workspace and its tests run there,
+#    as a distribution packager would.
+# The .crate files are left in rust/target/package/.
+
+set -euo pipefail
+
+manifest=rust/Cargo.toml
+if [ ! -f "$manifest" ]; then
+    echo "check-crates: run from the repository root" >&2
+    exit 1
+fi
+
+# Extra arguments go to `cargo package`, e.g. --allow-dirty to check a
+# working tree with uncommitted changes.
+cargo package --manifest-path "$manifest" --locked \
+    --workspace --exclude yb-piv-harness "$@"
+
+pkgid=$(cargo pkgid --manifest-path "$manifest" -p yb-core)
+version=${pkgid##*[#@]}
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+for crate in yb-core yb; do
+    tar -xzf "rust/target/package/$crate-$version.crate" -C "$work"
+done
+
+# yb-core: its integration tests need the test-utils feature.
+echo "Testing yb-core $version from its .crate"
+(cd "$work/yb-core-$version" &&
+    CARGO_TARGET_DIR="$work/target" cargo test --features test-utils)
+
+# yb: depends on yb-core $version, not yet on crates.io at release time, so
+# it is patched to the unpacked yb-core crate.
+echo "Testing yb $version from its .crate"
+(cd "$work/yb-$version" &&
+    CARGO_TARGET_DIR="$work/target" cargo test \
+        --config "patch.crates-io.yb-core.path='$work/yb-core-$version'")
+
+echo "Packages ready:"
+ls -1 rust/target/package/*-"$version".crate

@@ -4,7 +4,7 @@
 
 [package]
 name        = "yb-core"
-version     = "0.4.2"
+version.workspace = true
 edition     = "2021"
 rust-version = "1.86"
 license     = "MIT"
@@ -76,3 +76,10 @@ chrono = { version = "0.4", optional = true }
 
 [dev-dependencies]
 yb-core = { path = ".", features = ["test-utils"] }  # enable test-utils for integration tests
+
+# The self dev-dependency above is dropped from the published crate (path
+# dev-dependencies without a version are), so the test declares the feature
+# it needs: `cargo test --features test-utils` runs it from the crate alone.
+[[test]]
+name              = "virtual_piv_tests"
+required-features = ["test-utils"]
