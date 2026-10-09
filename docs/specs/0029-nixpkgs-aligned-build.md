@@ -6,9 +6,9 @@ SPDX-License-Identifier: MIT
 
 # 0029 — Build and Test with the nixpkgs Recipe
 
-**Status:** in-progress
+**Status:** implemented
 **App:** yb
-**Implemented in:** <!-- YYYY-MM-DD, fill after implementation -->
+**Implemented in:** 2026-10-09
 
 ## Problem
 
