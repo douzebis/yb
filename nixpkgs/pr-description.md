@@ -50,7 +50,7 @@ Upstream builds and tests this exact recipe (staged in the repository's
   - [x] [NixOS tests] in [nixos/tests].
   - [x] [Package tests] at `passthru.tests`.
   - [ ] Tests in [lib/tests] or [pkgs/test] for functions and "core" functionality.
-- [ ] Ran `nixpkgs-review` on this PR. See [nixpkgs-review usage].
+- [x] Ran `nixpkgs-review` on this PR. See [nixpkgs-review usage].
 - [x] Tested basic functionality of all binary files, usually in `./result/bin/`.
 - Nixpkgs Release Notes
   - [ ] Package update: when the change is major or breaking.
