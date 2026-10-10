@@ -5,8 +5,9 @@
 //! Tier-2 integration tests for `HardwarePiv`.
 //!
 //! Runs `HardwarePiv` against a `piv-authenticator` virtual card connected to
-//! `pcscd` via `vpcd`.  Requires `vsmartcard-vpcd` installed and `pcscd`
-//! running.  Tests are skipped gracefully if `vpcd` is unavailable.
+//! `pcscd` via `vpcd`.  Requires `pcscd` with the `vsmartcard-vpcd` driver.
+//! Tests skip if `vpcd` is unavailable, unless `YB_REQUIRE_VSC` is set: then
+//! they fail.
 //!
 //! A binary (libtest-mimic), spec 0029 §4.  Run with:
 //!   cargo run -p yb-piv-harness --features integration-tests --bin hardware_piv_tests
@@ -132,8 +133,10 @@ fn t2_ecdh() {
 fn t2_generate_certificate() {
     skip_if_absent!(with_vsc(Options::default(), |reader| {
         let piv = hardware_piv();
+        // Signing with the slot key needs the PIN, as on a YubiKey (default
+        // PIN policy of the retired slots); yb format passes it too.
         let cert_der = piv
-            .generate_certificate(reader, 0x82, "CN=T2Test", MGMT, None)
+            .generate_certificate(reader, 0x82, "CN=T2Test", MGMT, Some("123456"))
             .unwrap();
         assert!(!cert_der.is_empty());
         let read_back = piv.read_certificate(reader, 0x82).unwrap();

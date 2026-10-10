@@ -72,11 +72,31 @@ forking a subprocess, making tests fast and inspectable.
 Tier-2 runs inside a NixOS VM configured with:
 
 ```
-services.pcscd.plugins = [ pkgs.ccid pkgs.vsmartcard-vpcd ];
+services.pcscd.enable = true;
+services.vsmartcard-vpcd.enable = true;
 ```
 
-`vsmartcard-vpcd` is a virtual PC/SC reader daemon; `piv-authenticator` (the
-`yb-piv-harness` crate) talks to it to emulate a real YubiKey at the APDU level.
+`vsmartcard-vpcd` is a virtual PC/SC reader driver for `pcscd`.  It is a
+serial-style driver, configured through `reader.conf`, which the
+`services.vsmartcard-vpcd` module writes; listing it in
+`services.pcscd.plugins` does not load it.
+
+The two binaries test different things:
+
+- `hardware_piv_tests` exercises yb's PC/SC path.  For each test, the harness
+  (`with_vsc`) runs `piv-authenticator` in-process as an emulated PIV card,
+  connects it to vpcd (TCP port 35963), waits for `pcscd` to report it, runs
+  the test against it through `pcscd`, then removes it and waits for the
+  reader to be empty, even if the test failed.  A small adapter makes the
+  emulator answer like a YubiKey where they differ: SELECT of the PIV
+  application by its 5-byte RID (as yb, `ykman` and `yubico-piv-tool` send
+  it), and GET METADATA (answered "not supported", as by firmware < 5.3).
+  Without vpcd the tests skip, unless `YB_REQUIRE_VSC` is set (the VM test
+  sets it): then they fail, so a broken setup cannot pass silently.
+- `yb_cli_tests` runs the packaged `yb` binary (`YB_BIN`) as a subprocess with
+  `YB_FIXTURE` pointing at a file: yb then uses its in-memory simulated card,
+  not PC/SC.  These tests cover the command line (arguments, prompts, exit
+  codes, messages).
 
 The two test programs (`hardware_piv_tests`, `yb_cli_tests`) are binaries of
 the `yb-piv-harness` crate (feature `integration-tests`), using
@@ -91,7 +111,7 @@ in a nix-shell with a virtual reader, run them with
 
 | File | Binary | What is tested |
 |---|---|---|
-| `rust/yb-piv-harness/src/bin/hardware_piv_tests.rs` | `hardware_piv_tests` | Real APDU round-trips via vsmartcard-vpcd: key gen, ECDH, object read/write, PIN verify |
+| `rust/yb-piv-harness/src/bin/hardware_piv_tests.rs` | `hardware_piv_tests` | Real APDU round-trips through pcscd and vsmartcard-vpcd to an emulated card: key gen, ECDH, certificate, object read/write, PIN verify |
 | `rust/yb-piv-harness/src/bin/yb_cli_tests.rs` | `yb_cli_tests` | End-to-end subprocess tests: the compiled `yb` binary is invoked via `std::process::Command`; stdout/stderr and exit codes are checked |
 
 ### How `yb_cli_tests` work

@@ -24,6 +24,7 @@ integration-tests = [
     "dep:p256",
     "dep:rand",
     "dep:tempfile",
+    "dep:trussed",
 ]
 
 [dependencies]
@@ -36,6 +37,11 @@ yb-core          = { path = "../yb-core", features = ["virtual-piv"], optional =
 p256             = { version = "0.13", features = ["ecdh"], optional = true }
 rand             = { version = "0.8", optional = true }
 tempfile         = { version = "3", optional = true }
+# piv-authenticator uses trussed without default features, hence without any
+# `clients-N` feature: trussed then has room for 0 clients, and the emulated
+# card panics on start-up.  `clients-1` gives its one client a channel (the
+# workspace patches trussed to the revision piv-authenticator expects).
+trussed          = { version = "0.1", default-features = false, features = ["clients-1"], optional = true }
 
 [dependencies.piv-authenticator]
 git      = "https://github.com/trussed-dev/piv-authenticator"

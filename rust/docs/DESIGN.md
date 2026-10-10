@@ -651,14 +651,17 @@ cargo run -p yb-piv-harness --features integration-tests --bin hardware_piv_test
 
 A NixOS VM test (`pkgs.nixosTest`) spins up a guest with:
 - `pcscd` (PC/SC daemon)
-- `vsmartcard-vpcd` (virtual PC/SC reader)
-- `piv-authenticator` (software PIV applet connected to vpcd)
+- `vsmartcard-vpcd` (virtual PC/SC reader driver; `services.vsmartcard-vpcd`)
 
-The harness crate provides `with_vsc(f)`:
-- **In-process mode** (developer nix-shell): starts `vpicc` in a
-  background thread connected to the local vpcd socket.
-- **External card mode** (VM): the vpcd socket is already running;
-  `with_vsc` connects to it.
+The harness crate provides `with_vsc(f)`.  It lists the readers (which
+starts a socket-activated `pcscd`, and with it vpcd), runs
+`piv-authenticator` in a background thread as the card, connected to vpcd
+over TCP (`vpicc`), waits until `pcscd` reports the card, and runs `f`
+against it.  A guard then removes the card and waits for an empty reader,
+also when `f` panics, so tests stay independent.  An adapter answers like a
+YubiKey where the emulator differs (PIV SELECT by RID; GET METADATA
+answered "not supported").  Without vpcd, `with_vsc` returns `None` (the
+test skips), or panics if `YB_REQUIRE_VSC` is set, as in the VM.
 
 Tests are serialized (`--test-threads=1`) — shared virtual card state.
 

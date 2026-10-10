@@ -12,6 +12,20 @@ All notable changes to yb are recorded here.  The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- The tier-2 PIV tests (`hardware_piv_tests`) never ran in the NixOS VM
+  test: they skipped silently and were reported as passing.  The VM did not
+  load the vpcd driver, and the harness could not start its emulated card.
+  They now run (10 tests through `pcscd` against an emulated card), and a
+  missing vpcd fails them in the VM instead of skipping.
+
+### For packagers
+
+- `nixosTests.yb`: the VM loads the virtual reader driver with
+  `services.vsmartcard-vpcd.enable` (listing it in `services.pcscd.plugins`
+  had no effect), and runs `hardware_piv_tests` with `YB_REQUIRE_VSC=1`.
+
 ## [0.5.1] — 2026-10-09
 
 ### Fixed
