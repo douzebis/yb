@@ -10,10 +10,10 @@ members = ["yb-core", "yb", "yb-piv-harness"]
 # reads it; bump both lines together (crates.io needs a version on the
 # path dependency).
 [workspace.package]
-version = "0.5.2"
+version = "0.5.3-dev"
 
 [workspace.dependencies]
-yb-core = { path = "yb-core", version = "0.5.2" }
+yb-core = { path = "yb-core", version = "0.5.3-dev" }
 
 # Required by piv-authenticator (used in yb-piv-harness).
 [patch.crates-io]
