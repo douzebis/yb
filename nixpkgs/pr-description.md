@@ -27,9 +27,10 @@ Packaging changes:
   package's `cargoDeps` instead of fetching the dependencies again.
 - `rustPlatform.bindgenHook` replaces the hand-set `LIBCLANG_PATH` and
   `BINDGEN_EXTRA_CLANG_ARGS`.
-- The test fixtures are compiled into the test binaries: `testFixtures` and
-  `YB_FIXTURE_DIR` are gone (in `package.nix`, `nixos/tests/yb.nix` and
-  `nixos/tests/all-tests.nix`).
+- The test fixtures are embedded at compile time (`include_str!` in
+  `yb-core`) instead of read from the source tree at run time:
+  `testFixtures` and `YB_FIXTURE_DIR` are gone (in `package.nix`,
+  `nixos/tests/yb.nix` and `nixos/tests/all-tests.nix`).
 - `nixosTests.yb` passes `--test-threads=1`: the test binaries use
   `libtest-mimic`, which does not read `RUST_TEST_THREADS`.
 - `meta.changelog` points to `CHANGELOG.md`; `longDescription` updated.
