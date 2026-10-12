@@ -119,7 +119,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
       shell completions for bash, zsh, and fish.
     '';
     homepage = "https://github.com/douzebis/yb";
-    changelog = "https://github.com/douzebis/yb/blob/v${finalAttrs.version}/CHANGELOG.md";
+    changelog = "https://github.com/douzebis/yb/blob/${finalAttrs.src.rev}/CHANGELOG.md";
     license = lib.licenses.mit;
     maintainers = with lib.maintainers; [ douzebis ];
     mainProgram = "yb";
