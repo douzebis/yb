@@ -14,7 +14,7 @@ mod compression;
 mod signature;
 mod types;
 
-pub use signature::collect_blob_chain;
+pub use signature::{collect_blob_chain, SIG_TRAILER_LEN};
 pub(crate) use types::BLOB_SIZE_C_BIT;
 pub use types::{BlobInfo, Compression, Encryption, StoreOptions};
 
@@ -40,6 +40,13 @@ pub fn chunks_needed(data_len: usize, name_len: usize, object_size: usize) -> us
     } else {
         1 + (data_len - head_cap).div_ceil(cont_cap)
     }
+}
+
+/// How many objects a stored blob of `data_len` bytes may occupy: its data
+/// plus the signature trailer, which can need an extra chunk (spec 0017).
+/// Both capacity checks use it, so they cannot disagree (spec 0031).
+pub fn objects_needed(data_len: usize, name_len: usize, object_size: usize) -> usize {
+    chunks_needed(data_len + SIG_TRAILER_LEN, name_len, object_size)
 }
 
 // ---------------------------------------------------------------------------
@@ -83,17 +90,17 @@ pub fn store_blob(
 
     let chunks_needed = chunks_needed(data.len(), name_len, store.object_size);
 
-    if store.free_count() < chunks_needed {
+    // The old copy, if any, stays occupied until the new one is written
+    // (spec 0031): the new copy, signature trailer included, goes into
+    // objects that are free now, so a YubiKey pulled out mid-write leaves
+    // the old copy intact.
+    if store.free_count() < objects_needed(data.len(), name_len, store.object_size) {
         return Ok(false);
     }
-
-    // Remove any existing blob with the same name.
-    if let Some(head) = store.find_head(name) {
-        let chain = store.chunk_chain(head.index);
-        for idx in chain {
-            store.objects[idx as usize].reset();
-        }
-    }
+    let old_chain: Vec<u8> = store
+        .find_head(name)
+        .map(|head| store.chunk_chain(head.index))
+        .unwrap_or_default();
 
     // Allocate chunks and fill them.
     let mtime = Store::now_unix();
@@ -154,6 +161,18 @@ pub fn store_blob(
     // Append 65-byte signature trailer (spec 0017).
     append_signature_trailer(store, piv, &data, pin);
 
+    // Write the new copy: its continuation chunks (and signature spill
+    // chunk) first, its head last, so that the head never reaches the card
+    // before its chain is complete (spec 0031).
+    let mut order = store.chunk_chain(head_idx);
+    order.rotate_left(1);
+    store.sync_ordered(piv, management_key, &order)?;
+
+    // Only now free the old copy.  If this is interrupted, the new copy is
+    // complete and newer, and the leftovers go at the next write.
+    for idx in old_chain {
+        store.objects[idx as usize].reset();
+    }
     store.sync(piv, management_key)?;
     Ok(true)
 }
@@ -218,17 +237,35 @@ pub fn remove_blob(
     name: &str,
     management_key: &str,
 ) -> Result<bool> {
-    let head_idx = match store.find_head(name) {
-        None => return Ok(false),
-        Some(h) => h.index,
-    };
+    Ok(remove_blobs(store, piv, &[name], management_key)? == 1)
+}
 
-    let chain = store.chunk_chain(head_idx);
-    for idx in chain {
-        store.objects[idx as usize].reset();
+/// Remove blobs by name in one write pass, and return how many were found.
+///
+/// All heads are written first: once a head is gone, the rest of its chain
+/// is a leftover, so an interruption leaves each blob either whole or gone
+/// (spec 0031).
+pub fn remove_blobs<S: AsRef<str>>(
+    store: &mut Store,
+    piv: &dyn PivBackend,
+    names: &[S],
+    management_key: &str,
+) -> Result<usize> {
+    let mut heads: Vec<u8> = Vec::new();
+    for name in names {
+        let Some(head) = store.find_head(name.as_ref()) else {
+            continue;
+        };
+        let head_idx = head.index;
+        for idx in store.chunk_chain(head_idx) {
+            store.objects[idx as usize].reset();
+        }
+        heads.push(head_idx);
     }
-    store.sync(piv, management_key)?;
-    Ok(true)
+    if !heads.is_empty() {
+        store.sync_ordered(piv, management_key, &heads)?;
+    }
+    Ok(heads.len())
 }
 
 // ---------------------------------------------------------------------------

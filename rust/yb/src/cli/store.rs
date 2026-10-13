@@ -106,44 +106,45 @@ pub fn run(ctx: &Context, args: &StoreArgs) -> Result<()> {
 
     let mgmt_key = ctx.management_key_for_write()?;
 
-    // All-or-nothing capacity check (S2).
-    let total_chunks: usize = entries
-        .iter()
-        .map(|(name, payload)| {
-            let enc_len = if encrypted {
-                // Approximate: actual encrypted size = payload + GCM overhead.
-                payload.len() + yb_core::crypto::GCM_OVERHEAD
-            } else {
-                payload.len()
-            };
-            let name_len = name.len().min(MAX_NAME_LEN);
-            yb_core::orchestrator::chunks_needed(enc_len, name_len, store.object_size)
-        })
-        .sum();
-
-    // Blobs that already exist with the same name will have their chunks freed
-    // before new ones are allocated, so don't count them against free capacity.
-    let freed_chunks: usize = entries
-        .iter()
-        .filter_map(|(name, _)| store.find_head(name))
-        .map(|head| store.chunk_chain(head.index()).len())
-        .sum();
-
-    if store.free_count() + freed_chunks < total_chunks {
-        if entries.len() == 1 {
-            bail!(
-                "store is full — remove some blobs first (need {} slot(s), {} free)",
-                total_chunks,
-                store.free_count()
-            );
+    // All-or-nothing capacity check (S2), replaying the stores in order: a
+    // blob's new copy, signature trailer included, must fit in the objects
+    // free at that point; an existing copy is freed only after its
+    // replacement is written (spec 0031), so it counts as occupied until
+    // then.  Compression only makes blobs smaller, so this never refuses a
+    // store that would fit.
+    let mut free = store.free_count();
+    for (name, payload) in &entries {
+        let enc_len = if encrypted {
+            // Approximate: actual encrypted size = payload + GCM overhead.
+            payload.len() + yb_core::crypto::GCM_OVERHEAD
         } else {
-            bail!(
-                "store is full — need {} slots for {} files, only {} free",
-                total_chunks,
-                entries.len(),
-                store.free_count()
-            );
+            payload.len()
+        };
+        let name_len = name.len().min(MAX_NAME_LEN);
+        let needed = yb_core::orchestrator::objects_needed(enc_len, name_len, store.object_size);
+        let old_copy = store
+            .find_head(name)
+            .map_or(0, |head| store.chunk_chain(head.index()).len());
+        if needed > free {
+            let replacing = if old_copy > 0 {
+                "; replacing a blob needs room for the new copy before the old one is \
+                 removed"
+            } else {
+                ""
+            };
+            if entries.len() == 1 {
+                bail!(
+                    "store is full — remove some blobs first (need {needed} object(s), \
+                     {free} free{replacing})"
+                );
+            } else {
+                bail!(
+                    "store is full — not enough room for '{name}' (need {needed} \
+                     object(s), {free} free{replacing}); nothing was stored"
+                );
+            }
         }
+        free = free - needed + old_copy;
     }
 
     // Refuse to write blobs that the slot key could not decrypt or whose

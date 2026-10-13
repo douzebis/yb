@@ -78,7 +78,7 @@ pub enum StorePresence {
 impl StorePresence {
     /// Read the store, telling "no store" from "unreadable store".
     pub fn probe(reader: &str, piv: &dyn PivBackend) -> Self {
-        match Store::from_device(reader, piv) {
+        match Store::from_device_raw(reader, piv) {
             Ok(store) => Self::Present(store),
             Err(e) => match piv.object_size(reader, OBJECT_ID_ZERO) {
                 Ok(Some(_)) => Self::Unreadable(format!("{e:#}")),

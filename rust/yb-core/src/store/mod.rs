@@ -358,8 +358,18 @@ pub struct Store {
 }
 
 impl Store {
-    /// Read all objects from the device and construct a Store.
+    /// Read all objects from the device and construct a Store, discarding
+    /// leftovers of interrupted writes in memory (spec 0031).  Nothing is
+    /// written: the next sync writes the reset objects.
     pub fn from_device(reader: &str, piv: &dyn PivBackend) -> Result<Self> {
+        let mut store = Self::from_device_raw(reader, piv)?;
+        store.sanitize();
+        Ok(store)
+    }
+
+    /// Read all objects from the device as they are, leftovers included:
+    /// for `yb fsck`, which reports them.
+    pub fn from_device_raw(reader: &str, piv: &dyn PivBackend) -> Result<Self> {
         let first_id = OBJECT_ID_ZERO;
         let raw = piv
             .read_object(reader, first_id)
@@ -425,65 +435,97 @@ impl Store {
             }));
         }
         // A failed format has its own messages (spec 0022): no partial note.
-        store.write_dirty(piv, management_key, false)?;
+        store.write_dirty(piv, management_key, false, &[])?;
         Ok(store)
     }
 
-    /// Remove corrupt / orphaned / duplicate objects.
-    pub fn sanitize(&mut self) {
-        // Remove heads with invalid ages (age should be > 0 for occupied).
-        // Remove older duplicate-named blobs.
-        // Remove chunks whose head cannot be reached.
+    /// Whether the head at `head_index` starts a complete chain (spec 0031):
+    /// every object reached is non-empty, the continuation at position `p`
+    /// has `chunk_pos == p` and `age == head age + p` (a blob's objects get
+    /// consecutive ages when it is written), and the walk ends on a
+    /// self-reference without a cycle.
+    pub fn chain_is_complete(&self, head_index: u8) -> bool {
+        let head = &self.objects[head_index as usize];
+        if !head.is_head() {
+            return false;
+        }
+        let mut idx = head_index;
+        let mut pos = 0u8;
+        // A chain visits each object at most once.
+        for _ in 0..self.objects.len() {
+            let next = self.objects[idx as usize].next_chunk;
+            if next == idx {
+                return true;
+            }
+            let Some(obj) = self.objects.get(next as usize) else {
+                return false;
+            };
+            if obj.is_empty()
+                || obj.chunk_pos == 0
+                || Some(obj.chunk_pos) != pos.checked_add(1)
+                || head.age.checked_add(u32::from(obj.chunk_pos)) != Some(obj.age)
+            {
+                return false;
+            }
+            pos = obj.chunk_pos;
+            idx = next;
+        }
+        false
+    }
 
-        // Collect heads: name -> (index, age)
-        let mut seen: HashMap<String, (u8, u32)> = HashMap::new();
-        let mut to_reset: Vec<u8> = Vec::new();
-
+    /// Discard leftovers of interrupted writes and corrupt objects (spec
+    /// 0031): keep, per name, the newest head with a complete chain; reset
+    /// every other head and every object not reachable from a kept head.
+    /// Returns the number of objects reset.
+    pub fn sanitize(&mut self) -> usize {
+        // name -> (head index, age)
+        let mut kept: HashMap<String, (u8, u32)> = HashMap::new();
         for obj in self.objects.iter().filter(|o| o.is_head()) {
-            if let Some(&(prev_idx, prev_age)) = seen.get(&obj.blob_name) {
-                // Keep the newer one, reset the older.
-                if obj.age > prev_age {
-                    to_reset.push(prev_idx);
-                    seen.insert(obj.blob_name.clone(), (obj.index, obj.age));
-                } else {
-                    to_reset.push(obj.index);
+            if !self.chain_is_complete(obj.index) {
+                continue;
+            }
+            match kept.get(&obj.blob_name) {
+                Some(&(_, age)) if age >= obj.age => {}
+                _ => {
+                    kept.insert(obj.blob_name.clone(), (obj.index, obj.age));
                 }
-            } else {
-                seen.insert(obj.blob_name.clone(), (obj.index, obj.age));
             }
         }
 
-        // Collect all reachable chunk indices.
         let mut reachable: HashSet<u8> = HashSet::new();
-        for (head_idx, _) in seen.values() {
-            let mut idx = *head_idx;
-            loop {
-                reachable.insert(idx);
-                let next = self.objects[idx as usize].next_chunk;
-                if next == idx {
-                    break;
-                }
-                idx = next;
-            }
+        for &(head_idx, _) in kept.values() {
+            reachable.extend(self.chunk_chain(head_idx));
         }
 
-        // Mark unreachable non-empty objects for reset.
-        for obj in self.objects.iter().filter(|o| !o.is_empty()) {
-            if !reachable.contains(&obj.index) {
-                to_reset.push(obj.index);
-            }
-        }
-
-        for idx in to_reset {
+        let to_reset: Vec<u8> = self
+            .objects
+            .iter()
+            .filter(|o| !o.is_empty() && !reachable.contains(&o.index))
+            .map(|o| o.index)
+            .collect();
+        for &idx in &to_reset {
             self.objects[idx as usize].reset();
         }
+        to_reset.len()
     }
 
     /// Write all dirty objects back to the device.  If a write fails after
     /// others succeeded, the error says the store may be partially updated
     /// (spec 0025 §3).
     pub fn sync(&mut self, piv: &dyn PivBackend, management_key: &str) -> Result<()> {
-        self.write_dirty(piv, management_key, true)
+        self.sync_ordered(piv, management_key, &[])
+    }
+
+    /// Like [`sync`](Self::sync), but writes the dirty objects listed in
+    /// `order` first, in that order, then any other dirty objects in index
+    /// order (spec 0031: a new blob's head is written after its chunks).
+    pub fn sync_ordered(
+        &mut self,
+        piv: &dyn PivBackend,
+        management_key: &str,
+        order: &[u8],
+    ) -> Result<()> {
+        self.write_dirty(piv, management_key, true, order)
     }
 
     fn write_dirty(
@@ -491,15 +533,21 @@ impl Store {
         piv: &dyn PivBackend,
         management_key: &str,
         note_partial: bool,
+        order: &[u8],
     ) -> Result<()> {
         use indicatif::{ProgressBar, ProgressStyle};
 
-        let dirty: Vec<u8> = self
-            .objects
+        let mut dirty: Vec<u8> = order
             .iter()
-            .filter(|o| o.dirty)
-            .map(|o| o.index)
+            .copied()
+            .filter(|&idx| self.objects[idx as usize].dirty)
             .collect();
+        dirty.extend(
+            self.objects
+                .iter()
+                .filter(|o| o.dirty && !order.contains(&o.index))
+                .map(|o| o.index),
+        );
 
         let pb = ProgressBar::new(dirty.len() as u64);
         pb.set_style(
@@ -556,8 +604,9 @@ impl Store {
             if next == idx {
                 break;
             }
-            if seen.contains(&next) {
-                // Corrupt store: cycle detected — stop walking.
+            if seen.contains(&next) || next as usize >= self.objects.len() {
+                // Corrupt store: cycle, or pointer beyond the store — stop
+                // walking (`yb fsck` walks raw, unsanitized stores).
                 break;
             }
             seen.insert(next);

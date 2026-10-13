@@ -252,10 +252,10 @@ YubiKey GENERAL AUTHENTICATE semantics.
 
 All integers are little-endian.  Each PIV object is written at exactly the
 size its content requires (9-byte sentinel for empty slots, up to 3,063 bytes
-for occupied slots).  Up to 20 objects are addressable; default is 20.
+for occupied slots).  Up to 32 objects are addressable; default is 32.
 
-Object IDs run from `0x5F_0000` (index 0) to `0x5F_0013` (index 19)
-for a 20-object default store.
+Object IDs run from `0x5F_0000` (index 0) to `0x5F_001F` (index 31)
+for a 32-object default store.
 
 **Sizing rationale.**  The YubiKey 5 PIV NVM pool is 51,200 bytes, shared
 across all data objects.  Standard-slot certificates (9A, 9C, 9D, 9E,
@@ -334,9 +334,31 @@ of its chunks gets `store_age + 1`, `store_age + 2`, … where
 On deserialization, `Store::from_device` sets `store_age` = max age
 across all objects.
 
-When two head objects have the same blob name (which can occur after an
-interrupted write), `Store::sanitize` keeps the one with the higher age
-and resets the other, then removes any orphaned continuation chunks.
+A blob's objects get consecutive ages when it is written (head `a`,
+continuation at position `p` gets `a + p`, the signature spill chunk
+included).
+
+**Interruption safety (spec 0031).**  A YubiKey pulled out of the
+computer during a write must leave every blob with its old or its new
+content.  The rules that guarantee it:
+
+- a store writes the new copy into objects that are free *before* it
+  starts (the old copy stays occupied), its continuation chunks first and
+  its head last, and only then frees the old copy;
+- a remove writes the heads first;
+- `Store::sanitize` keeps, per name, the newest head whose chain is
+  complete (every object non-empty, positions `1, 2, …`, ages
+  `head + position`, ending on a self-reference, no cycle), and resets
+  every other head and every unreachable object;
+- `Store::from_device` sanitizes in memory, so every command sees the
+  blobs a later write would keep; the reset objects are written by the
+  next write, never by a read.  `Store::from_device_raw` skips this, for
+  `yb fsck`, which reports leftovers.
+
+So a replace needs room for both copies.  `rust/yb-core/tests/
+rip_safety_tests.rs` interrupts every write of store, replace and remove
+scenarios, and random operation sequences; keep it passing when touching
+any of this.
 
 ### Helper functions
 
@@ -425,12 +447,16 @@ Signature: `store_blob(store, piv, name, payload, encryption, compression, manag
 4. Encrypt candidate payload if requested (calls `hybrid_encrypt`).
 5. Reject if `stored.len() > 0x7FFFFF` (would overflow the 23-bit blob-size field).
 6. Calculate chunk count from stored size vs. head/continuation capacities.
-7. Check `store.free_count() >= chunks_needed`; return `false` if full.
-8. Delete any existing blob with the same name (reset its chunk chain).
-9. Allocate chunk indices via `alloc_free`, mark age=1 as placeholder.
-10. Fill head object (all metadata fields including `is_compressed` → C-bit + first portion of payload).
-11. Fill continuation objects (payload only, no blob metadata).
-12. `store.sync(piv, management_key, pin)`.
+7. Check `store.free_count() >= objects_needed` (data plus the 65-byte
+   signature trailer), the existing copy of the blob, if any, still
+   counted as occupied; return `false` if full.
+8. Allocate chunk indices via `alloc_free` (never the existing copy's),
+   mark age=1 as placeholder.
+9. Fill head object (all metadata fields including `is_compressed` → C-bit + first portion of payload).
+10. Fill continuation objects (payload only, no blob metadata).
+11. Append the signature trailer (spec 0017), possibly in a spill chunk.
+12. `store.sync_ordered`: continuation chunks first, head last.
+13. Reset the existing copy's chain, and `store.sync`.
 
 **Head payload capacity:** `MAX_OBJECT_SIZE - (0x17 + name_len_bytes)` = up to `3,063 - 23 - name_len` bytes
 
@@ -449,11 +475,13 @@ Signature: `store_blob(store, piv, name, payload, encryption, compression, manag
 PIN is required for encrypted blobs; `fetch_blob` errors out if
 `pin.is_none()` and the blob is encrypted.
 
-### `remove_blob`
+### `remove_blobs`, `remove_blob`
 
-1. Find head.
-2. Walk chain, call `reset()` on each object (zeros fields, marks dirty).
-3. `store.sync(...)`.
+1. Find each head.
+2. Walk each chain, call `reset()` on each object (zeros fields, marks dirty).
+3. `store.sync_ordered(...)` with the heads first, in one write pass.
+
+`remove_blob` is the one-name case.
 
 ### `list_blobs`
 
@@ -559,7 +587,7 @@ fixture's reader list when set).
   blob) are deduplicated before deletion.
 - A literal name that matches nothing is an error unless `-f`.
 - A glob pattern that matches nothing is silently OK.
-- Single `store.sync()` after all deletions.
+- One write pass for all deletions, heads first (`remove_blobs`).
 
 ### `fsck`
 
@@ -761,7 +789,7 @@ the 3DES mutual-authentication challenge is compared using
 
 | ID | Purpose |
 |---|---|
-| `0x5F_0000` – `0x5F_0013` | yb blob store (default 20 objects) |
+| `0x5F_0000` – `0x5F_001F` | yb blob store (default 32 objects) |
 | `0x5F_C109` | PRINTED — PIN-protected management key |
 | `0x5F_FF00` | ADMIN DATA — mgmt key storage mode flags |
 | `0x5F_C10A` | Key history |

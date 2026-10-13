@@ -83,3 +83,7 @@ yb-core = { path = ".", features = ["test-utils"] }  # enable test-utils for int
 [[test]]
 name              = "virtual_piv_tests"
 required-features = ["test-utils"]
+
+[[test]]
+name              = "rip_safety_tests"
+required-features = ["test-utils"]

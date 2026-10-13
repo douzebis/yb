@@ -377,3 +377,100 @@ fn alloc_free_returns_none_when_full() {
     assert_eq!(store.free_count(), 0);
     assert!(store.alloc_free().is_none());
 }
+
+// ---------------------------------------------------------------------------
+// T7 — complete chains (spec 0031)
+// ---------------------------------------------------------------------------
+
+/// Set a continuation's position (make_continuation always uses 1).
+fn make_continuation_at(store: &mut Store, idx: u8, pos: u8, age: u32, next: u8) {
+    make_continuation(store, idx, age, next);
+    store.objects[idx as usize].chunk_pos = pos;
+}
+
+/// A three-object blob: head 0 (age 10), continuations 1 (11) and 2 (12).
+fn store_with_complete_blob() -> Store {
+    let mut store = make_store_in_memory(6, 512);
+    make_head(&mut store, 0, "v", 10, 1);
+    make_continuation_at(&mut store, 1, 1, 11, 2);
+    make_continuation_at(&mut store, 2, 2, 12, 2);
+    store
+}
+
+#[test]
+fn complete_chain_is_kept() {
+    let mut store = store_with_complete_blob();
+    assert!(store.chain_is_complete(0));
+    assert_eq!(store.sanitize(), 0);
+    assert!(store.objects[0].is_head());
+}
+
+#[test]
+fn chain_with_an_empty_object_is_incomplete() {
+    let mut store = store_with_complete_blob();
+    store.objects[2].reset();
+    assert!(!store.chain_is_complete(0));
+    store.sanitize();
+    assert!(store.objects.iter().all(|o| o.is_empty()));
+}
+
+#[test]
+fn chain_with_a_wrong_position_is_incomplete() {
+    let mut store = store_with_complete_blob();
+    store.objects[2].chunk_pos = 3;
+    assert!(!store.chain_is_complete(0));
+}
+
+#[test]
+fn chain_with_non_consecutive_ages_is_incomplete() {
+    // A leftover chunk of another write (older age) at the expected place.
+    let mut store = store_with_complete_blob();
+    store.objects[2].age = 5;
+    assert!(!store.chain_is_complete(0));
+    // Newer than expected is also foreign.
+    store.objects[2].age = 20;
+    assert!(!store.chain_is_complete(0));
+}
+
+#[test]
+fn chain_pointing_beyond_the_store_is_incomplete() {
+    let mut store = store_with_complete_blob();
+    store.objects[1].next_chunk = 200;
+    assert!(!store.chain_is_complete(0));
+    // The chain walk used by fsck on raw stores stops instead of panicking.
+    assert_eq!(store.chunk_chain(0), vec![0, 1]);
+}
+
+#[test]
+fn chain_with_a_cycle_is_incomplete() {
+    let mut store = store_with_complete_blob();
+    store.objects[2].next_chunk = 1;
+    assert!(!store.chain_is_complete(0));
+    store.sanitize(); // terminates
+    assert!(store.objects.iter().all(|o| o.is_empty()));
+}
+
+#[test]
+fn older_complete_copy_beats_newer_incomplete_one() {
+    // An interrupted replace: the new copy's head (age 20) points to a chunk
+    // that was never written.
+    let mut store = store_with_complete_blob();
+    make_head(&mut store, 3, "v", 20, 4);
+    assert!(!store.chain_is_complete(3));
+    store.sanitize();
+    assert!(store.objects[0].is_head(), "the complete old copy is kept");
+    assert!(
+        store.objects[3].is_empty(),
+        "the incomplete new head is reset"
+    );
+}
+
+#[test]
+fn newer_complete_copy_wins_and_old_chain_is_freed() {
+    let mut store = store_with_complete_blob();
+    make_head(&mut store, 3, "v", 20, 4);
+    make_continuation_at(&mut store, 4, 1, 21, 4);
+    store.sanitize();
+    assert!(store.objects[3].is_head());
+    assert!((0..3).all(|i| store.objects[i].is_empty()));
+}

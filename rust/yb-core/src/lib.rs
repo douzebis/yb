@@ -52,8 +52,8 @@ pub use context::{
 };
 pub use nvm::{scan_nvm, NvmUsage};
 pub use orchestrator::{
-    chunks_needed, collect_blob_chain, fetch_blob, list_blobs, remove_blob, store_blob, BlobInfo,
-    Compression, Encryption, StoreOptions,
+    chunks_needed, collect_blob_chain, fetch_blob, list_blobs, objects_needed, remove_blob,
+    remove_blobs, store_blob, BlobInfo, Compression, Encryption, StoreOptions,
 };
 pub use piv::hardware::HardwarePiv;
 pub use piv::{DeviceInfo, FlashHandle, MgmtAlgo, PinRef, PivBackend};

@@ -12,6 +12,26 @@ All notable changes to yb are recorded here.  The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Replacing a blob was not safe against interruption** (since 0.3.0, the
+  Rust rewrite).  `yb store` over an existing blob wrote the new copy into
+  the old copy's objects; a YubiKey pulled out during the write could lose
+  both versions.  The new copy now goes into free objects, its head written
+  last, and the old copy is removed only afterwards, as in 0.1.x.  An
+  interrupted store, replace or remove now always leaves the old or the
+  new content (spec 0031).
+- After an interrupted write, `yb fetch` and `yb ls` could see both copies
+  of a blob, or an incomplete one; they now see the blobs a later write
+  keeps, without writing anything.
+- A replace in a nearly full store now fails cleanly before writing, saying
+  that it needs room for the new copy before the old one is removed,
+  instead of "store is full while writing … — this should not happen"; a
+  multi-file `yb store` that does not fit stores nothing.
+- `yb rm` writes the blob heads first, so an interrupted removal leaves each
+  blob whole or gone.
+- `yb fsck` no longer crashes on a store with a corrupt chunk pointer.
+
 ## [0.5.2] — 2026-10-10
 
 ### Fixed

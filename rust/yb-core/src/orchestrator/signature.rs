@@ -9,6 +9,9 @@ use crate::store::{Object, ObjectParams, Store};
 use sha2::{Digest, Sha256};
 
 /// Compute SHA-256(payload) and ask the PIV key to sign it.  Append the
+/// Length of the signature trailer appended after a blob's data (spec 0017).
+pub const SIG_TRAILER_LEN: usize = 65;
+
 /// 65-byte trailer `[SIG_VERSION=0x01 || r (32 bytes) || s (32 bytes)]`
 /// after the last payload byte in the assembled chain.
 ///
@@ -33,7 +36,7 @@ pub(super) fn append_signature_trailer(
     };
 
     // Build the 65-byte trailer.
-    let mut trailer = [0u8; 65];
+    let mut trailer = [0u8; SIG_TRAILER_LEN];
     trailer[0] = 0x01; // SIG_VERSION
     trailer[1..33].copy_from_slice(&raw_sig[0..32]); // r
     trailer[33..65].copy_from_slice(&raw_sig[32..64]); // s

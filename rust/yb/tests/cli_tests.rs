@@ -617,7 +617,7 @@ mod fsck_tests {
         store.sync(ctx.piv.as_ref(), MGMT).unwrap();
 
         // Re-read and run detect_anomalies.
-        let store2 = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+        let store2 = Store::from_device_raw(&ctx.reader, ctx.piv.as_ref()).unwrap();
         let warnings = detect_anomalies(&store2);
         assert!(
             !warnings.is_empty(),
@@ -665,7 +665,7 @@ mod fsck_tests {
         store.objects[1] = obj1;
         store.sync(ctx.piv.as_ref(), MGMT).unwrap();
 
-        let store2 = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+        let store2 = Store::from_device_raw(&ctx.reader, ctx.piv.as_ref()).unwrap();
         let warnings = detect_anomalies(&store2);
         assert!(
             !warnings.is_empty(),
@@ -2666,5 +2666,95 @@ mod rotation_tests {
             "{text}"
         );
         assert!(!text.contains("protect"), "no jargon: {text}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// store capacity (spec 0031): a replace needs room for both copies
+// ---------------------------------------------------------------------------
+
+mod store_capacity_tests {
+    use super::*;
+    use yb::cli::store::{run as store_run, StoreArgs};
+
+    fn store_plain(ctx: &Context, dir: &TempDir, name: &str, data: &[u8]) -> anyhow::Result<()> {
+        let file = dir.path().join(name);
+        std::fs::write(&file, data).unwrap();
+        store_run(
+            ctx,
+            &StoreArgs {
+                files: vec![file],
+                name: None,
+                encrypted: false,
+                unencrypted: true,
+                no_compress: true,
+            },
+        )
+    }
+
+    fn blob_size(ctx: &Context, name: &str) -> Option<u32> {
+        let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+        list_blobs(&store)
+            .into_iter()
+            .find(|b| b.name == name)
+            .map(|b| b.plain_size)
+    }
+
+    /// Three objects: two one-object blobs leave one free.  Replacing one
+    /// with a two-object blob needs two free objects (the old copy stays
+    /// until the new one is written): refused before writing anything.
+    #[test]
+    fn replace_without_room_for_both_copies_is_refused_cleanly() {
+        let ctx = make_ctx(with_key_piv());
+        Store::format(&ctx.reader, ctx.piv.as_ref(), 3, 0x82, MGMT).unwrap();
+        let dir = TempDir::new().unwrap();
+        store_plain(&ctx, &dir, "x", &[1; 100]).unwrap();
+        store_plain(&ctx, &dir, "y", &[2; 100]).unwrap();
+
+        let err = store_plain(&ctx, &dir, "x", &[3; 3000]).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("store is full"), "{msg}");
+        assert!(msg.contains("replacing a blob needs room"), "{msg}");
+        assert!(!msg.contains("should not happen"), "{msg}");
+        assert_eq!(blob_size(&ctx, "x"), Some(100), "the old copy is untouched");
+    }
+
+    /// A replace that fits next to the old copy succeeds, and frees it.
+    #[test]
+    fn replace_with_room_for_both_copies_succeeds() {
+        let ctx = make_ctx(with_key_piv());
+        Store::format(&ctx.reader, ctx.piv.as_ref(), 3, 0x82, MGMT).unwrap();
+        let dir = TempDir::new().unwrap();
+        store_plain(&ctx, &dir, "x", &[1; 100]).unwrap();
+        store_plain(&ctx, &dir, "x", &[3; 3000]).unwrap();
+        assert_eq!(blob_size(&ctx, "x"), Some(3000));
+        let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+        assert_eq!(store.free_count(), 1, "the old copy was freed");
+    }
+
+    /// Several files that do not fit together: nothing is stored.
+    #[test]
+    fn multi_file_store_that_does_not_fit_stores_nothing() {
+        let ctx = make_ctx(with_key_piv());
+        Store::format(&ctx.reader, ctx.piv.as_ref(), 3, 0x82, MGMT).unwrap();
+        let dir = TempDir::new().unwrap();
+        let a = dir.path().join("a");
+        let b = dir.path().join("b");
+        std::fs::write(&a, [1u8; 3000]).unwrap();
+        std::fs::write(&b, [2u8; 3000]).unwrap();
+        let err = store_run(
+            &ctx,
+            &StoreArgs {
+                files: vec![a, b],
+                name: None,
+                encrypted: false,
+                unencrypted: true,
+                no_compress: true,
+            },
+        )
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("nothing was stored"), "{err:#}");
+        let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+        assert!(list_blobs(&store).is_empty());
     }
 }

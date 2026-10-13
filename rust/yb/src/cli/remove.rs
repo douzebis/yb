@@ -5,7 +5,7 @@
 use anyhow::Result;
 use clap::Args;
 use clap_complete::engine::ArgValueCompleter;
-use yb_core::{list_blobs, store::Store, Context, SecretOp};
+use yb_core::{list_blobs, remove_blobs, store::Store, Context, SecretOp};
 
 use crate::cli::util::resolve_patterns;
 use crate::complete::complete_blob_names;
@@ -35,18 +35,9 @@ pub fn run(ctx: &Context, args: &RemoveArgs) -> Result<()> {
         return Ok(());
     }
 
-    // Mark all blobs for removal, then sync once (single write pass).
+    // One write pass, heads first (spec 0031).
     let mgmt_key = ctx.management_key_for_write()?;
-    for name in &to_remove {
-        let chain = store
-            .find_head(name)
-            .map(|h| store.chunk_chain(h.index()))
-            .unwrap_or_default();
-        for idx in chain {
-            store.objects[idx as usize].reset();
-        }
-    }
-    store.sync(ctx.piv.as_ref(), &mgmt_key)?;
+    remove_blobs(&mut store, ctx.piv.as_ref(), &to_remove, &mgmt_key)?;
     ctx.complete_pending_repairs();
 
     if !ctx.quiet {
