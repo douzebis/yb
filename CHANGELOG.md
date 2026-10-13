@@ -65,6 +65,13 @@ All notable changes to yb are recorded here.  The format follows
 
 ### Fixed
 
+- **A store that ran out of the YubiKey's memory made the whole store
+  unreadable** (found on a YubiKey 5, replacing a 22 KB blob).  The card
+  deletes the object of a write it refuses for lack of memory, and yb
+  stopped on any absent object.  yb now reads an absent object as empty,
+  `yb fsck` reports it, and the next write frees the interrupted write's
+  leftovers before writing new data.  The blobs keep their previous
+  content (spec 0038).
 - **Replacing a blob was not safe against interruption** (since 0.3.0, the
   Rust rewrite).  `yb store` over an existing blob wrote the new copy into
   the old copy's objects; a YubiKey pulled out during the write could lose

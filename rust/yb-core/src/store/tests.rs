@@ -173,6 +173,7 @@ fn make_store_in_memory(object_count: u8, object_size: usize) -> Store {
         store_key_slot: 0x82,
         objects,
         store_age: 0,
+        missing: Vec::new(),
     }
 }
 

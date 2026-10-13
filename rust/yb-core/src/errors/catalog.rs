@@ -135,7 +135,10 @@ static CATALOG: &[Entry] = &[
         mask: EXACT,
         what: "the YubiKey's storage is full",
         why: "the PIV area's ~51 KB are used up",
-        fix: "`yb fsck --nvm`, then remove blobs",
+        // Spec 0038: the previous content is intact; the next write frees
+        // what the interrupted one used.
+        fix: "remove blobs (`yb rm`); an interrupted store or removal leaves the blobs as \
+              they were, and the next yb command frees the space it used",
     },
     Entry {
         op: OpPat::Is(|op| matches!(op, CardOp::WriteObject(_))),
@@ -580,7 +583,8 @@ mod tests {
             render(&e, &env()),
             "Error: yb format stopped while erasing the store (completed: nothing)\n  \
              Cause: the YubiKey's storage is full (the PIV area's ~51 KB are used up).\n  \
-             Try: `yb fsck --nvm`, then remove blobs.\n  \
+             Try: remove blobs (`yb rm`); an interrupted store or removal leaves the blobs as \
+             they were, and the next yb command frees the space it used.\n  \
              (details: write object 0x5F0003 → SW 6A84)"
         );
     }

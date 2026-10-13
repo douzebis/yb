@@ -133,6 +133,9 @@ struct VirtualState {
     // Number of card-changing operations (object writes, SET MANAGEMENT
     // KEY, key generation), for tests asserting "nothing was written".
     writes: usize,
+
+    // The card's memory for data objects, in bytes, if limited (spec 0038).
+    memory_limit: Option<usize>,
 }
 
 impl VirtualState {
@@ -176,6 +179,7 @@ impl VirtualState {
             faults: Vec::new(),
             card_lost: false,
             writes: 0,
+            memory_limit: None,
         }
     }
 }
@@ -382,6 +386,23 @@ impl VirtualPiv {
 
     /// Number of card-changing operations so far (object writes, SET
     /// MANAGEMENT KEY, key generation).
+    /// Limit the memory for data objects to `bytes`, as a real card's: a
+    /// write beyond it fails with `SW 6A84` and deletes the object.
+    pub fn set_memory_limit(&self, bytes: usize) {
+        self.state.lock().unwrap().memory_limit = Some(bytes);
+    }
+
+    /// The bytes the data objects use.
+    pub fn memory_used(&self) -> usize {
+        self.state
+            .lock()
+            .unwrap()
+            .objects
+            .values()
+            .map(Vec::len)
+            .sum()
+    }
+
     pub fn write_count(&self) -> usize {
         self.state.lock().unwrap().writes
     }
@@ -483,6 +504,21 @@ impl PivBackend for VirtualPiv {
         let mut s = self.state.lock().unwrap();
         check_reader(&s, reader)?;
         do_authenticate_management_key(&mut s, management_key)?;
+        // As the card: a write beyond its memory fails, and deletes the
+        // object (spec 0038).
+        let out_of_memory = s.memory_limit.is_some_and(|limit| {
+            let others: usize = s
+                .objects
+                .iter()
+                .filter(|(k, _)| **k != id)
+                .map(|(_, v)| v.len())
+                .sum();
+            others + data.len() > limit
+        });
+        if out_of_memory {
+            s.objects.remove(&id);
+            return Err(CardError::status(CardOp::WriteObject(id), 0x6A, 0x84).into());
+        }
         match s.write_fault() {
             Some(Fault::StorageFull(_)) => {
                 s.objects.remove(&id);

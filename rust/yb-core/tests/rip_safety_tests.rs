@@ -75,6 +75,13 @@ fn setup(old: Option<&[u8]>) -> VirtualPiv {
 /// Interrupt `op` at its 1st, 2nd, … object write until it completes, and
 /// check the rip property after each interruption.
 fn check_rip_property(old: Option<Vec<u8>>, op: Op) {
+    check_interruptions(old, op, Fault::WriteFails);
+}
+
+/// As [`check_rip_property`], with the given fault at the n-th write:
+/// `Fault::WriteFails` (a rip) or `Fault::StorageFull` (the card out of
+/// memory, which deletes the object it was writing, spec 0038).
+fn check_interruptions(old: Option<Vec<u8>>, op: Op, fault: fn(usize) -> Fault) {
     let new = match &op {
         Op::Store(data) => Some(data.clone()),
         Op::Remove => None,
@@ -84,7 +91,7 @@ fn check_rip_property(old: Option<Vec<u8>>, op: Op) {
         let reader = piv.reader_name();
         let mut store = Store::from_device(&reader, &piv).unwrap();
 
-        piv.inject_fault(Fault::WriteFails(n));
+        piv.inject_fault(fault(n));
         let result = match &op {
             Op::Store(data) => {
                 store_blob(&mut store, &piv, VAULT, data, plain(), MGMT, None).map(|_| ())
@@ -400,4 +407,120 @@ fn random_operations_with_interruptions() {
         }
         assert!(interruptions > 20, "seed {seed}: too few interruptions");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Spec 0038: writes that run out of card memory
+// ---------------------------------------------------------------------------
+
+/// Invariant 0001: a replace, then a removal, interrupted at every write by
+/// the card running out of memory (the object written is deleted): the
+/// store stays readable, and every blob keeps its old or new content.
+#[test]
+fn out_of_memory_during_replace_with_more_chunks() {
+    check_interruptions(
+        Some(vec![0x11; 3000]),
+        Op::Store(vec![0x22; 9000]),
+        Fault::StorageFull,
+    );
+}
+
+#[test]
+fn out_of_memory_during_remove() {
+    check_interruptions(Some(vec![0x11; 9000]), Op::Remove, Fault::StorageFull);
+}
+
+/// Bytes that do not compress, standing in for an encrypted vault.
+fn noise(len: usize, seed: u8) -> Vec<u8> {
+    (0..len)
+        .map(|i| (i as u8).wrapping_mul(31).wrapping_add(seed) ^ (i >> 7) as u8)
+        .collect()
+}
+
+/// The case measured on a YubiKey 5 (spec 0038): a 22 KB replace that
+/// runs out of card memory midway.  The store stays readable, every blob
+/// keeps its content, and the next write frees the leftovers.
+#[test]
+fn replace_that_runs_out_of_card_memory() {
+    let piv = new_piv();
+    let reader = piv.reader_name();
+    let mut store = Store::format(&reader, &piv, 32, 0x82, MGMT).unwrap();
+    let blobs = [
+        ("bar", noise(4, 1)),
+        ("v2", noise(2048, 2)),
+        ("v10", noise(10240, 3)),
+        ("v22", noise(22528, 4)),
+    ];
+    for (name, data) in &blobs {
+        put(&mut store, &piv, name, data);
+    }
+    // Room for half a second copy of v22, not a whole one.
+    piv.set_memory_limit(piv.memory_used() + 12_000);
+
+    let mut store = Store::from_device(&reader, &piv).unwrap();
+    let err = store_blob(
+        &mut store,
+        &piv,
+        "v22",
+        &noise(22528, 5),
+        plain(),
+        MGMT,
+        None,
+    )
+    .unwrap_err();
+    assert!(format!("{err:#}").contains("6A84"), "{err:#}");
+
+    let raw = Store::from_device_raw(&reader, &piv).unwrap();
+    assert!(
+        !raw.missing.is_empty(),
+        "the refused write deletes its object"
+    );
+    for (name, data) in &blobs {
+        assert_eq!(
+            content(&piv, name).as_deref(),
+            Some(data.as_slice()),
+            "{name}"
+        );
+    }
+
+    // The next write cleans up first: removing v22 works, and leaves no
+    // leftover and no absent object.
+    let mut store = Store::from_device(&reader, &piv).unwrap();
+    assert_eq!(remove_blobs(&mut store, &piv, &["v22"], MGMT).unwrap(), 1);
+    let mut raw = Store::from_device_raw(&reader, &piv).unwrap();
+    assert!(raw.missing.is_empty());
+    assert_eq!(raw.sanitize(), 0, "no leftover after the clean-up");
+    let names: Vec<String> = list_blobs(&raw).into_iter().map(|b| b.name).collect();
+    assert_eq!(names, ["bar", "v10", "v2"]);
+}
+
+/// Clean up first (spec 0038 G2): after a write that ran out of memory,
+/// its leftovers fill the card; the next store succeeds only because they
+/// are freed before its new data is written.
+#[test]
+fn next_store_after_out_of_memory_frees_the_leftovers_first() {
+    let piv = new_piv();
+    let reader = piv.reader_name();
+    let mut store = Store::format(&reader, &piv, 32, 0x82, MGMT).unwrap();
+    put(&mut store, &piv, "keep", &noise(1000, 1));
+    piv.set_memory_limit(piv.memory_used() + 12_000);
+
+    // Fills the card's memory with leftovers, then fails.
+    let mut store = Store::from_device(&reader, &piv).unwrap();
+    assert!(store_blob(
+        &mut store,
+        &piv,
+        "big",
+        &noise(20_000, 2),
+        plain(),
+        MGMT,
+        None
+    )
+    .is_err());
+
+    let mut store = Store::from_device(&reader, &piv).unwrap();
+    let data = noise(6000, 3);
+    put(&mut store, &piv, "next", &data);
+    assert_eq!(content(&piv, "next"), Some(data));
+    assert_eq!(content(&piv, "keep"), Some(noise(1000, 1)));
 }

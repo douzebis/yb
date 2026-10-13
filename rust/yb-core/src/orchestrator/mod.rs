@@ -99,6 +99,10 @@ pub fn store_blob(
         return Ok(false);
     }
     store.ensure_age_room(needed)?;
+    // Clean up first (spec 0038): the leftovers loading reset, and objects
+    // a card out of memory deleted, are written before any new data, so
+    // that the memory they held is free for it.
+    store.sync(piv, management_key)?;
     let old_chain: Vec<u8> = store
         .find_head(name)
         .map(|head| store.chunk_chain(head.index))
@@ -260,20 +264,21 @@ pub fn remove_blobs<S: AsRef<str>>(
     names: &[S],
     management_key: &str,
 ) -> Result<usize> {
-    let mut heads: Vec<u8> = Vec::new();
-    for name in names {
-        let Some(head) = store.find_head(name.as_ref()) else {
-            continue;
-        };
-        let head_idx = head.index;
+    let heads: Vec<u8> = names
+        .iter()
+        .filter_map(|name| store.find_head(name.as_ref()).map(|h| h.index))
+        .collect();
+    if heads.is_empty() {
+        return Ok(0);
+    }
+    // Clean up first (spec 0038), as in `store_blob`.
+    store.sync(piv, management_key)?;
+    for &head_idx in &heads {
         for idx in store.chunk_chain(head_idx) {
             store.objects[idx as usize].reset();
         }
-        heads.push(head_idx);
     }
-    if !heads.is_empty() {
-        store.sync_ordered(piv, management_key, &heads)?;
-    }
+    store.sync_ordered(piv, management_key, &heads)?;
     Ok(heads.len())
 }
 

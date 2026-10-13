@@ -164,6 +164,16 @@ fn check_store(ctx: &Context, args: &FsckArgs, store: &Store, out: &mut dyn Writ
         )?;
     }
 
+    // Objects a write that ran out of card memory deleted (spec 0038).
+    for &idx in &store.missing {
+        writeln!(
+            out,
+            "warning: object 0x{:06X} is absent from the card (a write ran out of card \
+             memory); the next write recreates it",
+            OBJECT_ID_ZERO + u32::from(idx)
+        )?;
+    }
+
     // Objects recording another object count than object 0 do not belong
     // to this store; yb ignores them (spec 0034 G7).
     let foreign: Vec<&Object> = store

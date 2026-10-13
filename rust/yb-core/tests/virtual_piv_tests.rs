@@ -475,7 +475,10 @@ fn test_context_with_backend() {
 }
 
 /// T8: from_device with a mismatched object count — first object claims N
-/// objects but fewer are actually present → error instead of panic.
+/// objects but fewer are actually present → no panic.  Since spec 0038 the
+/// absent objects read as empty (a card out of memory deletes the object
+/// of a refused write), recorded in `missing` and rewritten by the next
+/// write.
 #[test]
 fn test_from_device_missing_objects() {
     use yb_core::store::constants::OBJECT_ID_ZERO;
@@ -498,11 +501,9 @@ fn test_from_device_missing_objects() {
         .unwrap();
 
     use yb_core::store::Store;
-    let result = Store::from_device(&reader, &piv);
-    assert!(
-        result.is_err(),
-        "from_device must error when claimed objects are missing"
-    );
+    let store = Store::from_device(&reader, &piv).unwrap();
+    assert_eq!(store.missing, [1, 2, 3, 4]);
+    assert!(store.objects.iter().all(|o| o.is_empty()));
 }
 
 /// T11: Context::with_backend errors when the backend exposes multiple devices.

@@ -360,6 +360,17 @@ pub struct Store {
     pub objects: Vec<Object>,
     /// Highest age seen across all objects; new objects get age = store_age + 1.
     pub store_age: u32,
+    /// Objects the card reported absent when the store was read, read as
+    /// empty and to be rewritten (spec 0038).
+    pub missing: Vec<u8>,
+}
+
+/// Whether `e` is the card's "object not found" (`SW 6A82`).
+fn is_absent(e: &anyhow::Error) -> bool {
+    matches!(
+        e.downcast_ref::<crate::errors::CardError>(),
+        Some(crate::errors::CardError::Status { sw: 0x6A82, .. })
+    )
 }
 
 /// The highest age an object can record: the age field has 24 bits.
@@ -390,12 +401,24 @@ impl Store {
         let object_size = raw.len();
         let store_key_slot = first.store_key_slot;
 
-        let mut objects = vec![first];
+        let mut objects = vec![first.clone()];
+        let mut missing = Vec::new();
         for i in 1..object_count {
             let id = OBJECT_ID_ZERO + i as u32;
-            let raw = piv
-                .read_object(reader, id)
-                .with_context(|| format!("reading object 0x{id:06x}"))?;
+            let raw = match piv.read_object(reader, id) {
+                Ok(raw) => raw,
+                // A write the card refused for lack of memory deletes its
+                // object (spec 0038): read it as empty, to be rewritten.
+                Err(e) if is_absent(&e) => {
+                    let mut obj = first.clone();
+                    obj.index = i;
+                    obj.reset();
+                    objects.push(obj);
+                    missing.push(i);
+                    continue;
+                }
+                Err(e) => return Err(e).with_context(|| format!("reading object 0x{id:06x}")),
+            };
             let obj = Object::from_bytes(i, &raw).with_context(|| format!("parsing object {i}"))?;
             objects.push(obj);
         }
@@ -409,6 +432,7 @@ impl Store {
             store_key_slot,
             objects,
             store_age,
+            missing,
         })
     }
 
@@ -432,6 +456,7 @@ impl Store {
             store_key_slot,
             objects: Vec::with_capacity(object_count as usize),
             store_age: 0,
+            missing: Vec::new(),
         };
         for i in 0..object_count {
             // age == 0 produces a 9-byte empty-slot sentinel.

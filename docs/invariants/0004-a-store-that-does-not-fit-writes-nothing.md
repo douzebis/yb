@@ -4,17 +4,17 @@ SPDX-FileCopyrightText: 2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
 SPDX-License-Identifier: MIT
 -->
 
-# 0004 — A Store That Cannot Complete Writes Nothing
+# 0004 — A Store Refused for Room Writes Nothing
 
-**Sources:** spec 0031, spec 0032, spec 0034 G6
+**Sources:** spec 0031, spec 0032, spec 0034 G6, spec 0038
 
 ## Invariant
 
-`yb store` checks, before its first write, that every blob fits:
-room for each new copy (signature trailer included) while the old copies
-still occupy theirs, and room in the 24-bit age counter.  If not, it
-writes nothing, for a multi-file store too, and exits with status 3 when
-the store is full.
+`yb store` checks, before its first write, that every blob fits in the
+store's free **objects** (each new copy with its signature trailer,
+while the old copies still occupy theirs) and in the 24-bit age counter.
+If not, it writes nothing, for a multi-file store too, and exits with
+status 3 when the store is full.
 
 ## Why
 
@@ -30,6 +30,10 @@ An age that wrapped to 0 would make an object look empty.
 ## Limits
 
 - The count uses the size before compression (an upper bound).
+- **Card memory is not counted.**  The card does not report its free
+  memory (measuring it means filling it, and certificates and other
+  objects share it), so a store can still run out of memory while
+  writing; invariant 0001 covers that case (spec 0038).
 
 ## Regression tests
 

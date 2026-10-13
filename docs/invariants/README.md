@@ -17,7 +17,7 @@ test named there exists.
 | [0001](0001-interrupted-writes-lose-nothing.md) | Interrupted Writes Lose Nothing |
 | [0002](0002-reads-never-write.md) | Reading Never Writes |
 | [0003](0003-only-complete-chains-are-visible.md) | Only Complete Blobs of the Store Are Visible |
-| [0004](0004-a-store-that-does-not-fit-writes-nothing.md) | A Store That Cannot Complete Writes Nothing |
+| [0004](0004-a-store-that-does-not-fit-writes-nothing.md) | A Store Refused for Room Writes Nothing |
 | [0005](0005-existing-stores-stay-readable.md) | Existing Stores Stay Readable |
 | [0006](0006-tampering-is-detected-before-use.md) | Tampering Is Detected Before Use |
 | [0007](0007-commands-act-only-on-the-selected-yubikey.md) | Commands Act Only on the Selected YubiKey |

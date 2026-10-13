@@ -1070,6 +1070,24 @@ mod fsck_tests {
         );
     }
 
+    /// Spec 0038 G3: an object the card deleted (a write that ran out of
+    /// memory) is reported, and the store stays readable.
+    #[test]
+    fn absent_object_is_reported_and_the_store_readable() {
+        let ctx = setup_signed_store();
+        // Writing nothing deletes the object, as a refused write does.
+        ctx.piv
+            .write_object(&ctx.reader, 0x5F_0005, &[], MGMT)
+            .unwrap();
+        let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+        assert_eq!(list_blobs(&store).len(), 1);
+        let (_, out) = fsck_output(&ctx);
+        assert!(
+            out.contains("object 0x5F0005 is absent from the card"),
+            "{out}"
+        );
+    }
+
     /// Spec 0034 G7: an object recording another object count than object
     /// 0 is not part of the store: yb ignores it, fsck reports it.
     #[test]
@@ -2151,7 +2169,7 @@ mod error_render_tests {
             "{text}"
         );
         assert!(
-            text.contains("Try: `yb fsck --nvm`, then remove blobs."),
+            text.contains("Try: remove blobs (`yb rm`); an interrupted store or removal"),
             "{text}"
         );
         assert!(text.contains("→ SW 6A84)"), "{text}");

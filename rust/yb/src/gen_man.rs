@@ -251,7 +251,14 @@ yb format \-k 0x9D
             r#".PP
 Write one or more binary blobs to the YubiKey.
 Each blob is identified by a short name (at most 32 bytes).  When a
-blob with the same name already exists it is replaced atomically.
+blob with the same name already exists it is replaced safely: the new
+copy is written first, then the old one removed, so an interruption
+leaves the old or the new content.  This needs room for both copies.
+\fByb store\fR refuses, writing nothing, when the store lacks free
+objects (exit status 3); the YubiKey's memory (about 51 KB, shared with
+certificates) cannot be checked beforehand, so a store can still run out
+of it while writing: the blobs then keep their previous content, and the
+next \fByb\fR command frees the space the interrupted write used.
 .PP
 Blobs are compressed before storage by default.  \fByb\fR tries both
 brotli (level 11) and xz (preset 9) and keeps the smaller result;
