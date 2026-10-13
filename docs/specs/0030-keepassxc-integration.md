@@ -422,6 +422,11 @@ found, 3 store full, 1 anything else, with yb's message shown).
 removed, vault not found, not enough room on the YubiKey (with what a
 save needs), and any other yb message as is.
 
+**Command line.**  `keepassxc-cli` goes through the same `Database`
+functions, so it opens and saves device locations too, asking for the
+PIN on standard input (after the master password).  Not planned at
+first; it makes the mock-up testable without a display, and scriptable.
+
 ### Inventory: where KeePassXC uses a database's path
 
 Studied at `9e0f57a`, over `src/` (the command-line tool `keepassxc-cli`
@@ -500,6 +505,9 @@ goes through the same `Database` functions).  About 125 call sites:
   `yb` process, following `tests/mock/MockRemoteProcess.cpp`: list, open,
   save only after data changes, no save after non-data changes, errors
   by exit status.
+- On a real YubiKey 5 (2026-10-13), through `keepassxc-cli`: create a
+  vault at `yubikey:/Demo.kdbx`, add an entry, read it back from a new
+  process (fetched with the PIN), and refuse a wrong master password.
 - By hand, daily ("eat your own dog food"): the author's vault, with
   measurements (sizes, fetch and store times, writes per week).
 
@@ -527,8 +535,10 @@ goes through the same `Database` functions).  About 125 call sites:
 1. ~~Rip-safe replace in yb (spec 0031).~~ Done, with the integrity,
    exit-status and hardening specs 0032–0034, and spec 0037 (PIN and
    payload on one standard input).
-2. Build the mock-up in a KeePassXC branch (`~/code/keepassxc`); use it
-   daily; measure.
+2. Build the mock-up in a KeePassXC branch (`~/code/keepassxc`, branch
+   `yb-device-storage`): built, unit-tested, tried on a YubiKey through
+   `keepassxc-cli`; the GUI to try on a desktop.  Then use it daily;
+   measure.
 3. Open a **draft** pull request to KeePassXC, explicitly a mock-up for
    discussion, not for merging, stating the use of AI as their
    contribution guide requires; open a feature request linking it, and
