@@ -13,8 +13,9 @@ SPDX-License-Identifier: MIT
 ## Problem
 
 `yb self-test` (spec 0015) runs random store, fetch, remove and list
-operations against a real YubiKey, through `yb` subprocesses, and compares
-the results with an in-memory model.  The audit of 2026-10-13
+operations against a real YubiKey, through `yb` subprocesses (by design:
+it tests the command as a user runs it), and compares the results with an
+in-memory model.  The audit of 2026-10-13
 (`docs/reviews/2026-10-python-design-audit.md`, findings 1.1.7, 1.1.8,
 1.3) found that it can both damage and deceive:
 
@@ -30,10 +31,6 @@ the results with an in-memory model.  The audit of 2026-10-13
   on those paths passes as an expected outcome.  It would have hidden the
   "store is full while writing … this should not happen" defect fixed by
   spec 0031.
-- **It exposes the management key.**  It puts `YB_MANAGEMENT_KEY` and
-  `YB_PIN` in the environment of every child process (hundreds per run),
-  readable in `/proc/<pid>/environ`; the key may have been unwrapped from
-  the PIN-protected PRINTED object, i.e. one the user never typed.
 - **It diverges from spec 0015 without a record:** capacity 25 for a
   20-object store (spec: 15), no timeout on child processes (spec: 30 s),
   `--quiet` ignored, stores without `--no-compress` (spec: with), format
@@ -53,18 +50,20 @@ the results with an in-memory model.  The audit of 2026-10-13
 - **G4 — "Store full" is checked.**  A store reported full is accepted
   only if the store genuinely lacked room (`objects_needed` > free objects,
   spec 0031), read by the parent from the card.
-- **G5 — No secrets in child processes' environments.**  The self-test
-  does not add the PIN or the management key to the children's
-  environment; the PIN reaches them on standard input, and they resolve
-  the management key themselves (spec 0027: kept on the YubiKey, unlocked
-  by the PIN).
-- **G6 — Spec and code agree:** a timeout on each child, `--quiet`
-  honored, the capacity and compression choices recorded in spec 0015.
+- **G5 — Spec and code agree:** a timeout on each child, `--quiet`
+  honored, and spec 0015 updated to what the code does by design:
+  compression on (the default path users run), format through a `yb`
+  subprocess (it tests the command), capacity derived from the store.
 
 ## Non-goals
 
 - Changing what the self-test exercises (random operations through the
-  full command-line stack, on a formatted YubiKey).
+  full command-line stack, as subprocesses, on a formatted YubiKey).
+- Keeping the PIN and management key out of the children's environment.
+  The self-test passes them as `YB_PIN` and `YB_MANAGEMENT_KEY`; a
+  process's environment is readable only by the same user, who can read
+  the parent's anyway, and the YubiKey under test is one the user agreed
+  to erase.
 - Running the self-test in CI (it needs a real YubiKey).
 
 ## Specification
@@ -88,10 +87,6 @@ the results with an in-memory model.  The audit of 2026-10-13
 - **Outcomes:** `fetch` exit 2 → not found; exit 0 → content; anything
   else → failure.  `rm` likewise.  `store` exit 3 → full, then checked
   against the store as read by the parent (G4); anything else → failure.
-- **Children:** `yb --serial S --pin-stdin …`; the PIN on the first line
-  of standard input; payloads from a file in a private temporary
-  directory (mode 0700, removed at the end), not from standard input; no
-  `YB_PIN` or `YB_MANAGEMENT_KEY` added to their environment.
 - **Timeout:** 30 s per child; a timeout stops the test with context.
 - **`--quiet`:** suppresses progress output; the final report and any
   failure are still shown.
@@ -101,11 +96,14 @@ the results with an in-memory model.  The audit of 2026-10-13
 
 ## Open questions
 
-- Compression: spec 0015 says the self-test stores with `--no-compress`;
-  the code compresses (the default path).  Keep compression (it exercises
-  what users run) and update spec 0015?
-- Format: keep it as a subprocess (it tests the command) and update spec
-  0015?
+- **Start from a reset, not from existing credentials** (requested
+  2026-10-13): the self-test would begin by resetting the YubiKey's PIV
+  application (block the PIN and the PUK, then PIV RESET), then use the
+  factory credentials, or set its own.  This erases **all** PIV data: keys
+  and certificates of every slot (e.g. an SSH or signing key in 9a/9c),
+  not only yb's store and slot 0x82, which is what the self-test erases
+  today.  OTP, FIDO2 and OATH are unaffected.  The confirmation would say
+  so.  To confirm.
 - How to test G1 without hardware: `VirtualPiv` with two simulated
   YubiKeys, if the fixture format can describe two?
 
@@ -113,5 +111,4 @@ the results with an in-memory model.  The audit of 2026-10-13
 
 - Spec 0015 — `yb self-test`.
 - Spec 0031 — rip-safe replace, `objects_needed`.
-- Spec 0034 — secrets hygiene.
 - `docs/reviews/2026-10-python-design-audit.md`.

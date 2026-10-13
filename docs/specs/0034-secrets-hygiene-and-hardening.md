@@ -48,12 +48,12 @@ findings 1.2 and 1.3) found several smaller weaknesses, each unrecorded:
   operation that needs it and dropped right after; no plain `String`
   copies, including the bytes read from PRINTED.  The documentation states
   that the key is read into memory when kept on the YubiKey.
-- **G2 — No secrets as arguments.**  `--pin` and `--key` are removed;
-  using them fails with a message pointing to `YB_PIN`, `--pin-stdin`, the
-  prompt, and `YB_MANAGEMENT_KEY`.
-- **G3 — No silent redirection.**  A simulated YubiKey is never used
-  without the user being told, and never by accident (see Open questions
-  for the mechanism).
+- **G3 — No simulated card outside tests.**  Support for `YB_FIXTURE` is a
+  Cargo feature, `test-fixture`, off by default in every build (release
+  and debug); only the test harnesses that need it turn it on.  A `yb`
+  built without it refuses to run when `YB_FIXTURE` is set, saying that
+  this build has no simulated-card support, so that a stray variable
+  never goes unnoticed.
 - **G4 — Legacy ciphertext flagged.**  Fetching a pre-0006 (AES-CBC) blob
   works, with a warning recommending to store it again; `yb fsck` and
   `yb ls -l` flag such blobs.
@@ -75,6 +75,9 @@ findings 1.2 and 1.3) found several smaller weaknesses, each unrecorded:
 - Removing `YB_PIN` and `YB_MANAGEMENT_KEY`: environment variables are
   visible only to the same user's processes, and are the documented
   non-interactive path.
+- Removing the hidden, deprecated `--pin` and `--key` options, which put
+  secrets on the command line: kept for a while longer (decision of
+  2026-10-13); a later spec removes them.
 
 ## Specification
 
@@ -83,7 +86,13 @@ To be completed after the open questions.  Sketch:
 - `Context`: the management key as `Option<Zeroizing<String>>`;
   `management_key_for_write` returns `Zeroizing<String>`; PRINTED parsing
   writes into a `Zeroizing<Vec<u8>>`.
-- `--pin`, `--key`: removed from the parser; a dedicated error if given.
+- `test-fixture` feature (in `yb-core` and `yb`): gates `YB_FIXTURE` in
+  `main.rs`, `context.rs`, `complete.rs`, `list_readers.rs`, `select.rs`.
+  Enabled by `yb`'s and `yb-core`'s tests, and by `yb-piv-harness` for
+  the `yb` binary that `yb_cli_tests` runs.  The NixOS VM test then runs
+  `yb_cli_tests` against a `yb` built with the feature, from the same
+  source, inside the harness derivation, instead of the packaged binary:
+  a change to the staged nixpkgs files, shipped with the next release.
 - Legacy CBC: decrypt as today; warning on stderr; `ls -l` flag.
 - `fetch`: `require_pin` only for encrypted matches.
 - `next_age`: refuse beyond `0xFF_FFFF`; `fsck` warns beyond 90%.
@@ -92,18 +101,8 @@ To be completed after the open questions.  Sketch:
 
 ## Open questions
 
-- **G3 mechanism**, three options:
-  1. keep `YB_FIXTURE` in release binaries, and print a warning on every
-     run where it is active (simple; the VM test keeps testing the packaged
-     binary);
-  2. also require a second variable confirming the intent (e.g.
-     `YB_FIXTURE_ALLOW=1`), set by the test harness only;
-  3. compile fixture support out of release binaries, and have the VM test
-     run a test build of `yb` (safest; the VM test then no longer tests
-     the packaged binary's command line).
-- G2 is a breaking change for scripts still using `--pin`/`--key` (hidden
-  and deprecated since spec 0024): remove now, in 0.6.0, or keep with a
-  warning one more release?
+None.  Decided on 2026-10-13: `YB_FIXTURE` compiled out of every build
+by default (G3); `--pin` and `--key` kept for now (Non-goals).
 
 ## References
 

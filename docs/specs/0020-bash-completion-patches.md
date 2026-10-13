@@ -6,7 +6,11 @@ SPDX-License-Identifier: MIT
 
 # 0020 — Remove bash completion patches from Nix packaging
 
-**Status:** implemented
+> **Outcome:** the investigation found both patches necessary and kept
+> them (see Specification).  Spec 0036 replaces them with a completer that
+> needs no patching.
+
+**Status:** implemented (patches kept); superseded by spec 0036
 **App:** yb
 **Implemented in:** 2026-05-05
 

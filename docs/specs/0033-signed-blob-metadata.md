@@ -54,24 +54,26 @@ of claiming replay protection.
   domain-separation tag, the blob's name, its key slot, its compression
   flag, its plain and stored sizes, its modification time, and its stored
   bytes.
-- **G2 — Verified on fetch.**  `yb fetch` verifies the signature with the
-  public key of the slot's certificate before returning data; a mismatch
-  is an error naming the blob as corrupted or tampered with.
-- **G3 — Unsigned is not silent.**  A blob without a signature is fetched
-  only with an explicit `--allow-unsigned` (for blobs written by older yb
-  versions), and `yb ls -l` and `yb fsck` flag it as unsigned.
+- **G2 — A bad signature refuses the fetch.**  `yb fetch` verifies the
+  signature with the public key of the slot's certificate (no PIN) before
+  returning or decrypting data; a mismatch is an error naming the blob as
+  corrupted or tampered with, and nothing is written.
+- **G3 — Unsigned is visible.**  A blob without a signature (written by a
+  yb version before spec 0017) is still fetched, with a warning; `yb ls`
+  and `yb fsck` mark it `UNSIGNED`.
 - **G4 — No unsigned stores.**  `yb store` fails, writing nothing, if it
-  cannot sign (no PIN, signing error); capacity already counts the
-  signature's spill chunk (spec 0031).
-- **G5 — Migration.**  A command re-signs existing blobs (v1 signatures,
-  or none) after verifying what can be verified, through the rip-safe
-  replace path.
-- **G6 — Honest documentation.**  The README and `rust/docs/DESIGN.md`
+  cannot sign; capacity already counts the signature's spill chunk (spec
+  0031).
+- **G5 — Honest documentation.**  The README and `rust/docs/DESIGN.md`
   state the threat model above, including the rollback limit.
 
 ## Non-goals
 
 - Rollback protection (impossible with one YubiKey; see Threat model).
+- Refusing unsigned blobs, or a command to re-sign them: a user who wants
+  a blob signed stores it again.  Someone able to write objects without
+  the PIN could strip a signature and cause only a warning; accepted for
+  now.
 - Signing with a key other than the store's slot key.
 - Changing the encryption scheme.
 
@@ -90,33 +92,39 @@ P-256 signature, by the slot key, of SHA-256 over:
 ‖ stored bytes
 ```
 
-The age is not included: it changes when objects are rewritten and does
-not identify a version for an attacker who can re-sign anyway.
+The age is not included: it changes when objects are rewritten, and does
+not identify a version against an attacker who can re-sign anyway.  New
+stores write version 2; version 1 is still verified.
 
 ### Verification
 
-| Trailer | `fetch` | `ls -l`, `fsck` |
+| Trailer | `fetch` | `ls`, `fsck` |
 |---|---|---|
-| v2, valid | returns data | verified |
-| v2, invalid | error: corrupted or tampered | CORRUPTED |
-| v1 (payload only), valid | returns data, notes "legacy signature" | verified (legacy) |
-| v1, invalid | error | CORRUPTED |
-| none | error unless `--allow-unsigned` | UNSIGNED |
+| v2, valid | returns data | (nothing) / verified |
+| v2, invalid | **error**: corrupted or tampered | CORRUPTED |
+| v1 (payload only), valid | returns data | (nothing) / verified |
+| v1, invalid | **error** | CORRUPTED |
+| none | returns data, with a warning | UNSIGNED |
 
-### Migration
+Verification happens before decryption, so a tampered encrypted blob
+never reaches the PIN-protected ECDH operation.
 
-`yb resign [PATTERN…]`: for each blob, verify (v1) or accept (none, with
-`--allow-unsigned`), then rewrite it with a v2 signature through
-`store_blob` (rip-safe, needs room for one more copy at a time).
+### Store
+
+`append_signature_trailer` returns an error instead of warning; the
+store writes nothing in that case (the error happens before any write).
+
+### Tests
+
+- Tampering with a v2 blob's name, metadata or bytes makes `fetch` fail
+  and `ls` show CORRUPTED (simulated card).
+- v1 blobs (fixture) still verify; unsigned blobs fetch with a warning and
+  show UNSIGNED.
+- A signing failure stores nothing.
 
 ## Open questions
 
-- Command name and placement of the migration (`yb resign`, or `yb fsck
-  --resign`).
-- Should `fetch --allow-unsigned` be replaced by a one-time migration
-  after which unsigned blobs are always refused?
-- Encrypted blobs: verify the signature before decrypting (saves a PIN
-  operation on tampered blobs) or after?
+None.
 
 ## References
 
