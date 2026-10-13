@@ -10,12 +10,13 @@ SPDX-License-Identifier: MIT
 **App:** yb
 **Implemented in:** <!-- YYYY-MM-DD, fill after implementation -->
 
-> **Draft.**  Goals, feasibility and a first design, based on a study of
-> KeePassXC's `develop` branch (commit `9e0f57a`, 2026-09-22; file
-> references below are to that tree).  Not ready for implementation: it
-> depends on spec 0031 (rip-safe replace) and on the open questions
-> below.  The KeePassXC part (path 2) is a proposal to discuss with its
-> maintainers, not a commitment on their side.
+> **Draft.**  Based on a study of KeePassXC's `develop` branch (commit
+> `9e0f57a`, 2026-09-22; file references below are to that tree).  Scope
+> decided on 2026-10-13: a **mock-up inside KeePassXC** (path 2 of the
+> first draft), calling the existing `yb` command, to show KeePassXC's
+> maintainers working code; the launcher outside KeePassXC (path 1) and a
+> C library are left for later.  The KeePassXC part is a proposal to
+> discuss with its maintainers, not a commitment on their side.
 
 ## Problem
 
@@ -80,8 +81,9 @@ be kept on the YubiKey too, for unlocking with the PIN alone.
 - **G7 — Reading never writes.**  A session in which the vault is only
   read (opened, searched, entries copied) writes nothing to the YubiKey.
   This matches the expected use (read daily, changed rarely) and keeps
-  writes to the card's flash rare.  Path 1 reaches it only partly (see
-  "Saves without user edits"); path 2 reaches it fully.
+  writes to the card's flash rare.  A launcher outside KeePassXC would
+  reach it only partly (see
+  "Saves without user edits"); the mock-up reaches it fully.
 - **G8 — Several vaults on one YubiKey.**  A user with several vaults
   (e.g. per context) can keep them on the same YubiKey, each with its
   optional master password, as long as they fit together.
@@ -112,6 +114,7 @@ be kept on the YubiKey too, for unlocking with the PIN alone.
 - **Other password managers** (KeePass 2.x, KeePassDX, Strongbox…), even
   though the KDBX format would allow it later.
 - **Mobile platforms** (Android, iOS): no PC/SC there in the same form.
+- **Windows and macOS for the mock-up:** Linux only (decided 2026-10-13).
 - **Syncing between several YubiKeys**, or between a YubiKey and a vault
   file elsewhere, beyond what recovery (G4) needs.
 - **Post-quantum protection**, handled by spec 0028; this spec only
@@ -119,6 +122,10 @@ be kept on the YubiKey too, for unlocking with the PIN alone.
 - **A KeePassXC plugin.**  KeePassXC has no plugin interface (no
   `QPluginLoader`, `dlopen` or `Q_PLUGIN_METADATA` in `src/`); anything
   inside KeePassXC is an upstream change, decided by its maintainers.
+- **For the mock-up:** a launcher outside KeePassXC (path 1 of the first
+  draft), a C library or machine-readable (`--json`) output in yb,
+  recovery tooling, and managing the master password from KeePassXC.
+  Later, if the discussion with KeePassXC's maintainers calls for them.
 - **KeePassXC talking PIV itself.**  KeePassXC has no PIV code; its PC/SC
   code only does HMAC-SHA1 challenge-response on the OTP applet, and
   skips readers named "YubiKey" (`src/keys/drivers/YubiKeyInterfacePCSC.cpp:571`).
@@ -208,9 +215,10 @@ KeePassXC saves far more often than "when the user edits", by default
   (`src/core/Database.cpp:1162-1178`).
 
 Since every save re-encrypts everything, comparing file contents cannot
-tell a real edit from a collapsed group.  Consequence: path 1 writes to
-the YubiKey after such sessions; only path 2, which sees KeePassXC's own
-"data changed" signal, can skip non-data changes (G7).
+tell a real edit from a collapsed group.  Consequence: a launcher outside
+KeePassXC would write to the YubiKey after such sessions; only code inside
+KeePassXC, which sees its own "data changed" signal, can skip non-data
+changes (G7).
 
 ### Security trade-offs (to be explicit with users)
 
@@ -232,9 +240,9 @@ the YubiKey after such sessions; only path 2, which sees KeePassXC's own
   password is protected by ECDH alone.  G2 therefore lowers the
   long-term protection of copied stores until 0028 is addressed; the
   default (master password typed) does not.
-- **The working copy on the host** is the encrypted KDBX file, as with
-  KeePassXC today, but in a private RAM-backed directory, deleted at the
-  end of the session.
+- **No copy on the host's disk:** the vault goes between the YubiKey and
+  KeePassXC's memory; while open, KeePassXC holds the encrypted bytes
+  (read cache) and, unlocked, the decrypted database, as it does today.
 - **Host compromise** (malware while the vault is open) is the same as
   with KeePassXC today, and out of scope.
 
@@ -273,18 +281,23 @@ the YubiKey after such sessions; only path 2, which sees KeePassXC's own
 
 ## Specification
 
-### Prerequisite on the yb side: rip-safe replace (spec 0031)
+### Prerequisites on the yb side: done
 
-Today `yb store` over an existing blob is not interruption-safe: it
-requires room for the new blob, but frees the old blob's objects in
-memory first, may allocate the new chunks into them, and writes changed
-objects in index order (`yb-core/src/orchestrator/mod.rs:86-106`,
-`yb-core/src/store/mod.rs:485-535`).  A YubiKey pulled out mid-save can
-lose both versions.  Spec 0031 (to be written) makes a replace write the
-new chunks into objects outside the old chain, write the new head last,
-and only then free the old chain, with a rule for which copy wins if both
-are found after an interruption.  Path 1 may be prototyped before 0031
-lands, but must not be offered to anyone else until it does.
+- **Rip-safe replace** (spec 0031): saving the vault writes the new copy
+  into free objects, head last, before freeing the old one; a YubiKey
+  pulled out mid-save leaves the old or the new vault (invariant 0001).
+  Needs room for one more copy of the vault (invariant 0004).
+- **Integrity** (spec 0033): `yb fetch` refuses a vault whose signature
+  does not verify (invariant 0006).
+- **Exit statuses** (spec 0032): 2 when a blob is not found, 3 when the
+  store is full (checked before writing); 1 for any other error.
+- **Reads never write** (invariant 0002): opening a vault writes nothing.
+
+- **PIN and payload on one standard input** (spec 0037): documents
+  and tests what `yb --pin-stdin store` already does, so that a vault goes
+  from KeePassXC's memory to the YubiKey without a file.
+
+Nothing else is needed in yb for the mock-up.
 
 ### Naming
 
@@ -293,218 +306,229 @@ extension:
 
 | Blob | Content | Stored with |
 |---|---|---|
-| `<vault>.kdbx` | the vault, e.g. `Passwords.kdbx` | `--no-compress` |
-| `<vault>.passwd` | its master password, optional (G2) | default (encrypted) |
+| `<vault>.kdbx` | the vault, e.g. `Passwords.kdbx` | `--encrypted --no-compress` |
+| `<vault>.passwd` | its master password, optional (G2) | `--encrypted` |
 
 `<vault>` is any valid yb blob name stem.  Several vaults coexist on one
-YubiKey (G8).
-
-In v0, the master password is managed by hand with yb's existing
-commands, e.g.:
+YubiKey (G8).  In v0 the master password is managed by hand with yb's
+commands:
 
 ```shell
 read -rs pw && printf '%s' "$pw" | yb store -n Passwords.passwd; unset pw
 yb remove Passwords.passwd
 ```
 
-(`read -rs` keeps it out of the shell history and off the screen;
-`printf '%s'` stores no trailing newline.  The integration strips one
-final newline anyway, so that a password typed into `yb store` and ended
-with Ctrl-D also works.)
+One final newline is stripped when reading it, so that a password typed
+into `yb store` and ended with Ctrl-D also works.
 
 ### Requirements on the YubiKey
 
-- Set up with `yb format` with its management key kept on the YubiKey,
-  unlocked by the PIN (yb's guided setup does this): every operation of
-  the integration then needs only the PIN.
-- The PIN is passed in memory (library) or on standard input
-  (`--pin-stdin`, command), never as a command-line argument or in the
-  environment.
+Set up with `yb format` and the management key kept on the YubiKey,
+unlocked by the PIN (the guided setup does this): every operation then
+needs only the PIN.
 
-### The vault operations, defined once in yb-core
+### The mock-up in KeePassXC: databases on a device
 
-yb is two crates: `yb-core`, a library (published on crates.io), and
-`yb`, the command-line tool built on it.  The integration needs a small
-set of operations, defined once in `yb-core` and exposed both ways
-(see "How KeePassXC calls yb"):
+KeePassXC learns to read and write a database **on a device** instead of
+a file, with no copy of the vault on the host's disk.  The YubiKey,
+through `yb`, is the first device; the design keeps the device side
+behind one small interface, so that others could follow.
 
-| Operation | Purpose |
-|---|---|
-| list vaults | blobs ending in `.kdbx`, with size and modification time, and whether `<vault>.passwd` exists |
-| free space | bytes left, and whether a vault of a given size can be replaced in place (all blobs plus one more copy of it) |
-| fetch | the vault, and the master password if present |
-| store | the vault, rip-safe (spec 0031), uncompressed; fails before writing if it does not fit |
-| remove | a vault and its master password |
+**Location.**  A device database is identified by a location string,
+`yubikey:<serial>/<vault>.kdbx`, used wherever KeePassXC uses a file path
+as an identity: tab and window titles, the recent-databases list,
+per-database settings.
 
-Errors are distinguished, not just messages: wrong PIN (with tries
-left), PIN blocked, YubiKey absent or removed during the operation, not
-enough room, blob not found, store damaged.
+**One branch point.**  KeePassXC's format code already reads and writes
+streams (`KdbxReader::readDatabase(QIODevice*, …)`,
+`KdbxWriter::writeDatabase(QIODevice*, …)`).  `Database` gains a storage
+backend, file or device, chosen by the location:
 
-### Path 1 — `yb-keepassxc`, copy in and out (prototype)
+| | File (today) | Device |
+|---|---|---|
+| read | open the file | fetch the bytes from the device into memory, parse from a `QBuffer` |
+| write | `QSaveFile`: temporary file, then rename | serialize into a `QBuffer`, send the bytes to the device (rip-safe on the device, spec 0031) |
 
-A command shipped with yb (a script at first, a `yb` subcommand if it
-proves itself): `yb-keepassxc [--serial S] <vault>`.
+Every other use of the path is either identity (works with the location
+string) or a file-only feature, turned off for device databases; the
+inventory below lists them.
 
-1. **Recover first.**  If a working directory of a previous session for
-   this vault is left (see 7), offer to store it, discard it, or stop.
-2. **PIN.**  Ask for the YubiKey PIN once (terminal or graphical prompt),
-   keep it in memory for the session.
-3. **Working directory.**  Create a private directory, mode 0700, in
-   `$XDG_RUNTIME_DIR` (RAM-backed on Linux with systemd); refuse to run if
-   no RAM-backed location is available, unless the user explicitly
-   accepts a disk location.
-4. **Fetch.**  Fetch `<vault>.kdbx` into `<dir>/<vault>.kdbx`, and
-   `<vault>.passwd` into memory if it exists.  Record the SHA-256 of the
-   vault as fetched.
-5. **Run KeePassXC** in its own process, waiting for it to exit:
-   - with a private configuration: `--localconfig <dir>/local.ini`, and
-     `--config` pointing to a copy of the user's configuration with these
-     overrides: `SingleInstance=false` (so this process does not hand the
-     vault to an already-running KeePassXC and exit),
-     `BackupBeforeSave=false`, `OpenPreviousDatabasesOnStartup=false`,
-     `GUI/MinimizeOnClose=false` and no tray icon (so closing the window
-     ends the process), and no recent-databases list (so the temporary
-     path does not leak into the user's settings);
-   - with `--pw-stdin` and the master password on its standard input if
-     `<vault>.passwd` exists; otherwise without it, and the user types the
-     master password in KeePassXC's unlock screen.
-6. **Store back.**  When KeePassXC exits, compare the vault's SHA-256 with
-   the one recorded at fetch.  If it differs, store it (rip-safe, spec
-   0031) and log the store (time, size, duration) for the measurements of
-   G6.  If it fails (YubiKey removed, not enough room), keep the working
-   directory and say so.
-7. **Clean up.**  Delete the working directory after a successful store or
-   when nothing changed.  A directory left behind by a crash survives in
-   RAM until the session ends (logout or reboot), and step 1 offers to
-   recover it.
+**Read cache.**  `Database` keeps the encrypted KDBX bytes last read from
+or written to the device, never anything decrypted.  Unlocking after a
+lock decrypts the cache (KeePassXC re-reads the file there today): no
+device access, no PIN.  Before using the cache, KeePassXC checks that the
+vault on the device is unchanged (size and modification time, from
+`yb ls -l`, without the PIN); otherwise it fetches it again.
 
-Known limitations, documented: the vault reaches the YubiKey only when
-KeePassXC exits; non-data changes (e.g. a group expanded) cause a write
-(see "Saves without user edits"); the first unlock of a vault may add an
-identifier and cause one write; KeePassXC's own settings are a copy for
-the session (changes to them are not kept).
+**Write-through, after a short delay.**  Every save KeePassXC makes goes
+to the device, and updates the cache once the device confirms.  Writes to
+a YubiKey are slow, so a device database saves **5 seconds after the
+last data change** (decided 2026-10-13): a burst of edits makes one
+write.  Pending changes are written **at once** when the database is
+locked or closed, and when KeePassXC exits or is asked to (SIGTERM,
+logout, closing the window; KeePassXC already turns SIGINT, SIGTERM,
+SIGHUP and SIGQUIT into a normal quit, `src/gui/Application.cpp:256-275`).  A process killed outright (SIGKILL, power
+loss) loses at most the last 5 seconds of edits; the device keeps the
+previous vault, whole (spec 0031).  KeePassXC's own per-database delay
+counts in minutes (`autosaveDelayMin`), so the device delay is a timer of
+its own.  For device databases, non-data changes alone never cause a save
+(G7).  A failed write leaves the
+database modified, so KeePassXC's handling of unsaved changes applies,
+with a retry; the device keeps the old or the new vault.
 
-### Path 2 — vault on the YubiKey inside KeePassXC (proposal)
+**PIN.**  Asked when opening; held in zeroizing memory while the database
+is unlocked (write-through needs it); dropped at lock and close, and
+asked again at the next unlock if a fetch is needed (a changed vault) or
+at the next save.
 
-A mock-up for discussion with KeePassXC's maintainers, not a final
-design; their preferences decide.  The proposal keeps KeePassXC's
-file-based model and adds a storage layer around it:
+**Calling yb** (the device side, for the YubiKey).  Through `QProcess`, as
+Remote Sync runs its commands: no shell, no file, the PIN on the first
+line of standard input (`--pin-stdin`, spec 0037), never on the command
+line or in the environment; outcomes from the exit status (0, 2 not
+found, 3 store full, 1 anything else, with yb's message shown).
 
-- **Opening:** "Open from YubiKey…" lists the vaults on the connected
-  YubiKeys, asks for the PIN, fetches the chosen vault into a private
-  working file (as in path 1), and opens it as a database marked as
-  YubiKey-backed (YubiKey serial, blob name).  If `<vault>.passwd`
-  exists, KeePassXC unlocks with it; otherwise it shows its usual unlock
-  screen.
-- **Saving:** KeePassXC keeps saving to the working file as usual (safe
-  save, auto-save).  The YubiKey is written only when the database is
-  locked, closed, or KeePassXC exits, **and** a data change happened
-  since the last write to the YubiKey: KeePassXC's own modified signal,
-  ignoring non-data changes (G7, fully).
-- **Recent databases:** a YubiKey-backed database appears as
-  `YubiKey <serial>: <vault>`, never by its working-file path.
-- **Working file:** in a private RAM-backed directory, deleted when the
-  database is closed.
+| Operation | Command | Standard input | Standard output |
+|---|---|---|---|
+| list vaults | `yb [--serial S] ls -l '*.kdbx'`, and `ls '*.passwd'` | — | names, sizes, times |
+| check unchanged | `yb [--serial S] ls -l <vault>.kdbx` | — | size, time |
+| fetch the vault | `yb --pin-stdin [--serial S] fetch -p <vault>.kdbx` | PIN | the vault |
+| fetch the master password | `yb --pin-stdin [--serial S] fetch -p <vault>.passwd` | PIN | the password |
+| store the vault | `yb --pin-stdin [--serial S] store --encrypted --no-compress -n <vault>.kdbx` | PIN, then the vault | — |
 
-### How KeePassXC calls yb
+**Opening:** "Open from YubiKey…", next to "Open Database…":
+1. the YubiKey: none to choose when one is connected; with several, the
+   user gives its serial, passed as `--serial` and kept in the location;
+2. the PIN;
+3. the vault, from the list (those with a stored master password marked);
+4. if `<vault>.passwd` exists, unlock with it; otherwise KeePassXC's usual
+   unlock screen.
 
-Two ways, offering the same operations (see "The vault operations"):
+**Errors shown:** wrong PIN (tries left), PIN blocked, YubiKey absent or
+removed, vault not found, not enough room on the YubiKey (with what a
+save needs), and any other yb message as is.
 
-1. **The `yb` command,** run through `QProcess` as Remote Sync does: PIN
-   on standard input, machine-readable output (`--json`, to be added) for
-   listing and free space, distinct exit codes for the errors above.
-   Nothing changes in KeePassXC's build; the user installs `yb`, as for
-   `okon`.  Tested in KeePassXC with a mocked process
-   (`tests/mock/MockRemoteProcess.cpp` pattern).
-2. **A C library,** a new crate (e.g. `yb-capi`) wrapping `yb-core`:
-   `extern "C"` functions with a `cbindgen`-generated header, built as a
-   shared or static library.  No subprocess or output parsing, the PIN
-   stays in KeePassXC's memory, typed error codes, one PC/SC session per
-   operation instead of one process.  Costs: KeePassXC's build would
-   depend on a Rust-built library (there is no Rust in it today), either
-   built by them (a Rust toolchain in their Windows, macOS and Linux
-   release pipelines) or installed from distributions and bundled in
-   their Windows and macOS installers; and yb commits to a stable C
-   interface (versioning, memory ownership, error codes), which
-   `yb-core`'s Rust API (e.g. `anyhow` errors) is not designed for today.
-   Licensing is no obstacle: MIT code fits in KeePassXC's GPL-2/GPL-3
-   code base.
+### Inventory: where KeePassXC uses a database's path
 
-The mock-up uses the command (1): the easiest for the maintainers to try,
-with no build change.  The library (2) is offered as the in-process
-alternative in the discussion; their build constraints decide.  Because
-the operations are defined once in `yb-core`, either choice costs no
-rewrite.  Further alternatives for them to weigh: extending Remote Sync
-itself (automatic download on open, upload on lock only if data
-changed), or reading yb's on-card format directly in C++ over PC/SC,
-reusing the `winscard` patterns of `YubiKeyInterfacePCSC.cpp`.
+Studied at `9e0f57a`, over `src/` (the command-line tool `keepassxc-cli`
+goes through the same `Database` functions).  About 125 call sites:
 
-### Recovery (G4)
+| Kind | Sites | For a device database |
+|---|---|---|
+| Identity or display (titles, recent lists, settings keys, comparisons) | ~63 | works with the location string |
+| Real file operations on the database | ~26 | a device branch, in the few functions below |
+| File-only features (file watcher, backups, safe-save modes, Save As, relative paths) | ~32 | turned off or hidden |
+| Not the database (key files, attachments, exports) | ~15 | unchanged |
 
-- **Backup:** `yb fetch <vault>.kdbx -o <file>` produces a standard KDBX
-  file, still encrypted by the master password; it opens in any KDBX
-  application.  A second YubiKey holds a copy with `yb --serial <S2>
-  store --no-compress`.
-- **Reminder:** path 1 and path 2 remind the user when the vault on the
-  YubiKey has changed since the last backup they declared (e.g. a
-  `<vault>.backup` blob holding the date and SHA-256 of the last backup).
-- **Restore:** storing the backup file onto a (new) YubiKey with the same
-  name.
+**Branch points** (file:line at `9e0f57a`):
+1. `Database::open(path, key, error)` (`src/core/Database.cpp:131`):
+   get a `QIODevice` from the storage, a `QFile` or a `QBuffer` filled
+   from the device, and keep the reader code as is.  Covers every read:
+   tab creation, unlock, the re-reads at lock.
+2. `Database::saveAs` / `performSave` (`Database.cpp:269`, `:358`): for a
+   device, before the path is resolved (`:327`), serialize as the
+   existing DirectWrite mode does (a `QBuffer`, `:442-454`) and send the
+   bytes to the device; no watcher, permissions, backup or restore.
+3. `Database::canonicalFilePath()` (`Database.cpp:709`): returns the
+   location unchanged for a device (today it returns "" for anything
+   that is not an existing file, which breaks deduplication, tooltips,
+   settings headlines and the Secret Service collection name).
+4. `DatabaseTabWidget::addDatabaseTab` (`src/gui/DatabaseTabWidget.cpp:156`):
+   no native-separator conversion and no file-existence check for a
+   device location (today: "Failed to open … does not exist").
+5. Entry filters that drop non-files: command-line arguments
+   (`src/main.cpp:147-152`), the second-instance message
+   (`src/gui/Application.cpp:335-338`), databases reopened at start-up
+   (`src/gui/MainWindow.cpp:677`).
+6. A helper, `isDeviceLocation()`, for the file-only features: hide Save
+   As, Save Backup and Remote Sync (`MainWindow.cpp:992-1001`); no file
+   watcher (`Database.cpp:192`, `:349`); no backup or "disable safe
+   saves" prompt (`src/gui/DatabaseWidget.cpp:2522-2534`, `:2610-2627`);
+   no paths relative to the database's directory (`{DB_DIR}`,
+   `src/core/Entry.cpp:1186`; KeeShare, `src/keeshare/ShareObserver.cpp:29`;
+   SSH agent, `src/sshagent/KeeAgentSettings.cpp:445`); "last saved" from
+   the device, not a file time (`src/core/DatabaseStats.cpp:21`).
+
+**What the inventory changes in the design:**
+- **Reads are more frequent than "open and unlock":** creating a tab
+  reads the database's headers twice, locking twice more, unlocking once
+  in full (`DatabaseWidget.cpp:101-103`, `:2137-2141`;
+  `src/gui/DatabaseOpenWidget.cpp:249`, `:348`).  The read cache serves
+  them all: one fetch per open, none at lock or unlock unless the vault
+  changed on the device.
+- **Every edit is a save:** with the defaults (auto-save after every
+  change, no delay), each edit reaches `save()` about 150 ms later
+  (`Database.cpp:1081-1088`, `DatabaseWidget.cpp:1852-1869`); hence the
+  5-second device delay (see Write-through).
+- **Non-data changes:** with `AutoSaveNonDataChanges` off, KeePassXC turns
+  a non-data change into a data change (`DatabaseWidget.cpp:1893-1899`),
+  hence a write; with it on, it saves silently at lock (`:2114-2117`).
+  Neither suits a device: a device database never saves for non-data
+  changes alone (G7).
+- **Two uses of the YubiKey:** a vault that also uses KeePassXC's YubiKey
+  challenge-response would reach the YubiKey from KeePassXC (OTP
+  application) and from `yb` (PIV) during the same unlock; to be tried.
+- An unrelated existing bug: `DatabaseWidget::saveAs()` always returns
+  false (`DatabaseWidget.cpp:2575`, `bool ok = false;` never set), so
+  "Save As" never updates the recent-databases list.  Worth reporting to
+  KeePassXC separately.
 
 ### Tests
 
-- yb side: spec 0031's interruption tests (a simulated card failing after
-  N writes during a replace); the vault operations with the simulated
-  card (`YB_FIXTURE`); path 1 with a stub in place of `keepassxc`,
-  checking the fetch → compare → store-only-if-changed logic and crash
-  recovery.
-- KeePassXC side (path 2 mock-up): unit tests with a mocked `yb` process,
-  following `tests/mock/MockRemoteProcess.cpp`.
+- yb side: the invariants above, with their regression tests.
+- KeePassXC side: unit tests of the YubiKey storage layer with a mocked
+  `yb` process, following `tests/mock/MockRemoteProcess.cpp`: list, open,
+  save only after data changes, no save after non-data changes, errors
+  by exit status.
+- By hand, daily ("eat your own dog food"): the author's vault, with
+  measurements (sizes, fetch and store times, writes per week).
+
+### Recovery (G4), by hand in v0
+
+- **Backup:** `yb fetch <vault>.kdbx -o <file>` produces a standard KDBX
+  file, still encrypted by the master password, which any KDBX
+  application opens; or a second YubiKey: `yb --serial <S2> store
+  --encrypted --no-compress -n <vault>.kdbx <file>`.
+- **Restore:** store the backup onto a (new) YubiKey under the same name.
+
+### Later, depending on the discussion with KeePassXC
+
+- A C library wrapping `yb-core` (`extern "C"`, `cbindgen` header), for
+  calls in-process instead of a subprocess; it would add a Rust-built
+  dependency to KeePassXC's builds, and commit yb to a stable C
+  interface.
+- Machine-readable output (`--json`) in yb.
+- Extending Remote Sync instead; or reading yb's on-card format in C++.
+- A launcher outside KeePassXC, for users of an unmodified KeePassXC.
+- Recovery reminders; managing the master password from KeePassXC.
 
 ## Plan
 
-1. (Optional) Wait until the current yb update is merged into nixpkgs;
-   independent work.
-2. Spec and implement 0031 (rip-safe replace) in yb.
-3. Add the vault operations to `yb-core`, and their machine-readable
-   form to the `yb` command.
-4. Build path 1 (`yb-keepassxc`); use it daily, measure (sizes, fetch and
-   store times, write frequency, how often non-data changes cause a
-   write).
-5. Open a **draft** pull request to KeePassXC with a minimal path 2
-   (calling the `yb` command), explicitly a mock-up for discussion, not
-   for merging, stating the use of AI as their contribution guide
-   requires; open a feature request issue linking it, and mention it on
-   Matrix `#keepassxc-dev`.  Offer the C library as the alternative.
-6. Discuss with the KeePassXC team what to do next, with the prototype,
-   the mock-up and the measurements as the basis.
+1. ~~Rip-safe replace in yb (spec 0031).~~ Done, with the integrity,
+   exit-status and hardening specs 0032–0034, and spec 0037 (PIN and
+   payload on one standard input).
+2. Build the mock-up in a KeePassXC branch (`~/code/keepassxc`); use it
+   daily; measure.
+3. Open a **draft** pull request to KeePassXC, explicitly a mock-up for
+   discussion, not for merging, stating the use of AI as their
+   contribution guide requires; open a feature request linking it, and
+   mention it on Matrix `#keepassxc-dev`.  Offer the C library as the
+   alternative.
+4. Discuss with the KeePassXC team what to do next.
+5. (Optional, independent) the nixpkgs update carrying yb's new version.
 
 ## Open questions
 
-- How much store space is left after `yb format` with the default object
-  count, for vault-sized blobs?  Confirm the 32 KB example fits with room
-  to grow.
-- Write cost: time of a fetch and a store of 2, 10 and 22 KB.
-- The machine-readable form of the operations: `--json` on existing
-  commands (`yb ls`, `yb fsck`), or a dedicated `yb vault …` group?
-- How does `--pin-stdin` combine with `yb store` reading the payload from
-  standard input?  The integration stores from a file, avoiding the
-  question; to be confirmed and documented.
-- Path 1's configuration copy: which other KeePassXC settings must be
-  overridden or preserved (browser integration, SSH agent, Secret
-  Service)?  Running a second KeePassXC beside the user's usual one may
-  conflict with browser integration's socket.
-- Recovery reminder: is a `<vault>.backup` blob the right place for the
-  last-backup record?
-- After v0: should the integration offer to add or remove the master
-  password, and show its trade-offs at that moment?
+- Write cost on real hardware: a fetch and a store of 2, 10 and 22 KB.
+- Challenge-response and `yb` on the same YubiKey: do they coexist?
+- Windows (after the mock-up): device locations must escape
+  `QDir::toNativeSeparators` (`DatabaseTabWidget.cpp:161`, `:889`;
+  `MainWindow.cpp:1513`; `main.cpp:150`).
 
 ## References
 
 - KeePassXC: https://keepassxc.org/ and https://github.com/keepassxreboot/keepassxc
   (studied at `develop`, commit `9e0f57a`).
 - KDBX 4 format: https://keepass.info/help/kb/kdbx_4.html
+- Specs 0031–0034; `docs/invariants/`.
 - Spec 0028 — post-quantum protection of blobs.
-- Spec 0031 — rip-safe replace (to be written).
 - `docs/yubikey-nvm-internals.md` — measured PIV storage capacity.
-- README — store layout and capacity.
