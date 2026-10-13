@@ -772,9 +772,156 @@ mod fsck_tests {
         let verdict = check_blob_signature(head, &store, Some(&vk));
         assert_eq!(
             verdict,
-            SigVerdict::Unverified,
-            "legacy blob should be UNVERIFIED"
+            SigVerdict::Unsigned,
+            "legacy blob should be UNSIGNED (spec 0033)"
         );
+    }
+
+    // -- spec 0033: signed metadata, verified on fetch ----------------------
+
+    fn head_index(ctx: &Context, name: &str) -> u32 {
+        let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+        let idx = store
+            .objects
+            .iter()
+            .position(|o| o.is_head() && o.blob_name == name)
+            .unwrap();
+        idx as u32
+    }
+
+    fn fetch_to(ctx: &Context, name: &str) -> anyhow::Result<Vec<u8>> {
+        use yb::cli::fetch::{run as fetch_run, FetchArgs};
+        let out = TempDir::new().unwrap();
+        fetch_run(
+            ctx,
+            &FetchArgs {
+                patterns: vec![name.to_owned()],
+                stdout: false,
+                output: None,
+                output_dir: Some(out.path().to_owned()),
+                extract: false,
+            },
+        )?;
+        Ok(std::fs::read(out.path().join(name)).unwrap())
+    }
+
+    /// Renaming a blob (same length) breaks its v2 signature, which binds the
+    /// name; a v1 signature (payload only) did not notice.
+    #[test]
+    fn renamed_blob_is_corrupted_and_not_fetched() {
+        let ctx = setup_signed_store();
+        let idx = head_index(&ctx, "blob");
+        let mut raw = read_raw(&ctx, idx);
+        // The name starts at offset 0x17 in a head object: "blob" -> "clob".
+        assert_eq!(&raw[0x17..0x1B], b"blob");
+        raw[0x17] = b'c';
+        write_raw(&ctx, idx, &raw);
+
+        let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+        let head = store.objects.iter().find(|o| o.is_head()).unwrap();
+        assert_eq!(head.blob_name, "clob");
+        assert_eq!(
+            check_blob_signature(head, &store, Some(&verifying_key(&ctx))),
+            SigVerdict::Corrupted
+        );
+        let err = fetch_to(&ctx, "clob").unwrap_err();
+        assert!(format!("{err:#}").contains("tampered"), "{err:#}");
+    }
+
+    /// Tampered metadata (the modification time, bytes 0x0B..0x0F of the
+    /// head) breaks a v2 signature too.
+    #[test]
+    fn tampered_mtime_is_corrupted() {
+        let ctx = setup_signed_store();
+        let idx = head_index(&ctx, "blob");
+        let mut raw = read_raw(&ctx, idx);
+        raw[0x0B] ^= 0x01;
+        write_raw(&ctx, idx, &raw);
+        let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+        let head = store.objects.iter().find(|o| o.is_head()).unwrap();
+        assert_eq!(
+            check_blob_signature(head, &store, Some(&verifying_key(&ctx))),
+            SigVerdict::Corrupted
+        );
+        assert!(fetch_to(&ctx, "blob").is_err());
+    }
+
+    /// A tampered payload byte: fetch refuses, nothing is written.
+    #[test]
+    fn tampered_blob_is_not_fetched() {
+        let ctx = setup_signed_store();
+        let idx = head_index(&ctx, "blob");
+        let mut raw = read_raw(&ctx, idx);
+        let payload_at = 0x17 + "blob".len();
+        raw[payload_at] ^= 0x01;
+        write_raw(&ctx, idx, &raw);
+        assert!(fetch_to(&ctx, "blob").is_err());
+    }
+
+    /// A valid blob is fetched.
+    #[test]
+    fn signed_blob_is_fetched() {
+        let ctx = setup_signed_store();
+        assert_eq!(fetch_to(&ctx, "blob").unwrap(), b"the payload bytes");
+    }
+
+    /// A blob without a signature (older yb) is still fetched (spec 0033 G3).
+    #[test]
+    fn unsigned_blob_is_fetched() {
+        let ctx = setup_signed_store();
+        let idx = head_index(&ctx, "blob");
+        let mut raw = read_raw(&ctx, idx);
+        raw.truncate(0x17 + "blob".len() + b"the payload bytes".len());
+        write_raw(&ctx, idx, &raw);
+        let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+        let head = store.objects.iter().find(|o| o.is_head()).unwrap();
+        assert_eq!(
+            check_blob_signature(head, &store, Some(&verifying_key(&ctx))),
+            SigVerdict::Unsigned
+        );
+        assert_eq!(fetch_to(&ctx, "blob").unwrap(), b"the payload bytes");
+    }
+
+    /// A version 1 trailer (spec 0017: payload only) still verifies.
+    #[test]
+    fn v1_signature_still_verifies() {
+        use sha2::{Digest, Sha256};
+        let ctx = setup_signed_store();
+        let idx = head_index(&ctx, "blob");
+        let mut raw = read_raw(&ctx, idx);
+        let digest = Sha256::digest(b"the payload bytes");
+        let sig = ctx
+            .piv
+            .ecdsa_sign(&ctx.reader, 0x82, &digest, Some(PIN))
+            .unwrap();
+        let at = raw.len() - 65;
+        raw[at] = 0x01;
+        raw[at + 1..].copy_from_slice(&sig);
+        write_raw(&ctx, idx, &raw);
+        let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+        let head = store.objects.iter().find(|o| o.is_head()).unwrap();
+        assert_eq!(
+            check_blob_signature(head, &store, Some(&verifying_key(&ctx))),
+            SigVerdict::Verified
+        );
+    }
+
+    /// A store that cannot sign (no key in the slot) stores nothing.
+    #[test]
+    fn signing_failure_stores_nothing() {
+        use yb_core::{store_blob, Compression, Encryption, StoreOptions};
+        let piv = VirtualPiv::from_fixture_yaml(fixtures::DEFAULT).unwrap();
+        let reader = piv.reader_name();
+        let mgmt = "010203040506070801020304050607080102030405060708";
+        let mut store = Store::format(&reader, &piv, 4, 0x82, mgmt).unwrap();
+        let opts = StoreOptions {
+            encryption: Encryption::None,
+            compression: Compression::None,
+        };
+        let err = store_blob(&mut store, &piv, "x", b"data", opts, mgmt, None).unwrap_err();
+        assert!(format!("{err:#}").contains("nothing was stored"), "{err:#}");
+        let store = Store::from_device(&reader, &piv).unwrap();
+        assert!(yb_core::list_blobs(&store).is_empty());
     }
 }
 
@@ -2393,7 +2540,7 @@ mod guided_tests {
                  \n\
                  \x20 blob                           VERIFIED\n\
                  \n\
-                 Integrity: 1 verified, 0 unverified, 0 corrupted\n"
+                 Integrity: 1 verified, 0 unsigned, 0 corrupted\n"
             )
         );
     }

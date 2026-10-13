@@ -232,7 +232,7 @@ payload byte at offset `BLOB_SIZE` within the assembled chunk chain.
 ```
 Offset from BLOB_SIZE  Size  Field
 ─────────────────────  ────  ────────────────────────────────────────
-0                        1   SIG_VERSION = 0x01
+0                        1   SIG_VERSION = 0x01 or 0x02
 1                       32   SIG_R — r component, raw big-endian u256
 33                      32   SIG_S — s component, raw big-endian u256
 ```
@@ -244,7 +244,19 @@ bytes of free space after the payload, one additional continuation slot
 
 ### Signed data
 
-The signature covers:
+Version 2 (written since spec 0033) covers the blob's metadata and its
+bytes:
+
+```
+SHA-256( "yb-blob-sig-v2\0"
+       ‖ u8 BLOB_NAME_LEN ‖ BLOB_NAME
+       ‖ u8 BLOB_KEY_SLOT ‖ u8 C-bit (1 if compressed, else 0)
+       ‖ u32le BLOB_PLAIN_SIZE ‖ u32le BLOB_SIZE ‖ u32le BLOB_MTIME
+       ‖ payload_bytes[0 .. BLOB_SIZE] )
+```
+
+Version 1 (spec 0017; still verified, no longer written) covers the
+bytes only:
 
 ```
 SHA-256( payload_bytes[0 .. BLOB_SIZE] )

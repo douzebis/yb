@@ -433,6 +433,24 @@ head chunk).  For unencrypted blobs, `blob_key_slot == 0`.
 
 ---
 
+### Signatures (specs 0017, 0033)
+
+Trailer `ver ‖ r ‖ s` (65 bytes) after the stored bytes, possibly in a
+spill chunk.  Version 2 signs SHA-256 of `"yb-blob-sig-v2\0" ‖ u8
+len(name) ‖ name ‖ blob_key_slot ‖ is_compressed ‖ u32le plain_size ‖
+u32le blob_size ‖ u32le mtime ‖ stored bytes`; version 1 (spec 0017,
+still verified) signed the stored bytes only.  The signing key is the
+store's slot key; `store_blob` writes v2 only.
+
+`check_blob_signature(head, store, verifying_key)` returns `Verified`,
+`Unsigned` (no trailer, or yb0 zero padding), `Unverifiable` (no
+certificate to check with) or `Corrupted`.
+
+Threat model: protects against writers of PIV objects who cannot use the
+PIN; not against a PIN holder, who can sign anything.  No rollback
+protection: an older, genuinely signed store state is indistinguishable
+from the current one.
+
 ## 7. Orchestrator Operations
 
 ### `store_blob`
@@ -454,7 +472,9 @@ Signature: `store_blob(store, piv, name, payload, encryption, compression, manag
    mark age=1 as placeholder.
 9. Fill head object (all metadata fields including `is_compressed` → C-bit + first portion of payload).
 10. Fill continuation objects (payload only, no blob metadata).
-11. Append the signature trailer (spec 0017), possibly in a spill chunk.
+11. Append the signature trailer (version 2, spec 0033), possibly in a
+    spill chunk.  If signing fails, return the error: nothing has been
+    written yet.
 12. `store.sync_ordered`: continuation chunks first, head last.
 13. Reset the existing copy's chain, and `store.sync`.
 
@@ -465,6 +485,9 @@ Signature: `store_blob(store, piv, name, payload, encryption, compression, manag
 ### `fetch_blob`
 
 1. `store.find_head(name)` → head object or `None`.
+   (The CLI first checks every matched blob's signature with
+   `check_blob_signature`, below, and fetches nothing if one is
+   CORRUPTED.)
 2. Walk `store.chunk_chain(head.index)` collecting all payloads.
 3. Truncate to `head.blob_size` (trailing zeros in last object).
 4. If encrypted, call `hybrid_decrypt`; if unencrypted use raw bytes.
@@ -570,6 +593,8 @@ fixture's reader list when set).
 - `-o/--output FILE`: write to a specific file (single match only).
 - `-p/--stdout`: write to stdout (single match only).
 - `-x/--extract`: hidden, deprecated alias for `-O`.
+- Before any output, every matched blob's signature is verified (no PIN):
+  CORRUPTED → error, nothing fetched; UNSIGNED or UNVERIFIABLE → warning.
 
 ### `list`
 

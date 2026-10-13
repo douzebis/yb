@@ -12,6 +12,25 @@ All notable changes to yb are recorded here.  The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **`yb fetch` verifies signatures** before writing or decrypting
+  anything, without the PIN, and refuses a blob that is corrupted or was
+  tampered with, fetching nothing.  Unsigned blobs (written before 0.3)
+  are fetched with a warning (spec 0033).
+- **Signatures now cover the blob's name and metadata** (key slot,
+  compression, sizes, modification time), so blobs can no longer be
+  swapped between names or have their metadata altered unnoticed.  New
+  blobs get a version 2 signature; version 1 signatures still verify.
+- `yb ls` and `yb fsck` mark unsigned blobs `UNSIGNED` (formerly
+  "unverified", shown only by `fsck`); `fsck` prints "unsigned" in its
+  integrity summary.
+- `yb store` fails, storing nothing, if it cannot sign the blob; it used
+  to store it unsigned with a warning.
+- The README states what signatures protect against, and that yb has no
+  rollback protection; earlier design notes claimed replay protection
+  that no version provided.
+
 ### Fixed
 
 - **Replacing a blob was not safe against interruption** (since 0.3.0, the

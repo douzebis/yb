@@ -88,15 +88,16 @@ pub fn run(ctx: &Context, args: &ListArgs) -> Result<()> {
 
     let mut any_corrupted = false;
     for b in &blobs {
-        let corrupted = verdict_map
-            .get(b.name.as_str())
-            .map(|v| *v == SigVerdict::Corrupted)
-            .unwrap_or(false);
-        if corrupted {
+        let verdict = verdict_map.get(b.name.as_str()).copied();
+        if verdict == Some(SigVerdict::Corrupted) {
             any_corrupted = true;
         }
         let displayed_name = quote_name(&b.name);
-        let suffix = if corrupted { "  CORRUPTED" } else { "" };
+        let suffix = match verdict {
+            Some(SigVerdict::Corrupted) => "  CORRUPTED",
+            Some(SigVerdict::Unsigned) => "  UNSIGNED",
+            _ => "",
+        };
         if args.long {
             let enc_flag = if b.is_encrypted { '-' } else { 'P' };
             let date = format_mtime(b.mtime);

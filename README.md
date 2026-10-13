@@ -28,9 +28,10 @@ optionally encrypted with hardware-backed hybrid cryptography.
 - **Store** binary blobs under human-friendly names (files or stdin)
 - **Encrypt** data using hybrid ECDH + HKDF-SHA256 + AES-256-GCM, with the
   private key never leaving the YubiKey
-- **Sign** every stored blob with a P-256 ECDSA signature for tamper detection
-- **Integrity checking** in both `list` and `fsck` — CORRUPTED blobs are
-  flagged automatically, no PIN required
+- **Sign** every stored blob, its name and metadata included, with a P-256
+  ECDSA signature for tamper detection
+- **Integrity checking** in `fetch`, `list` and `fsck`, no PIN required —
+  `fetch` refuses a CORRUPTED blob; `list` and `fsck` flag it
 - **List**, **fetch**, and **remove** blobs by exact name or glob pattern
 - **Multiple YubiKeys** supported via `--serial`
 - **Management key kept on the YubiKey**, unlocked by the PIN: writes need
@@ -240,6 +241,25 @@ Decryption (`fetch`) reverses steps 2–4, again using the YubiKey for ECDH.
 
 Legacy blobs produced by the Python predecessor (AES-256-CBC) are still
 readable.
+
+### Signatures and what they protect against
+
+Every blob is signed with the same YubiKey key (P-256 ECDSA, which needs
+the PIN).  The signature covers the blob's name, its metadata (key slot,
+compression, sizes, modification time) and its stored bytes.  `yb fetch`
+checks it, using only the public certificate, before writing or
+decrypting anything, and refuses a blob whose signature does not match;
+`yb ls` and `yb fsck` mark such a blob CORRUPTED.
+
+This protects blobs against anyone who can write PIV objects but cannot
+use the PIN: corruption, a leaked or default management key, a tool
+writing objects directly.  It does not protect against someone who has the
+PIN, who can sign anything.  In particular, **yb offers no rollback
+protection**: a whole store restored to an older, genuinely signed state
+cannot be told apart from the current one by the YubiKey alone.
+
+Blobs written before yb 0.3 carry no signature: they are still fetched,
+with a warning, and marked UNSIGNED.  Storing such a blob again signs it.
 
 ---
 

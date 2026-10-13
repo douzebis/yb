@@ -14,7 +14,7 @@ mod compression;
 mod signature;
 mod types;
 
-pub use signature::{collect_blob_chain, SIG_TRAILER_LEN};
+pub use signature::{check_blob_signature, collect_blob_chain, SigVerdict, SIG_TRAILER_LEN};
 pub(crate) use types::BLOB_SIZE_C_BIT;
 pub use types::{BlobInfo, Compression, Encryption, StoreOptions};
 
@@ -158,8 +158,9 @@ pub fn store_blob(
         offset = end;
     }
 
-    // Append 65-byte signature trailer (spec 0017).
-    append_signature_trailer(store, piv, &data, pin);
+    // Append the 65-byte signature trailer (specs 0017, 0033); a failure
+    // stores nothing.
+    append_signature_trailer(store, piv, &data, pin)?;
 
     // Write the new copy: its continuation chunks (and signature spill
     // chunk) first, its head last, so that the head never reaches the card

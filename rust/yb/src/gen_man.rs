@@ -304,7 +304,13 @@ file in the current directory (or \fIOUTPUT_DIR\fR) using the blob name as
 the filename.
 .PP
 Use \fB\-\-stdout\fR or \fB\-\-output\fR when exactly one blob is selected and
-you need direct control over the destination."#,
+you need direct control over the destination.
+.PP
+Before anything is written or decrypted, each matched blob's signature is
+verified with the public key of the store's certificate (no PIN needed).
+If any blob is corrupted or was tampered with, \fByb fetch\fR fails and
+fetches nothing.  An unsigned blob (written by a yb version before 0.3)
+is fetched with a warning."#,
             r#".SH EXAMPLES
 .PP
 Fetch a single blob to the current directory:
@@ -349,8 +355,9 @@ and plaintext size.
 .PP
 Every blob's ECDSA signature is verified automatically (no PIN required).
 If a blob is CORRUPTED the word \fBCORRUPTED\fR is appended to its output
-line and \fByb list\fR exits with status 1.  Unverified blobs (older
-yb0/yb1 format without a signature trailer) are listed normally."#,
+line and \fByb list\fR exits with status 1.  Unsigned blobs (written by
+a yb version before 0.3, without a signature trailer) are marked
+\fBUNSIGNED\fR."#,
             r#".SH LONG FORMAT
 In long format each line contains:
 .TP
@@ -367,7 +374,8 @@ Size
 Plaintext size in bytes.
 .TP
 Name
-Blob name, followed by \fBCORRUPTED\fR if signature verification failed.
+Blob name, followed by \fBCORRUPTED\fR if signature verification failed,
+or \fBUNSIGNED\fR if the blob has no signature.
 Names containing characters outside the portable set
 \fBa\-z A\-Z 0\-9 . \- _ + , / :\fR are wrapped in POSIX single quotes
 so the marker is never ambiguous.
@@ -471,10 +479,10 @@ Store: <n> objects, slot 0x<xx>, age <n>
 Blobs: <n> stored, <n> objects free (~<n> bytes used by store)
 
   blob-name-1          VERIFIED
-  blob-name-2          UNVERIFIED
+  blob-name-2          UNSIGNED
   old-blob             CORRUPTED
 
-Integrity: <n> verified, <n> unverified, <n> corrupted
+Integrity: <n> verified, <n> unsigned, <n> corrupted
 .fi
 .RE
 .PP
@@ -483,11 +491,16 @@ Possible per-blob verdicts:
 \fBVERIFIED\fR
 ECDSA signature is present and cryptographically valid.
 .TP
-\fBUNVERIFIED\fR
-No signature trailer (older yb0/yb1 format) or certificate unreadable.
+\fBUNSIGNED\fR
+No signature trailer (written by a yb version before 0.3).
+.TP
+\fBUNVERIFIABLE\fR
+Signature present, but the store's key slot has no readable certificate
+to check it with.
 .TP
 \fBCORRUPTED\fR
-Signature present but verification failed, or payload is truncated.
+Signature present but verification failed (the blob's bytes or its
+metadata were altered), or payload is truncated.
 .PP
 With \fB\-\-nvm\fR, an additional NVM breakdown line is printed after the
 integrity summary, showing bytes attributed to the yb store, to other

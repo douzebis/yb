@@ -22,22 +22,25 @@ pub(super) fn append_signature_trailer(
     piv: &dyn PivBackend,
     payload: &[u8],
     pin: Option<&str>,
-) {
-    let digest = Sha256::digest(payload);
+) -> anyhow::Result<()> {
+    // The head just built: the one with the highest age.
+    let head = store
+        .objects
+        .iter()
+        .filter(|o| o.is_head())
+        .max_by_key(|o| o.age)
+        .expect("store_blob built a head");
+    let digest = signed_digest_v2(head, payload);
 
-    let raw_sig = match piv.ecdsa_sign(&store.reader, store.store_key_slot, &digest, pin) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!(
-                "yb: warning: ECDSA sign failed, storing blob without integrity signature: {e}"
-            );
-            return;
-        }
-    };
+    // A blob is never stored unsigned (spec 0033): signing fails the store,
+    // before anything is written.
+    let raw_sig = piv
+        .ecdsa_sign(&store.reader, store.store_key_slot, &digest, pin)
+        .map_err(|e| anyhow::anyhow!("signing the blob failed; nothing was stored: {e:#}"))?;
 
     // Build the 65-byte trailer.
     let mut trailer = [0u8; SIG_TRAILER_LEN];
-    trailer[0] = 0x01; // SIG_VERSION
+    trailer[0] = SIG_V2;
     trailer[1..33].copy_from_slice(&raw_sig[0..32]); // r
     trailer[33..65].copy_from_slice(&raw_sig[32..64]); // s
 
@@ -62,9 +65,9 @@ pub(super) fn append_signature_trailer(
         store.objects[last_idx as usize].dirty = true;
     } else {
         // Need a spill slot.  Check there is a free slot available.
+        // objects_needed counts this chunk (spec 0031); a missing one is a bug.
         if store.free_count() == 0 {
-            eprintln!("yb: warning: store full, cannot add signature spill slot — storing blob without integrity signature");
-            return;
+            anyhow::bail!("no room for the signature trailer; nothing was stored");
         }
         // Fill the remaining space in the last slot.
         store.objects[last_idx as usize]
@@ -88,6 +91,7 @@ pub(super) fn append_signature_trailer(
         store.objects[last_idx as usize].next_chunk = spill_idx;
         store.objects[last_idx as usize].dirty = true;
     }
+    Ok(())
 }
 
 /// Walk the chunk chain and return the index of the last slot.
@@ -146,4 +150,100 @@ pub fn collect_blob_chain(
     };
 
     (payload, trailing, has_supernumerary_slot)
+}
+
+// ---------------------------------------------------------------------------
+// Signature verdicts (specs 0017, 0033)
+// ---------------------------------------------------------------------------
+
+/// Signature trailer of spec 0017: SHA-256 of the stored bytes only.
+const SIG_V1: u8 = 0x01;
+/// Signature trailer of spec 0033: SHA-256 of the metadata and the stored
+/// bytes ([`signed_digest_v2`]).
+const SIG_V2: u8 = 0x02;
+/// Domain separation for version 2 signatures.
+const SIG_V2_TAG: &[u8] = b"yb-blob-sig-v2\0";
+
+/// What a blob's signature trailer says (specs 0017, 0033).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SigVerdict {
+    /// A valid signature (version 1 or 2).
+    Verified,
+    /// No signature: written by a yb version before spec 0017.
+    Unsigned,
+    /// Signed, but the slot has no certificate to check it against.
+    Unverifiable,
+    /// A signature that does not verify, or a damaged chain.
+    Corrupted,
+}
+
+impl std::fmt::Display for SigVerdict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            SigVerdict::Verified => "VERIFIED",
+            SigVerdict::Unsigned => "UNSIGNED",
+            SigVerdict::Unverifiable => "UNVERIFIABLE",
+            SigVerdict::Corrupted => "CORRUPTED",
+        })
+    }
+}
+
+/// The digest a version 2 signature signs: the blob's metadata and its
+/// stored (possibly compressed, possibly encrypted) bytes, so that a blob
+/// cannot be renamed, or its metadata altered, without breaking it.
+fn signed_digest_v2(head: &Object, stored: &[u8]) -> [u8; 32] {
+    let name = head.blob_name.as_bytes();
+    let mut h = Sha256::new();
+    h.update(SIG_V2_TAG);
+    h.update([name.len() as u8]); // names are at most 255 bytes
+    h.update(name);
+    h.update([head.blob_key_slot, u8::from(head.is_compressed)]);
+    h.update(head.blob_plain_size.to_le_bytes());
+    h.update(head.blob_size.to_le_bytes());
+    h.update(head.blob_mtime.to_le_bytes());
+    h.update(stored);
+    h.finalize().into()
+}
+
+/// Check the signature of the blob whose head is `head`, with the public
+/// key of the store slot's certificate (no PIN needed).
+pub fn check_blob_signature(
+    head: &Object,
+    store: &Store,
+    verifying_key: Option<&p256::ecdsa::VerifyingKey>,
+) -> SigVerdict {
+    use p256::ecdsa::{signature::hazmat::PrehashVerifier, Signature};
+
+    let blob_size = head.blob_size as usize;
+    let (payload, trailing, has_supernumerary) = collect_blob_chain(head, store);
+    if payload.len() + trailing.len() < blob_size {
+        return SigVerdict::Corrupted;
+    }
+    // No trailer, or zero padding (yb0 fixed-size slots): unsigned, unless
+    // the padding is not zeros or occupies a slot of its own.
+    let zero_padding = trailing.iter().all(|&b| b == 0);
+    if trailing.is_empty() || trailing.len() != SIG_TRAILER_LEN || trailing[0] == 0x00 {
+        return if trailing.is_empty() || (zero_padding && !has_supernumerary) {
+            SigVerdict::Unsigned
+        } else {
+            SigVerdict::Corrupted
+        };
+    }
+    let digest: [u8; 32] = match trailing[0] {
+        SIG_V1 => Sha256::digest(&payload).into(),
+        SIG_V2 => signed_digest_v2(head, &payload),
+        _ => return SigVerdict::Corrupted,
+    };
+    let Some(vk) = verifying_key else {
+        return SigVerdict::Unverifiable;
+    };
+    let mut raw = [0u8; 64];
+    raw.copy_from_slice(&trailing[1..SIG_TRAILER_LEN]);
+    let Ok(sig) = Signature::from_der(&crate::crypto::raw_ecdsa_to_der(&raw)) else {
+        return SigVerdict::Corrupted;
+    };
+    match vk.verify_prehash(&digest, &sig) {
+        Ok(()) => SigVerdict::Verified,
+        Err(_) => SigVerdict::Corrupted,
+    }
 }

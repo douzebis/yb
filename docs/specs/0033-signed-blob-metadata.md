@@ -6,9 +6,9 @@ SPDX-License-Identifier: MIT
 
 # 0033 — Signed Blob Metadata, Verified on Fetch
 
-**Status:** draft
+**Status:** implemented
 **App:** yb
-**Implemented in:** <!-- YYYY-MM-DD, fill after implementation -->
+**Implemented in:** 2026-10-13
 
 ## Problem
 

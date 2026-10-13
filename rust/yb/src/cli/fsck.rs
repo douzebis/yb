@@ -107,7 +107,8 @@ fn check_store(ctx: &Context, args: &FsckArgs, store: &Store, out: &mut dyn Writ
 
     // Per-blob signature verdicts.
     let mut sig_verified = 0usize;
-    let mut sig_unverified = 0usize;
+    let mut sig_unsigned = 0usize;
+    let mut sig_unverifiable = 0usize;
     let mut sig_corrupted = 0usize;
 
     let mut blob_verdicts: Vec<(&Object, SigVerdict)> = Vec::new();
@@ -115,7 +116,8 @@ fn check_store(ctx: &Context, args: &FsckArgs, store: &Store, out: &mut dyn Writ
         let verdict = check_blob_signature(head, store, verifying_key.as_ref());
         match verdict {
             SigVerdict::Verified => sig_verified += 1,
-            SigVerdict::Unverified => sig_unverified += 1,
+            SigVerdict::Unsigned => sig_unsigned += 1,
+            SigVerdict::Unverifiable => sig_unverifiable += 1,
             SigVerdict::Corrupted => sig_corrupted += 1,
         }
         blob_verdicts.push((head, verdict));
@@ -158,9 +160,15 @@ fn check_store(ctx: &Context, args: &FsckArgs, store: &Store, out: &mut dyn Writ
         writeln!(out)?;
         writeln!(
             out,
-            "Integrity: {} verified, {} unverified, {} corrupted",
-            sig_verified, sig_unverified, sig_corrupted
+            "Integrity: {} verified, {} unsigned, {} corrupted",
+            sig_verified, sig_unsigned, sig_corrupted
         )?;
+        if sig_unverifiable > 0 {
+            writeln!(
+                out,
+                "  {sig_unverifiable} signed blob(s) not checked: no certificate in the store's key slot"
+            )?;
+        }
     }
 
     // NVM breakdown — only when --nvm is requested.

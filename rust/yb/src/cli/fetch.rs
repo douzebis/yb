@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use yb_core::orchestrator;
 use yb_core::{store::Store, Context, SecretOp};
 
-use crate::cli::util::resolve_patterns;
+use crate::cli::util::{check_blob_signature, resolve_patterns, SigVerdict};
 use crate::complete::complete_blob_names;
 
 #[derive(Args, Debug)]
@@ -68,7 +68,34 @@ pub fn run(ctx: &Context, args: &FetchArgs) -> Result<()> {
         );
     }
 
+    // Signatures are checked against the slot's certificate (no PIN) before
+    // any decryption (spec 0033).
+    let verifying_key = ctx
+        .piv
+        .read_certificate(&ctx.reader, store.store_key_slot)
+        .ok()
+        .and_then(|cert_der| yb_core::parse_ec_public_key_from_cert_der(&cert_der).ok())
+        .map(|pk| p256::ecdsa::VerifyingKey::from(&pk));
+
     for name in &matched {
+        if let Some(head) = store.find_head(name) {
+            match check_blob_signature(head, &store, verifying_key.as_ref()) {
+                SigVerdict::Verified => {}
+                SigVerdict::Corrupted => bail!(
+                    "blob '{name}' is corrupted or was tampered with: its signature does \
+                     not verify; nothing was fetched"
+                ),
+                SigVerdict::Unsigned => eprintln!(
+                    "Warning: blob '{name}' has no signature (stored by an older yb); \
+                     its integrity cannot be checked"
+                ),
+                SigVerdict::Unverifiable => eprintln!(
+                    "Warning: blob '{name}' could not be checked: no certificate in slot \
+                     0x{:02x}",
+                    store.store_key_slot
+                ),
+            }
+        }
         let pin = ctx.require_pin()?;
         let data = orchestrator::fetch_blob(
             &store,
