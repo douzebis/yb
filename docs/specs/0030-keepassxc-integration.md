@@ -479,9 +479,15 @@ goes through the same `Database` functions).  About 125 call sites:
   hence a write; with it on, it saves silently at lock (`:2114-2117`).
   Neither suits a device: a device database never saves for non-data
   changes alone (G7).
-- **Two uses of the YubiKey:** a vault that also uses KeePassXC's YubiKey
-  challenge-response would reach the YubiKey from KeePassXC (OTP
-  application) and from `yb` (PIV) during the same unlock; to be tried.
+- **Two uses of the YubiKey:** KeePassXC never accesses the YubiKey for
+  the vault (everything goes through `yb`), but a vault may also use
+  KeePassXC's own YubiKey challenge-response (OTP application, an
+  existing feature, unchanged).  They coexist: over USB, KeePassXC skips
+  PC/SC readers named "YubiKey" and uses the YubiKey's HID interface
+  (`src/keys/drivers/YubiKeyInterfacePCSC.cpp:571`), while `yb` uses
+  PC/SC (CCID); over NFC both use PC/SC in shared mode, each selecting its
+  application.  The combination is redundant (the same YubiKey becomes a
+  factor twice), which the documentation says.
 - An unrelated existing bug: `DatabaseWidget::saveAs()` always returns
   false (`DatabaseWidget.cpp:2575`, `bool ok = false;` never set), so
   "Save As" never updates the recent-databases list.  Worth reporting to
@@ -533,7 +539,6 @@ goes through the same `Database` functions).  About 125 call sites:
 
 ## Open questions
 
-- Challenge-response and `yb` on the same YubiKey: do they coexist?
 - Windows (after the mock-up): device locations must escape
   `QDir::toNativeSeparators` (`DatabaseTabWidget.cpp:161`, `:889`;
   `MainWindow.cpp:1513`; `main.cpp:150`).
