@@ -93,9 +93,11 @@ The two binaries test different things:
   it), and GET METADATA (answered "not supported", as by firmware < 5.3).
   Without vpcd the tests skip, unless `YB_REQUIRE_VSC` is set (the VM test
   sets it): then they fail, so a broken setup cannot pass silently.
-- `yb_cli_tests` runs the packaged `yb` binary (`YB_BIN`) as a subprocess with
-  `YB_FIXTURE` pointing at a file: yb then uses its in-memory simulated card,
-  not PC/SC.  These tests cover the command line (arguments, prompts, exit
+- `yb_cli_tests` runs a `yb` binary built with the `test-fixture` feature
+  (`YB_BIN`; in the VM test, built in the harness derivation) as a
+  subprocess with `YB_FIXTURE` pointing at a file: yb then uses its
+  in-memory simulated card, not PC/SC.  The packaged `yb` ignores
+  `YB_FIXTURE` (spec 0034 G3), which the VM test checks.  These tests cover the command line (arguments, prompts, exit
   codes, messages).
 
 The two test programs (`hardware_piv_tests`, `yb_cli_tests`) are binaries of

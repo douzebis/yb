@@ -236,6 +236,32 @@ pub trait PivBackend: Send + Sync {
     }
 }
 
+/// The simulated YubiKey file named by `YB_FIXTURE`, in builds with the
+/// `test-fixture` feature only (spec 0034 G3).  Without it, always `None`:
+/// the variable is ignored, and yb uses real YubiKeys.
+pub fn fixture_path() -> Option<std::path::PathBuf> {
+    fixture_path_from(std::env::var_os("YB_FIXTURE"))
+}
+
+/// [`fixture_path`], given the variable's value.
+fn fixture_path_from(var: Option<std::ffi::OsString>) -> Option<std::path::PathBuf> {
+    if cfg!(feature = "test-fixture") {
+        var.map(std::path::PathBuf::from)
+    } else {
+        None
+    }
+}
+
+/// The PIV backend yb uses: the simulated YubiKey of [`fixture_path`], if
+/// any, otherwise the real YubiKeys.
+pub fn open_backend() -> Result<std::sync::Arc<dyn PivBackend>> {
+    #[cfg(feature = "test-fixture")]
+    if let Some(path) = fixture_path() {
+        return Ok(std::sync::Arc::new(VirtualPiv::from_fixture(&path)?));
+    }
+    Ok(std::sync::Arc::new(hardware::HardwarePiv::new()))
+}
+
 /// Present wrong values until the card reports the PIN or PUK blocked
 /// (`SW 6983`).  A "wrong" value that turns out to be the right one is
 /// replaced by the next.
@@ -255,4 +281,17 @@ fn block_reference(mut attempt: impl FnMut(&str) -> Result<()>) -> Result<()> {
         }
     }
     anyhow::bail!("could not block the PIN or PUK before the PIV reset")
+}
+
+#[cfg(test)]
+mod fixture_tests {
+    /// Spec 0034 G3: honored with the feature, ignored without it.  Run
+    /// both ways: `cargo test -p yb-core` (without) and with
+    /// `--features test-fixture`.
+    #[test]
+    fn fixture_path_follows_the_feature() {
+        let got = super::fixture_path_from(Some("card.yaml".into()));
+        assert_eq!(got.is_some(), cfg!(feature = "test-fixture"));
+        assert_eq!(super::fixture_path_from(None), None);
+    }
 }

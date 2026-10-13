@@ -11,7 +11,7 @@ use yb::{Cli, Commands};
 use yb_core::{
     context::OutputOptions,
     errors::{render, RenderEnv},
-    Context, ContextOptions, DeviceInfo, DevicePicker, PivBackend,
+    Context, ContextOptions, DeviceInfo, DevicePicker, PivBackend, Zeroizing,
 };
 
 /// Firmware of the selected YubiKey, once known.  Only the report for
@@ -103,8 +103,8 @@ fn run(cli: Cli) -> Result<()> {
         Commands::SelfTest(args) => cli::self_test::run(&mut ctx, &args),
     };
 
-    if let Ok(path) = std::env::var("YB_FIXTURE") {
-        ctx.piv.save_fixture(std::path::Path::new(&path))?;
+    if let Some(path) = yb_core::fixture_path() {
+        ctx.piv.save_fixture(&path)?;
     }
 
     result
@@ -179,14 +179,12 @@ fn make_pin_resolver(
     ))
 }
 
-fn resolve_management_key(key_deprecated: Option<String>) -> Option<String> {
+/// The management key from `--key` or `YB_MANAGEMENT_KEY`, held in
+/// zeroizing memory from here on (spec 0034 G1).
+fn resolve_management_key(key_deprecated: Option<String>) -> Option<Zeroizing<String>> {
     if let Some(k) = key_deprecated {
-        return Some(k);
+        return Some(Zeroizing::new(k));
     }
-    if let Ok(v) = std::env::var("YB_MANAGEMENT_KEY") {
-        if !v.is_empty() {
-            return Some(v);
-        }
-    }
-    None
+    let v = Zeroizing::new(std::env::var("YB_MANAGEMENT_KEY").ok()?);
+    (!v.is_empty()).then_some(v)
 }

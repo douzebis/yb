@@ -65,8 +65,8 @@ automatically split across multiple objects (chunk chaining); the number of
 objects can be tuned at format time (\fB\-\-object\-count\fR).
 .PP
 All write operations (\fBformat\fR, \fBstore\fR, \fBremove\fR) require both the
-PIV PIN and the PIV management key.  \fBfetch\fR requires the PIN for
-encrypted blobs.  \fBlist\fR and \fBfsck\fR never require a PIN (except
+PIV PIN and the PIV management key.  \fBfetch\fR asks for the PIN only
+when a matched blob is encrypted.  \fBlist\fR and \fBfsck\fR never require a PIN (except
 \fBfsck \-\-check\-key\fR) — they verify blob integrity using only the
 public key from the store's X.509 certificate."#,
             r#".SH ENVIRONMENT
@@ -371,7 +371,8 @@ Every blob's ECDSA signature is verified automatically (no PIN required).
 If a blob is CORRUPTED the word \fBCORRUPTED\fR is appended to its output
 line and \fByb list\fR exits with status 1.  Unsigned blobs (written by
 a yb version before 0.3, without a signature trailer) are marked
-\fBUNSIGNED\fR."#,
+\fBUNSIGNED\fR, and blobs encrypted with the legacy, unauthenticated
+AES-CBC scheme of older versions \fBLEGACY\fR (store them again)."#,
             r#".SH LONG FORMAT
 In long format each line contains:
 .TP
@@ -389,7 +390,8 @@ Plaintext size in bytes.
 .TP
 Name
 Blob name, followed by \fBCORRUPTED\fR if signature verification failed,
-or \fBUNSIGNED\fR if the blob has no signature.
+or \fBUNSIGNED\fR if the blob has no signature and \fBLEGACY\fR if it
+uses the legacy AES-CBC encryption.
 Names containing characters outside the portable set
 \fBa\-z A\-Z 0\-9 . \- _ + , / :\fR are wrapped in POSIX single quotes
 so the marker is never ambiguous.
@@ -515,6 +517,15 @@ to check it with.
 \fBCORRUPTED\fR
 Signature present but verification failed (the blob's bytes or its
 metadata were altered), or payload is truncated.
+.PP
+A verdict may be followed by \fBLEGACY\fR: the blob is encrypted with the
+legacy, unauthenticated AES-CBC scheme of older versions; storing it again
+encrypts it with AES-GCM.
+.PP
+\fBfsck\fR also reports, as an error, an object that records another
+object count than the store's (it does not belong to the store, and yb
+ignores it), and warns when the store's 24-bit age counter nears its end
+(stores then fail; reformatting resets it).
 .PP
 With \fB\-\-nvm\fR, an additional NVM breakdown line is printed after the
 integrity summary, showing bytes attributed to the yb store, to other

@@ -307,6 +307,11 @@ impl Object {
         self.age
     }
 
+    /// The store's object count, as this object records it.
+    pub fn object_count(&self) -> u8 {
+        self.object_count
+    }
+
     pub fn chunk_pos(&self) -> u8 {
         self.chunk_pos
     }
@@ -356,6 +361,9 @@ pub struct Store {
     /// Highest age seen across all objects; new objects get age = store_age + 1.
     pub store_age: u32,
 }
+
+/// The highest age an object can record: the age field has 24 bits.
+pub const MAX_AGE: u32 = 0xFF_FFFF;
 
 impl Store {
     /// Read all objects from the device and construct a Store, discarding
@@ -461,6 +469,7 @@ impl Store {
                 return false;
             };
             if obj.is_empty()
+                || obj.object_count != self.object_count
                 || obj.chunk_pos == 0
                 || Some(obj.chunk_pos) != pos.checked_add(1)
                 || head.age.checked_add(u32::from(obj.chunk_pos)) != Some(obj.age)
@@ -481,6 +490,11 @@ impl Store {
         // name -> (head index, age)
         let mut kept: HashMap<String, (u8, u32)> = HashMap::new();
         for obj in self.objects.iter().filter(|o| o.is_head()) {
+            // An object recording another object count than object 0 does
+            // not belong to this store (spec 0034 G7).
+            if obj.object_count != self.object_count {
+                continue;
+            }
             if !self.chain_is_complete(obj.index) {
                 continue;
             }
@@ -622,6 +636,24 @@ impl Store {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs() as u32)
             .unwrap_or(0)
+    }
+
+    /// Fail, before anything is written, if writing `count` more objects
+    /// would push an age beyond the 24 bits of the age field, where it
+    /// would wrap to 0, "empty" (spec 0034 G6).
+    pub fn ensure_age_room(&self, count: usize) -> Result<()> {
+        if u64::from(self.store_age) + count as u64 > u64::from(MAX_AGE) {
+            return Err(crate::errors::YbError::new(
+                "this store's age counter is exhausted: it cannot record more writes",
+            )
+            .why(format!(
+                "ages are 24-bit, and the store is at age {}",
+                self.store_age
+            ))
+            .fix("fetch the blobs, run `yb format` (which resets the ages), store them again")
+            .into());
+        }
+        Ok(())
     }
 
     /// Bump the store age and return the new value for a new chunk.

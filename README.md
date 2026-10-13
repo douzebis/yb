@@ -239,8 +239,10 @@ yb uses a **hybrid encryption scheme**:
 
 Decryption (`fetch`) reverses steps 2–4, again using the YubiKey for ECDH.
 
-Legacy blobs produced by the Python predecessor (AES-256-CBC) are still
-readable.
+Legacy blobs produced by the Python predecessor (AES-256-CBC, without
+authentication) are still readable; `yb fetch` warns about them, and
+`yb ls` and `yb fsck` mark them LEGACY.  Storing them again encrypts them
+with AES-256-GCM.
 
 ### Signatures and what they protect against
 
@@ -312,7 +314,10 @@ YubiKey**: it is replaced with a random value stored on the YubiKey itself,
 which only your PIN unlocks.  You then never need to keep or type the
 management key: yb reads it when a write needs it (no `YB_MANAGEMENT_KEY`).
 This is a convenience, not extra security.  ykman calls this "PIN-protected"
-mode.
+mode.  As with ykman, the key is read into the computer's memory for the
+write that needs it: PIV authenticates the management key on the host side,
+so it cannot stay on the YubiKey.  yb holds it in memory that is
+overwritten when the write is done.
 
 The guided `yb format` always sets it up.  From a script, at format time
 (`--protect` keeps a key that is already stored on the YubiKey):

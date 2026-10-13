@@ -48,6 +48,9 @@ pub struct BlobInfo {
     pub encrypted_size: u32,
     pub plain_size: u32,
     pub is_encrypted: bool,
+    /// Encrypted with the legacy, unauthenticated AES-CBC scheme (before
+    /// spec 0006).
+    pub is_legacy_encryption: bool,
     /// Modification time as a Unix timestamp (seconds since epoch).
     pub mtime: u32,
     pub chunk_count: usize,

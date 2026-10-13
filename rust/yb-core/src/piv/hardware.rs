@@ -179,7 +179,9 @@ impl PivBackend for HardwarePiv {
         new_key_hex: &str,
         algo: MgmtAlgo,
     ) -> Result<()> {
-        let new_bytes = hex::decode(new_key_hex).context("decoding new management key")?;
+        let new_bytes = zeroize::Zeroizing::new(
+            hex::decode(new_key_hex).context("decoding new management key")?,
+        );
         algo.check_key_len(&new_bytes)?;
         let mut session = PcscSession::open(reader)?;
         session.authenticate_management_key(old_key_hex)?;

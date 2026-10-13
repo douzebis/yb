@@ -94,9 +94,11 @@ pub fn store_blob(
     // (spec 0031): the new copy, signature trailer included, goes into
     // objects that are free now, so a YubiKey pulled out mid-write leaves
     // the old copy intact.
-    if store.free_count() < objects_needed(data.len(), name_len, store.object_size) {
+    let needed = objects_needed(data.len(), name_len, store.object_size);
+    if store.free_count() < needed {
         return Ok(false);
     }
+    store.ensure_age_room(needed)?;
     let old_chain: Vec<u8> = store
         .find_head(name)
         .map(|head| store.chunk_chain(head.index))
@@ -181,6 +183,12 @@ pub fn store_blob(
 // ---------------------------------------------------------------------------
 // fetch_blob
 // ---------------------------------------------------------------------------
+
+/// Whether the blob of `head` is encrypted with the legacy, unauthenticated
+/// AES-CBC scheme (before spec 0006); its first stored bytes are in the head.
+pub fn uses_legacy_encryption(head: &Object) -> bool {
+    head.is_encrypted() && crypto::is_legacy_ciphertext(head.payload())
+}
 
 /// Fetch a blob by name.  Returns None if not found.
 pub fn fetch_blob(
@@ -286,6 +294,7 @@ pub fn list_blobs(store: &Store) -> Vec<BlobInfo> {
                 encrypted_size: head.blob_size,
                 plain_size: head.blob_plain_size,
                 is_encrypted: head.is_encrypted(),
+                is_legacy_encryption: uses_legacy_encryption(head),
                 mtime: head.blob_mtime,
                 chunk_count: chain.len(),
             }

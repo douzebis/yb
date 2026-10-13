@@ -67,7 +67,9 @@ rustPlatform.buildRustPackage (finalAttrs: {
   passthru = {
     # The tier-2 test binaries (hardware_piv_tests, yb_cli_tests), run by the
     # NixOS VM test against a virtual smart card.  They reuse this package's
-    # source and vendored dependencies.
+    # source and vendored dependencies.  Also a yb built with the
+    # test-fixture feature, which honors YB_FIXTURE (a simulated YubiKey,
+    # for yb_cli_tests); the packaged yb ignores it.  Kept out of PATH.
     ybPivHarnessTests = rustPlatform.buildRustPackage {
       pname = "yb-piv-harness-tests";
       inherit (finalAttrs)
@@ -79,8 +81,12 @@ rustPlatform.buildRustPackage (finalAttrs: {
 
       buildAndTestSubdir = "rust/yb-piv-harness";
       cargoBuildFlags = [
+        "-p"
+        "yb-piv-harness"
+        "-p"
+        "yb"
         "--features"
-        "integration-tests"
+        "yb-piv-harness/integration-tests,yb/test-fixture"
       ];
 
       nativeBuildInputs = [
@@ -89,6 +95,12 @@ rustPlatform.buildRustPackage (finalAttrs: {
         rustPlatform.bindgenHook
       ];
       buildInputs = lib.optionals stdenv.hostPlatform.isLinux [ pcsclite ];
+
+      postInstall = ''
+        mkdir -p $out/libexec
+        mv $out/bin/yb $out/libexec/yb-test-fixture
+        rm $out/bin/yb-gen-man
+      '';
 
       doCheck = false;
     };

@@ -6,9 +6,9 @@ SPDX-License-Identifier: MIT
 
 # 0034 — Secrets Hygiene and Hardening
 
-**Status:** draft
+**Status:** implemented
 **App:** yb
-**Implemented in:** <!-- YYYY-MM-DD, fill after implementation -->
+**Implemented in:** 2026-10-13
 
 ## Problem
 
@@ -51,12 +51,12 @@ findings 1.2 and 1.3) found several smaller weaknesses, each unrecorded:
 - **G3 — No simulated card outside tests.**  Support for `YB_FIXTURE` is a
   Cargo feature, `test-fixture`, off by default in every build (release
   and debug); only the test harnesses that need it turn it on.  A `yb`
-  built without it refuses to run when `YB_FIXTURE` is set, saying that
-  this build has no simulated-card support, so that a stray variable
-  never goes unnoticed.
+  built without it ignores `YB_FIXTURE` completely: commands and
+  completion behave as if it were not set (decided 2026-10-13).
 - **G4 — Legacy ciphertext flagged.**  Fetching a pre-0006 (AES-CBC) blob
-  works, with a warning recommending to store it again; `yb fsck` and
-  `yb ls -l` flag such blobs.
+  works, with a warning recommending to store it again; `yb ls` (short and
+  long formats) and `yb fsck` mark such blobs `LEGACY`, in the style of
+  `UNSIGNED` (spec 0033); `CORRUPTED` takes precedence.
 - **G5 — PIN only when needed.**  `yb fetch` asks for the PIN only if a
   matched blob is encrypted (or, after spec 0033, if verification needs
   it: it does not, the certificate suffices).
@@ -93,16 +93,33 @@ To be completed after the open questions.  Sketch:
   `yb_cli_tests` against a `yb` built with the feature, from the same
   source, inside the harness derivation, instead of the packaged binary:
   a change to the staged nixpkgs files, shipped with the next release.
-- Legacy CBC: decrypt as today; warning on stderr; `ls -l` flag.
-- `fetch`: `require_pin` only for encrypted matches.
+- Legacy CBC: decrypt as today; warning on stderr; `LEGACY` suffix in
+  `ls`, verdict and count in `fsck`.  Recognized without decryption: an
+  encrypted blob whose stored bytes start with `0x04` (spec 0006).
+- `fetch`: `require_pin` only for encrypted matches.  (Found while
+  implementing: `fetch` also verifies every match before writing any, as
+  spec 0033 G2 requires; it used to interleave checks and writes.)
 - `next_age`: refuse beyond `0xFF_FFFF`; `fsck` warns beyond 90%.
 - `from_device_raw`: mismatching `object_count` → object treated as empty
   by `sanitize`, reported by `fsck`.
 
+### Tests
+
+- G1: `management_key_is_held_in_zeroizing_memory` (types).
+- G3: `fixture_path_follows_the_feature` (yb-core, run with and without
+  the feature); the NixOS VM test runs the packaged `yb` with
+  `YB_FIXTURE` set to a nonexistent file and expects success.
+- G4: `legacy_cbc_blob_is_fetched_and_flagged`.
+- G5: `fetch_asks_for_the_pin_only_for_encrypted_blobs`.
+- G6: `store_refused_when_ages_run_out`.
+- G7: `foreign_object_is_ignored_and_reported`.
+
 ## Open questions
 
 None.  Decided on 2026-10-13: `YB_FIXTURE` compiled out of every build
-by default (G3); `--pin` and `--key` kept for now (Non-goals).
+by default, and then ignored (G3); `--pin` and `--key` kept for now
+(Non-goals); `LEGACY` marker (G4); the VM test's `yb` built with
+`test-fixture` in the harness derivation (Specification).
 
 ## References
 

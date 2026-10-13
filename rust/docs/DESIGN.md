@@ -95,9 +95,10 @@ pub struct Context {
 
 **Device selection** (`Context::new`):
 
-1. If `YB_FIXTURE` env var is set (and the `virtual-piv` feature is
-   compiled in), a `VirtualPiv` is loaded from that YAML file instead
-   of opening a hardware card.  This is the test escape hatch.
+1. If `YB_FIXTURE` env var is set, in a build with the `test-fixture`
+   feature (tests only; spec 0034 G3), a `VirtualPiv` is loaded from that
+   YAML file instead of opening a hardware card (`yb_core::open_backend`).
+   Without the feature the variable is ignored.
 2. `HardwarePiv::list_devices()` (or `VirtualPiv::list_devices()`)
    enumerates available devices.
 3. If `--serial` is given, select that device; if `--reader` is given,
@@ -163,7 +164,7 @@ pub trait PivBackend: Send + Sync {
 ```
 
 `save_fixture` is called by `main.rs` after every successful command
-when `YB_FIXTURE` is set.  This allows subprocess tests to share
+when `YB_FIXTURE` is honored (`yb_core::fixture_path`).  This allows subprocess tests to share
 `VirtualPiv` state across process boundaries: `yb format` writes keys
 and objects, `save_fixture` serializes them back to the YAML file, and
 the next `yb store` invocation loads that updated state.
@@ -495,7 +496,8 @@ Signature: `store_blob(store, piv, name, payload, encryption, compression, manag
    `YBr\x01` prefix → strip prefix + brotli decompress;
    `\xFD7zXZ\x00` → xz decompress; anything else → error.
 
-PIN is required for encrypted blobs; `fetch_blob` errors out if
+PIN is required for encrypted blobs only, and `yb fetch` asks for it only
+then (spec 0034 G5); `fetch_blob` errors out if
 `pin.is_none()` and the blob is encrypted.
 
 ### `remove_blobs`, `remove_blob`
@@ -548,8 +550,8 @@ The `chrono` feature adds `BlobInfo::mtime_local() -> chrono::DateTime<Local>`.
 env var → `None`.
 
 **`list-readers` is dispatched before `Context::new`** — it works even
-when no YubiKey is connected.  It also respects `YB_FIXTURE` (uses the
-fixture's reader list when set).
+when no YubiKey is connected.  It also honors `YB_FIXTURE` in a
+`test-fixture` build (uses the fixture's reader list when set).
 
 | Command | Alias | Key args | What it does |
 |---|---|---|---|
@@ -724,8 +726,9 @@ Subprocess tests: invoke the compiled `yb` binary via
 `std::process::Command`.  Tests cover clap argument parsing, env vars,
 PIN resolution order, exit codes, stderr content, and all six commands.
 
-**`YB_FIXTURE` escape hatch:** when set, `Context::new` and
-`list_readers::run` both load a `VirtualPiv` from the named YAML file
+**`YB_FIXTURE` escape hatch** (builds with the `test-fixture` feature
+only; spec 0034 G3): when set, `Context::new` and `list_readers::run` both
+load a `VirtualPiv` from the named YAML file
 instead of opening a hardware card.  After each successful command,
 `main.rs` calls `ctx.piv.save_fixture(path)` to persist mutations
 (key generation, object writes) back to disk.  This is what allows

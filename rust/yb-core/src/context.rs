@@ -4,12 +4,10 @@
 
 //! Runtime context shared across all CLI commands.
 
-#[cfg(feature = "virtual-piv")]
-use crate::piv::VirtualPiv;
 use crate::{
     auxiliaries::{self, ProtectionMode},
     errors::{CardError, PcscCode, PcscOp, YbError},
-    piv::{hardware::HardwarePiv, DeviceInfo, PivBackend},
+    piv::{DeviceInfo, PivBackend},
     policy::{self, SecretOp},
 };
 use anyhow::{bail, Context as _, Result};
@@ -42,7 +40,7 @@ pub type DevicePicker = Box<
 pub struct ContextOptions {
     pub serial: Option<u32>,
     pub reader: Option<String>,
-    pub management_key: Option<String>,
+    pub management_key: Option<Zeroizing<String>>,
     pub pin: Option<String>,
     pub allow_defaults: bool,
 }
@@ -129,7 +127,8 @@ pub struct Context {
     /// Firmware version of the selected YubiKey, as reported by the device
     /// list (e.g. "5.4.3").  Only the unexpected-error report uses it.
     pub firmware: String,
-    pub management_key: Option<String>,
+    /// Held in zeroizing memory (spec 0034 G1).
+    pub management_key: Option<Zeroizing<String>>,
     /// Which factory-default credentials were still active at startup.
     pub defaults: auxiliaries::DefaultCredentials,
     /// `--allow-defaults`: the default-credential policy warns instead of
@@ -141,7 +140,7 @@ pub struct Context {
     pin: RefCell<Option<Zeroizing<String>>>,
     /// Called by `require_pin()` when `pin` is still `None`.
     /// Returns `Some(pin)` if it can supply one, `None` otherwise.
-    pin_fn: Box<dyn Fn() -> Result<Option<String>>>,
+    pub pin_fn: Box<dyn Fn() -> Result<Option<String>>>,
     pub piv: Arc<dyn PivBackend>,
     pub debug: bool,
     pub quiet: bool,
@@ -171,14 +170,7 @@ impl Context {
     ) -> Result<Self> {
         let debug = output.debug;
         let quiet = output.quiet;
-        #[cfg(feature = "virtual-piv")]
-        let piv: Arc<dyn PivBackend> = if let Ok(path) = std::env::var("YB_FIXTURE") {
-            Arc::new(VirtualPiv::from_fixture(std::path::Path::new(&path))?)
-        } else {
-            Arc::new(HardwarePiv::new())
-        };
-        #[cfg(not(feature = "virtual-piv"))]
-        let piv: Arc<dyn PivBackend> = Arc::new(HardwarePiv::new());
+        let piv = crate::piv::open_backend()?;
 
         let devices = piv.list_devices().context("listing YubiKey devices")?;
 
@@ -329,13 +321,13 @@ impl Context {
     /// A key found in PRINTED may leave repairs due (see [`Repairs`]),
     /// carried out by [`Context::complete_pending_repairs`].  The result
     /// is cached for the rest of the invocation.
-    pub fn management_key_for_write(&self) -> Result<String> {
+    pub fn management_key_for_write(&self) -> Result<Zeroizing<String>> {
         if let Some(r) = self.resolved.borrow().as_ref() {
-            return Ok(r.key.to_string());
+            return Ok(r.key.clone());
         }
         self.ensure_supported_protection()?;
         let resolved = self.resolve_management_key()?;
-        let key = resolved.key.to_string();
+        let key = resolved.key.clone();
         *self.resolved.borrow_mut() = Some(resolved);
         Ok(key)
     }
@@ -377,8 +369,14 @@ impl Context {
         let has_printed_keys = printed.current.is_some() || printed.previous.is_some();
 
         let candidates = [
-            (printed.current.as_deref(), KeySource::Printed),
-            (printed.previous.as_deref(), KeySource::PrintedPrevious),
+            (
+                printed.current.as_ref().map(|k| k.as_str()),
+                KeySource::Printed,
+            ),
+            (
+                printed.previous.as_ref().map(|k| k.as_str()),
+                KeySource::PrintedPrevious,
+            ),
             (
                 Some(auxiliaries::DEFAULT_MANAGEMENT_KEY),
                 KeySource::FactoryDefault,
@@ -537,7 +535,7 @@ impl Context {
         let printed = match repairs.printed {
             PrintedRepair::None => return,
             PrintedRepair::Rewrite => auxiliaries::encode_printed(&key, None),
-            PrintedRepair::Delete => Ok(Vec::new()),
+            PrintedRepair::Delete => Ok(Zeroizing::new(Vec::new())),
         };
         match printed
             .and_then(|data| piv.write_object(reader, auxiliaries::OBJ_PRINTED, &data, &key))
@@ -711,6 +709,7 @@ pub fn parse_ec_public_key_from_cert_der(cert_der: &[u8]) -> Result<PublicKey> {
 #[cfg(all(test, feature = "virtual-piv"))]
 mod tests {
     use super::*;
+    use crate::piv::VirtualPiv;
 
     /// `YB_SKIP_DEFAULT_CHECK` disables detection in both constructors
     /// (spec 0024 §3).  This is the only test in this binary that builds a

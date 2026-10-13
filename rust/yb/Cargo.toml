@@ -33,9 +33,11 @@ path = "src/lib.rs"
 
 [features]
 self-test = ["yb-core/test-utils"]
+# Honor YB_FIXTURE, a simulated YubiKey (spec 0034 G3): tests only.
+test-fixture = ["yb-core/test-fixture"]
 
 [dependencies]
-yb-core       = { workspace = true, features = ["chrono", "virtual-piv"] }
+yb-core       = { workspace = true, features = ["chrono"] }
 p256          = { version = "0.13", features = ["ecdsa"] }
 sha2          = "0.10"
 clap          = { version = "4", features = ["derive", "env"] }
@@ -50,7 +52,7 @@ rpassword     = "7"
 atty          = "0.2"
 clap_mangen   = "0.2"
 [dev-dependencies]
-yb-core  = { workspace = true, features = ["chrono", "virtual-piv"] }
+yb-core  = { workspace = true, features = ["chrono", "virtual-piv", "test-fixture", "test-utils"] }
 tempfile = "3"
 hex      = "0.4"
 

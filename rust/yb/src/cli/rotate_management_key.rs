@@ -8,6 +8,7 @@
 
 use anyhow::{Context as _, Result};
 use clap::Args;
+use yb_core::Zeroizing;
 use yb_core::{
     auxiliaries::{
         enable_pin_protected_management_key, generate_random_management_key, KeySwitch,
@@ -59,7 +60,7 @@ pub fn run(ctx: &Context, _args: &RotateManagementKeyArgs) -> Result<()> {
 /// Spec 0027 §2: checks that write nothing.  Returns the current key,
 /// whether PRINTED holds it (§3a), and whether it is already stored there
 /// (spec 0023 §3a).
-fn preflight(ctx: &Context) -> Result<(String, bool, bool)> {
+fn preflight(ctx: &Context) -> Result<(Zeroizing<String>, bool, bool)> {
     ctx.ensure_supported_protection()?;
     ctx.enforce_default_policy(SecretOp::RotateManagementKey)?;
     let pin = ctx.require_pin()?.ok_or_else(|| {

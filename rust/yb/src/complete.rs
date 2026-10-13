@@ -7,21 +7,12 @@
 use clap_complete::engine::CompletionCandidate;
 use std::ffi::OsStr;
 use std::sync::Arc;
-use yb_core::{
-    orchestrator,
-    piv::{hardware::HardwarePiv, VirtualPiv},
-    store::Store,
-    DeviceInfo, PivBackend,
-};
+use yb_core::{orchestrator, piv::hardware::HardwarePiv, store::Store, DeviceInfo, PivBackend};
 
-/// Build a PIV backend: VirtualPiv when YB_FIXTURE is set, HardwarePiv otherwise.
+/// The PIV backend, as for commands (`yb_core::open_backend`); real
+/// YubiKeys if a simulated one cannot be loaded.
 fn make_piv() -> Arc<dyn PivBackend> {
-    if let Ok(path) = std::env::var("YB_FIXTURE") {
-        if let Ok(vpiv) = VirtualPiv::from_fixture(std::path::Path::new(&path)) {
-            return Arc::new(vpiv);
-        }
-    }
-    Arc::new(HardwarePiv::new())
+    yb_core::open_backend().unwrap_or_else(|_| Arc::new(HardwarePiv::new()))
 }
 
 /// Complete YubiKey serial numbers from connected devices.

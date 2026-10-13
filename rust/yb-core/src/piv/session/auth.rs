@@ -98,7 +98,8 @@ impl PcscSession {
     /// Authenticate the management key using GENERAL AUTHENTICATE (3-pass
     /// mutual auth), with the algorithm reported by the card.
     pub(crate) fn authenticate_management_key(&mut self, key_hex: &str) -> Result<()> {
-        let key_bytes = hex::decode(key_hex).context("decoding management key")?;
+        let key_bytes =
+            zeroize::Zeroizing::new(hex::decode(key_hex).context("decoding management key")?);
         let algo = self.management_key_algorithm()?;
         algo.check_key_len(&key_bytes)?;
         self.mutual_auth(algo, &key_bytes)

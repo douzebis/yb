@@ -20,6 +20,21 @@ All notable changes to yb are recorded here.  The format follows
 
 ### Changed
 
+- **`YB_FIXTURE` is for tests only.**  Only a yb built with the new
+  `test-fixture` feature uses the simulated YubiKey this variable names;
+  release and debug builds ignore it, so that a stray variable can no
+  longer redirect yb, and its secrets, to a file (spec 0034).  Packagers:
+  the NixOS VM test now builds its own `yb` with that feature.
+- `yb fetch` asks for the PIN only when a matched blob is encrypted.
+- `yb ls`, `yb fsck` and `yb fetch` flag blobs encrypted with the legacy,
+  unauthenticated AES-CBC scheme of the Python predecessor (`LEGACY`);
+  store them again.
+- The management key is held in memory that is overwritten after use,
+  including when read from the YubiKey.
+- `yb store` refuses, before writing, a write that would overflow the
+  store's 24-bit age counter; `yb fsck` warns as it nears its end.
+- Objects that record another object count than the store's are ignored
+  by yb and reported by `yb fsck` as errors.
 - **`yb self-test` starts from a PIV reset** and relies on no credential of
   the user's: it resets the PIV application (erasing every PIV key and
   certificate, not only yb's store, as its prompt says), sets PIN 654321
@@ -62,6 +77,8 @@ All notable changes to yb are recorded here.  The format follows
 - `yb rm` writes the blob heads first, so an interrupted removal leaves each
   blob whole or gone.
 - `yb fsck` no longer crashes on a store with a corrupt chunk pointer.
+- `yb fetch` of several blobs could write some before finding that a
+  later one was tampered with; it now checks them all first.
 - `yb self-test` measured free memory on the first YubiKey found, not
   necessarily the one selected with `--serial`, writing temporary objects
   to it; an error during that measurement could leave them behind.  It

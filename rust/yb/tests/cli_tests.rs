@@ -29,7 +29,7 @@ fn with_key_piv() -> VirtualPiv {
 /// pre-resolved (simulating what main.rs does after env/TTY resolution).
 fn make_ctx(piv: VirtualPiv) -> Context {
     let mut ctx = Context::with_backend(Arc::new(piv), Some(PIN.to_owned()), false).unwrap();
-    ctx.management_key = Some(MGMT.to_owned());
+    ctx.management_key = Some(MGMT.to_owned().into());
     ctx.quiet = true;
     ctx
 }
@@ -906,6 +906,192 @@ mod fsck_tests {
         );
     }
 
+    /// Two matches, the second tampered with: nothing is written, not even
+    /// the first (spec 0033 G2).
+    #[test]
+    fn one_tampered_blob_among_several_fetches_nothing() {
+        use yb::cli::fetch::{run as fetch_run, FetchArgs};
+        let ctx = setup_signed_store();
+        store_plain(&ctx, "zblob", b"other bytes");
+        let idx = head_index(&ctx, "zblob");
+        let mut raw = read_raw(&ctx, idx);
+        raw[0x17 + "zblob".len()] ^= 0x01;
+        write_raw(&ctx, idx, &raw);
+        let out = TempDir::new().unwrap();
+        let args = FetchArgs {
+            patterns: vec!["*blob".to_owned()],
+            stdout: false,
+            output: None,
+            output_dir: Some(out.path().to_owned()),
+            extract: false,
+        };
+        assert!(fetch_run(&ctx, &args).is_err());
+        assert_eq!(std::fs::read_dir(out.path()).unwrap().count(), 0);
+    }
+
+    /// Spec 0034 G5: no PIN asked for unencrypted blobs; asked for an
+    /// encrypted one.
+    #[test]
+    fn fetch_asks_for_the_pin_only_for_encrypted_blobs() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+        let ctx = setup_signed_store();
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("secret");
+        std::fs::write(&file, b"secret bytes").unwrap();
+        store_run(
+            &ctx,
+            &StoreArgs {
+                files: vec![file],
+                name: None,
+                encrypted: true,
+                unencrypted: false,
+                no_compress: false,
+            },
+        )
+        .unwrap();
+
+        // A context that knows no PIN, and counts the prompts.
+        let mut fresh = Context::with_backend(ctx.piv.clone(), None, false).unwrap();
+        fresh.management_key = Some(MGMT.to_owned().into());
+        fresh.quiet = true;
+        let prompts = Rc::new(Cell::new(0));
+        let counter = prompts.clone();
+        fresh.pin_fn = Box::new(move || {
+            counter.set(counter.get() + 1);
+            Ok(Some(PIN.to_owned()))
+        });
+
+        assert_eq!(fetch_to(&fresh, "blob").unwrap(), b"the payload bytes");
+        assert_eq!(prompts.get(), 0);
+        assert_eq!(fetch_to(&fresh, "secret").unwrap(), b"secret bytes");
+        assert_eq!(prompts.get(), 1);
+    }
+
+    /// Spec 0034 G4: a legacy (pre-0006, AES-CBC) blob, as older yb wrote
+    /// it (unsigned too), is fetched, and marked LEGACY by `ls` and `fsck`.
+    #[test]
+    fn legacy_cbc_blob_is_fetched_and_flagged() {
+        use yb::cli::fsck::{check as fsck_check, FsckArgs};
+        let ctx = setup_signed_store();
+        let pk = ctx.get_public_key(0x82).unwrap();
+        let ct = yb_core::crypto::legacy_encrypt_for_tests(b"old secret", &pk).unwrap();
+        // Stored plain and uncompressed, then turned into what older yb
+        // wrote: encrypted to slot 0x82, no signature trailer.
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("old");
+        std::fs::write(&file, &ct).unwrap();
+        let args = StoreArgs {
+            files: vec![file],
+            name: None,
+            encrypted: false,
+            unencrypted: true,
+            no_compress: true,
+        };
+        store_run(&ctx, &args).unwrap();
+        let idx = head_index(&ctx, "old");
+        let mut raw = read_raw(&ctx, idx);
+        raw.truncate(0x17 + "old".len() + ct.len());
+        raw[0x12] = 0x82; // BLOB_KEY_SLOT: encrypted
+        write_raw(&ctx, idx, &raw);
+
+        let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+        let blobs = list_blobs(&store);
+        let old = blobs.iter().find(|b| b.name == "old").unwrap();
+        assert!(old.is_encrypted && old.is_legacy_encryption);
+        assert!(
+            !blobs
+                .iter()
+                .find(|b| b.name == "blob")
+                .unwrap()
+                .is_legacy_encryption
+        );
+
+        assert_eq!(fetch_to(&ctx, "old").unwrap(), b"old secret");
+
+        let mut out = Vec::new();
+        let args = FsckArgs {
+            verbose: false,
+            nvm: false,
+            check_key: false,
+        };
+        fsck_check(&ctx, &args, &mut out).unwrap();
+        let out = String::from_utf8(out).unwrap();
+        assert!(out.contains("UNSIGNED  LEGACY"), "{out}");
+        assert!(out.contains("1 blob(s) LEGACY"), "{out}");
+    }
+
+    fn fsck_output(ctx: &Context) -> (bool, String) {
+        use yb::cli::fsck::{check as fsck_check, FsckArgs};
+        let mut out = Vec::new();
+        let args = FsckArgs {
+            verbose: false,
+            nvm: false,
+            check_key: false,
+        };
+        let healthy = fsck_check(ctx, &args, &mut out).unwrap();
+        (healthy, String::from_utf8(out).unwrap())
+    }
+
+    /// Spec 0034 G6: the last age the 24-bit field can hold is used; the
+    /// next store fails before writing anything; fsck warns near the end.
+    #[test]
+    fn store_refused_when_ages_run_out() {
+        use yb_core::store::MAX_AGE;
+        use yb_core::{store_blob, Compression, Encryption, StoreOptions};
+        let ctx = setup_signed_store();
+        let plain = || StoreOptions {
+            encryption: Encryption::None,
+            compression: Compression::None,
+        };
+        let mut store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+        // One object of data, one for the signature's spill: none here.
+        store.store_age = MAX_AGE - 1;
+        let piv = ctx.piv.as_ref();
+        assert!(store_blob(&mut store, piv, "last", b"x", plain(), MGMT, Some(PIN)).unwrap());
+        let store = Store::from_device(&ctx.reader, piv).unwrap();
+        assert_eq!(store.store_age, MAX_AGE);
+        assert_eq!(store.find_head("last").unwrap().age(), MAX_AGE);
+
+        let before: Vec<Vec<u8>> = (0..8).map(|i| read_raw(&ctx, i)).collect();
+        let mut store = Store::from_device(&ctx.reader, piv).unwrap();
+        let err = store_blob(&mut store, piv, "more", b"x", plain(), MGMT, Some(PIN)).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("age counter is exhausted"),
+            "{err:#}"
+        );
+        let after: Vec<Vec<u8>> = (0..8).map(|i| read_raw(&ctx, i)).collect();
+        assert_eq!(before, after);
+
+        let (_, out) = fsck_output(&ctx);
+        assert!(
+            out.contains(&format!("at age {MAX_AGE} of {MAX_AGE}")),
+            "{out}"
+        );
+    }
+
+    /// Spec 0034 G7: an object recording another object count than object
+    /// 0 is not part of the store: yb ignores it, fsck reports it.
+    #[test]
+    fn foreign_object_is_ignored_and_reported() {
+        let ctx = setup_signed_store();
+        store_plain(&ctx, "other", b"other bytes");
+        // Not object 0: the reference the others are checked against.
+        let idx = head_index(&ctx, "other");
+        assert_ne!(idx, 0);
+        let mut raw = read_raw(&ctx, idx);
+        assert_eq!(raw[0x04], 8);
+        raw[0x04] = 9;
+        write_raw(&ctx, idx, &raw);
+
+        let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+        let names: Vec<String> = list_blobs(&store).into_iter().map(|b| b.name).collect();
+        assert_eq!(names, ["blob"]);
+        let (healthy, out) = fsck_output(&ctx);
+        assert!(!healthy);
+        assert!(out.contains("records a store of 9 objects, not 8"), "{out}");
+    }
+
     /// A store that cannot sign (no key in the slot) stores nothing.
     #[test]
     fn signing_failure_stores_nothing() {
@@ -1041,7 +1227,7 @@ mod cards {
     pub fn formatted_card_with_piv() -> (Arc<VirtualPiv>, Context) {
         let piv = Arc::new(with_key_piv());
         let mut ctx = Context::with_backend(piv.clone(), Some(PIN.to_owned()), false).unwrap();
-        ctx.management_key = Some(MGMT.to_owned());
+        ctx.management_key = Some(MGMT.to_owned().into());
         ctx.quiet = true;
         ctx.piv
             .generate_certificate(&ctx.reader, 0x82, "CN=Test", MGMT, None)
@@ -1211,7 +1397,7 @@ mod mgmt_key_tests {
 
         // Nothing in PRINTED: the key resolves to the factory default, and
         // no repair is due.
-        assert_eq!(ctx.management_key_for_write().unwrap(), MGMT);
+        assert_eq!(ctx.management_key_for_write().unwrap().as_str(), MGMT);
         assert_eq!(ctx.management_key_source(), Some(KeySource::FactoryDefault));
         assert!(!ctx.pending_repairs().any());
 
@@ -1260,7 +1446,7 @@ mod mgmt_key_tests {
     #[test]
     fn key_of_wrong_length_is_rejected_before_authentication() {
         let mut ctx = make_ctx(VirtualPiv::from_fixture_yaml(fixtures::AES192).unwrap());
-        ctx.management_key = Some("000102030405060708090a0b0c0d0e0f".to_owned());
+        ctx.management_key = Some("000102030405060708090a0b0c0d0e0f".to_owned().into());
         let args = FormatArgs {
             object_count: Some(DEFAULT_OBJECT_COUNT),
             key_slot: Some("0x82".to_owned()),
@@ -1394,7 +1580,7 @@ mod format_safety_tests {
         // I4: no key material in the error.
         if let Err(e) = outcome {
             let text = format!("{e:#}");
-            for k in keys_before.iter().chain([&key]) {
+            for k in keys_before.iter().chain([&*key]) {
                 assert!(!text.contains(k.as_str()), "{case}: I4 violated: {text}");
             }
         }
@@ -1478,7 +1664,7 @@ mod format_safety_tests {
         let keys = printed_keys(&ctx);
         assert!(keys.previous.is_none());
         let new_key = keys.current.unwrap();
-        assert_ne!(new_key, MGMT);
+        assert_ne!(new_key.as_str(), MGMT);
         ctx.piv
             .authenticate_management_key(&ctx.reader, &new_key)
             .unwrap();
@@ -1582,7 +1768,7 @@ mod format_safety_tests {
     #[test]
     fn wrong_explicit_key_does_not_fall_through() {
         let (_piv, mut ctx) = card_with_blob(true);
-        ctx.management_key = Some(MGMT.to_owned()); // the card uses OTHER_KEY
+        ctx.management_key = Some(MGMT.to_owned().into()); // the card uses OTHER_KEY
         let err = format_run(&ctx, &args(false, true)).unwrap_err();
         let text = format!("{err:#}");
         assert!(text.contains("YB_MANAGEMENT_KEY"), "{text}");
@@ -1659,7 +1845,7 @@ mod default_policy_tests {
         let mut ctx = Context::with_backend(piv.clone(), explicit_pin, false).unwrap();
         ctx.quiet = true;
         if !mgmt {
-            ctx.management_key = Some(cards::OTHER_KEY.to_owned());
+            ctx.management_key = Some(cards::OTHER_KEY.to_owned().into());
         }
         (piv, ctx, tmp)
     }
@@ -1940,7 +2126,7 @@ mod error_render_tests {
     #[test]
     fn wrong_explicit_management_key() {
         let (_piv, mut ctx) = card_with_blob(PIN);
-        ctx.management_key = Some(cards::OTHER_KEY.to_owned());
+        ctx.management_key = Some(cards::OTHER_KEY.to_owned().into());
         let text = rendered(&cards::store_one(&ctx, "x").unwrap_err());
         assert!(
             text.starts_with(
@@ -2332,7 +2518,7 @@ mod guided_tests {
         let admin = AdminData::parse(&read_admin(&ctx)).unwrap();
         assert_eq!(admin.flags, Some(0x02));
         let keys = read_printed_keys(&ctx.reader, piv.as_ref(), PIN).unwrap();
-        assert_eq!(keys.current.as_deref(), Some(OTHER_KEY));
+        assert_eq!(keys.current.as_deref().map(String::as_str), Some(OTHER_KEY));
         assert_ready(&piv, PIN);
     }
 
@@ -2571,7 +2757,7 @@ mod rotation_tests {
     fn assert_rotated(ctx: &Context, old_key: &str) {
         let keys = printed_keys(ctx);
         let new_key = keys.current.expect("new key in PRINTED");
-        assert_ne!(new_key, old_key);
+        assert_ne!(new_key.as_str(), old_key);
         assert_eq!(keys.previous, None, "tag 8A dropped");
         ctx.piv
             .authenticate_management_key(&ctx.reader, &new_key)
@@ -2626,7 +2812,7 @@ mod rotation_tests {
         piv.set_management_key(&setup.reader, MGMT, OTHER_KEY, MgmtAlgo::Tdes)
             .unwrap();
         let mut ctx = reopen(&setup);
-        ctx.management_key = Some(OTHER_KEY.to_owned());
+        ctx.management_key = Some(OTHER_KEY.to_owned().into());
         rotate(&ctx).unwrap();
         assert_rotated(&ctx, OTHER_KEY);
     }
@@ -2731,7 +2917,10 @@ mod rotation_tests {
         let ctx = reopen(&setup);
         piv.inject_fault(Fault::WriteFails(3));
         rotate(&ctx).unwrap();
-        assert_eq!(printed_keys(&ctx).previous.as_deref(), Some(OTHER_KEY));
+        assert_eq!(
+            printed_keys(&ctx).previous.as_deref().map(String::as_str),
+            Some(OTHER_KEY)
+        );
         store_one(&reopen(&ctx), "after").unwrap();
         assert_eq!(printed_keys(&ctx).previous, None);
     }
@@ -2742,7 +2931,7 @@ mod rotation_tests {
     fn rejected_switch_keeps_a_stored_explicit_key() {
         let (piv, setup) = protected_card_with_piv(&ADMIN_STANDARD);
         let mut ctx = reopen(&setup);
-        ctx.management_key = Some(OTHER_KEY.to_owned());
+        ctx.management_key = Some(OTHER_KEY.to_owned().into());
         piv.inject_fault(Fault::SetManagementKeyRejected);
         let err = rotate(&ctx).unwrap_err();
         assert!(
@@ -2898,4 +3087,27 @@ mod store_capacity_tests {
         let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
         assert!(list_blobs(&store).is_empty());
     }
+}
+
+// ---------------------------------------------------------------------------
+// Secrets in zeroizing memory (spec 0034 G1)
+// ---------------------------------------------------------------------------
+
+/// The management key is handed out, read from PRINTED and generated only
+/// in `Zeroizing` buffers, which overwrite it when dropped.  The type
+/// annotations are the test: a plain `String` would not compile.
+#[test]
+fn management_key_is_held_in_zeroizing_memory() {
+    use yb_core::auxiliaries::{generate_random_management_key, PrintedKeys};
+    use yb_core::{MgmtAlgo, Zeroizing};
+
+    let ctx = make_ctx(with_key_piv());
+    let _: Option<Zeroizing<String>> = ctx.management_key.clone();
+    let key: Zeroizing<String> = ctx.management_key_for_write().unwrap();
+    assert_eq!(key.as_str(), MGMT);
+
+    let printed = PrintedKeys::default();
+    let _: Option<Zeroizing<String>> = printed.current;
+    let _: Option<Zeroizing<String>> = printed.previous;
+    let _: Zeroizing<String> = generate_random_management_key(MgmtAlgo::Aes192);
 }

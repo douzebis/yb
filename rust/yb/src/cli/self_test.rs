@@ -298,7 +298,7 @@ pub fn run(ctx: &mut Context, args: &SelfTestArgs) -> Result<()> {
         yb_bin: std::env::current_exe()?,
         serial,
         piv,
-        fixture: std::env::var_os("YB_FIXTURE").map(PathBuf::from),
+        fixture: yb_core::fixture_path(),
     };
     // NVM measurements need a real YubiKey's memory.
     let measure_nvm = executor.fixture.is_none();

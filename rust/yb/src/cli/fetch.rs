@@ -79,6 +79,8 @@ pub fn run(ctx: &Context, args: &FetchArgs) -> Result<()> {
         .and_then(|cert_der| yb_core::parse_ec_public_key_from_cert_der(&cert_der).ok())
         .map(|pk| p256::ecdsa::VerifyingKey::from(&pk));
 
+    // Every match is checked before anything is written, so that a
+    // tampered blob among several stops the whole fetch.
     for name in &matched {
         if let Some(head) = store.find_head(name) {
             match check_blob_signature(head, &store, verifying_key.as_ref()) {
@@ -98,7 +100,21 @@ pub fn run(ctx: &Context, args: &FetchArgs) -> Result<()> {
                 ),
             }
         }
-        let pin = ctx.require_pin()?;
+    }
+
+    for name in &matched {
+        if store
+            .find_head(name)
+            .is_some_and(orchestrator::uses_legacy_encryption)
+        {
+            eprintln!(
+                "Warning: blob '{name}' uses the legacy encryption of older yb versions \
+                 (AES-CBC, unauthenticated); store it again to protect it with AES-GCM"
+            );
+        }
+        // The PIN only for an encrypted blob (spec 0034 G5).
+        let encrypted = store.find_head(name).is_some_and(|h| h.is_encrypted());
+        let pin = if encrypted { ctx.require_pin()? } else { None };
         let data = orchestrator::fetch_blob(
             &store,
             ctx.piv.as_ref(),

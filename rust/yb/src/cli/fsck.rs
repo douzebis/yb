@@ -8,12 +8,13 @@ use std::collections::HashSet;
 use std::io::Write;
 use yb_core::{
     errors::YbError,
+    orchestrator::uses_legacy_encryption,
     parse_ec_public_key_from_cert_der,
     report::{CardReport, Severity, StorePresence},
     scan_nvm,
     store::{
         constants::{DEFAULT_KEY_SLOT, OBJECT_ID_ZERO},
-        Object, Store,
+        Object, Store, MAX_AGE,
     },
     Context,
 };
@@ -110,6 +111,7 @@ fn check_store(ctx: &Context, args: &FsckArgs, store: &Store, out: &mut dyn Writ
     let mut sig_unsigned = 0usize;
     let mut sig_unverifiable = 0usize;
     let mut sig_corrupted = 0usize;
+    let mut legacy = 0usize;
 
     let mut blob_verdicts: Vec<(&Object, SigVerdict)> = Vec::new();
     for head in &heads {
@@ -151,11 +153,51 @@ fn check_store(ctx: &Context, args: &FsckArgs, store: &Store, out: &mut dyn Writ
         stored, free_count, store_bytes_used
     )?;
 
+    // Ages are 24-bit; a store must be reformatted before they run out
+    // (spec 0034 G6).
+    if store.store_age > MAX_AGE / 10 * 9 {
+        writeln!(
+            out,
+            "warning: the store is at age {} of {MAX_AGE}; stores fail when ages run \
+             out: fetch the blobs, reformat, store them again",
+            store.store_age
+        )?;
+    }
+
+    // Objects recording another object count than object 0 do not belong
+    // to this store; yb ignores them (spec 0034 G7).
+    let foreign: Vec<&Object> = store
+        .objects
+        .iter()
+        .filter(|o| o.object_count() != store.object_count)
+        .collect();
+    for obj in &foreign {
+        writeln!(
+            out,
+            "error: object {} records a store of {} objects, not {}: not part of this \
+             store, ignored",
+            obj.index(),
+            obj.object_count(),
+            store.object_count
+        )?;
+    }
+
     // Per-blob table.
     if stored > 0 {
         writeln!(out)?;
         for (head, verdict) in &blob_verdicts {
-            writeln!(out, "  {:<30} {}", quote_name(&head.blob_name), verdict)?;
+            // LEGACY: the encryption before spec 0006 (spec 0034 G4).
+            let marker = if *verdict != SigVerdict::Corrupted && uses_legacy_encryption(head) {
+                legacy += 1;
+                "  LEGACY"
+            } else {
+                ""
+            };
+            writeln!(
+                out,
+                "  {:<30} {verdict}{marker}",
+                quote_name(&head.blob_name)
+            )?;
         }
         writeln!(out)?;
         writeln!(
@@ -167,6 +209,13 @@ fn check_store(ctx: &Context, args: &FsckArgs, store: &Store, out: &mut dyn Writ
             writeln!(
                 out,
                 "  {sig_unverifiable} signed blob(s) not checked: no certificate in the store's key slot"
+            )?;
+        }
+        if legacy > 0 {
+            writeln!(
+                out,
+                "  {legacy} blob(s) LEGACY: encrypted as by older yb versions (AES-CBC, \
+                 unauthenticated); store them again to protect them with AES-GCM"
             )?;
         }
     }
@@ -216,7 +265,7 @@ fn check_store(ctx: &Context, args: &FsckArgs, store: &Store, out: &mut dyn Writ
         !warnings.is_empty()
     };
 
-    Ok(sig_corrupted == 0 && !has_anomalies)
+    Ok(sig_corrupted == 0 && foreign.is_empty() && !has_anomalies)
 }
 
 /// The `--nvm` line.  `store_ids` are the objects counted as store.

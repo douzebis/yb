@@ -11,6 +11,7 @@ use crate::piv::mgmt::{
 use crate::piv::{MgmtAlgo, PivBackend};
 use anyhow::{bail, Result};
 use std::collections::HashMap;
+use zeroize::Zeroizing;
 
 // PIV object IDs used for metadata.
 pub const OBJ_ADMIN_DATA: u32 = 0x5F_FF00;
@@ -87,13 +88,14 @@ const TAG_PRINTED_PREVIOUS_KEY: u8 = 0x8A;
 /// laid out as ykman's `PivmanProtectedData` — `88 { 89 <key> }` — plus
 /// tag `8A`, which keeps the previous key while a key switch is in
 /// progress (spec 0022 §2, B1a).  ykman and older yb read only tag `89`.
+/// The keys are held in zeroizing memory (spec 0034 G1).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PrintedKeys {
     /// Tag `89`: the stored management key, hex-encoded.
-    pub current: Option<String>,
+    pub current: Option<Zeroizing<String>>,
     /// Tag `8A`: the previous key, present only after an interrupted
     /// key switch.
-    pub previous: Option<String>,
+    pub previous: Option<Zeroizing<String>>,
 }
 
 impl PrintedKeys {
@@ -105,13 +107,21 @@ impl PrintedKeys {
         if raw.first() != Some(&TAG_PRINTED) {
             return Ok(keys);
         }
-        let Some((_, inner)) = parse_tlv_list(raw)?.into_iter().next() else {
+        // Every buffer holding key bytes is zeroized when dropped.
+        let zeroizing = |list: Vec<(u8, Vec<u8>)>| -> Vec<(u8, Zeroizing<Vec<u8>>)> {
+            list.into_iter()
+                .map(|(t, v)| (t, Zeroizing::new(v)))
+                .collect()
+        };
+        let outer = zeroizing(parse_tlv_list(raw)?);
+        let Some((_, inner)) = outer.first() else {
             return Ok(keys);
         };
-        for (tag, value) in parse_tlv_list(&inner)? {
+        for (tag, value) in zeroizing(parse_tlv_list(inner)?) {
+            let key = || Some(Zeroizing::new(hex::encode(&*value)));
             match tag {
-                TAG_PRINTED_KEY => keys.current = Some(hex::encode(value)),
-                TAG_PRINTED_PREVIOUS_KEY => keys.previous = Some(hex::encode(value)),
+                TAG_PRINTED_KEY => keys.current = key(),
+                TAG_PRINTED_PREVIOUS_KEY => keys.previous = key(),
                 _ => {}
             }
         }
@@ -121,14 +131,18 @@ impl PrintedKeys {
 
 /// Encode PRINTED object content holding `current_hex` and, while a key
 /// switch is in progress, `previous_hex`.
-pub fn encode_printed(current_hex: &str, previous_hex: Option<&str>) -> Result<Vec<u8>> {
+pub fn encode_printed(current_hex: &str, previous_hex: Option<&str>) -> Result<Zeroizing<Vec<u8>>> {
     use crate::piv::tlv::encode_tlv;
-    let key = |h: &str| hex::decode(h).map_err(|e| anyhow::anyhow!("management key hex: {e}"));
-    let mut inner = encode_tlv(TAG_PRINTED_KEY, &key(current_hex)?);
+    let key = |h: &str| -> Result<Zeroizing<Vec<u8>>> {
+        Ok(Zeroizing::new(
+            hex::decode(h).map_err(|e| anyhow::anyhow!("management key hex: {e}"))?,
+        ))
+    };
+    let mut inner = Zeroizing::new(encode_tlv(TAG_PRINTED_KEY, &key(current_hex)?));
     if let Some(p) = previous_hex {
         inner.extend(encode_tlv(TAG_PRINTED_PREVIOUS_KEY, &key(p)?));
     }
-    Ok(encode_tlv(TAG_PRINTED, &inner))
+    Ok(Zeroizing::new(encode_tlv(TAG_PRINTED, &inner)))
 }
 
 /// Read the management keys stored in PRINTED.  The backend verifies `pin`
@@ -136,7 +150,7 @@ pub fn encode_printed(current_hex: &str, previous_hex: Option<&str>) -> Result<V
 /// PIN beforehand, so that a wrong PIN is not mistaken for "no keys".
 pub fn read_printed_keys(reader: &str, piv: &dyn PivBackend, pin: &str) -> Result<PrintedKeys> {
     match piv.read_printed_object_with_pin(reader, pin) {
-        Ok(raw) => PrintedKeys::parse(&raw),
+        Ok(raw) => PrintedKeys::parse(&Zeroizing::new(raw)),
         Err(_) => Ok(PrintedKeys::default()),
     }
 }
@@ -393,9 +407,10 @@ pub fn pin_derived_unsupported() -> crate::errors::YbError {
 }
 
 /// Generate a random management key for `algo`, returned as a hex string.
-pub fn generate_random_management_key(algo: MgmtAlgo) -> String {
-    let bytes: Vec<u8> = (0..algo.key_len()).map(|_| rand::random::<u8>()).collect();
-    hex::encode(bytes)
+pub fn generate_random_management_key(algo: MgmtAlgo) -> Zeroizing<String> {
+    let bytes: Zeroizing<Vec<u8>> =
+        Zeroizing::new((0..algo.key_len()).map(|_| rand::random::<u8>()).collect());
+    Zeroizing::new(hex::encode(&*bytes))
 }
 
 /// A switch to a new, PIN-protected management key (spec 0022 §2, B1).
@@ -486,7 +501,7 @@ fn restored_or_not(reader: &str, piv: &dyn PivBackend, sw: &KeySwitch<'_>, what:
     let previous = if sw.old_key_in_printed {
         encode_printed(sw.old_key, None)
     } else {
-        Ok(Vec::new())
+        Ok(Zeroizing::new(Vec::new()))
     };
     let restored = previous
         .and_then(|data| piv.write_object(reader, OBJ_PRINTED, &data, sw.old_key))

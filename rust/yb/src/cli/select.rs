@@ -8,8 +8,7 @@
 
 use anyhow::{bail, Result};
 use clap::Args;
-use std::sync::Arc;
-use yb_core::{HardwarePiv, PivBackend, VirtualPiv};
+use yb_core::open_backend;
 
 #[derive(Args, Debug)]
 pub struct SelectArgs {
@@ -19,11 +18,7 @@ pub struct SelectArgs {
 }
 
 pub fn run(args: &SelectArgs) -> Result<()> {
-    let piv: Arc<dyn PivBackend> = if let Ok(path) = std::env::var("YB_FIXTURE") {
-        Arc::new(VirtualPiv::from_fixture(std::path::Path::new(&path))?)
-    } else {
-        Arc::new(HardwarePiv::new())
-    };
+    let piv = open_backend()?;
 
     let devices = piv.list_devices()?;
 

@@ -13,6 +13,7 @@
 use anyhow::{bail, Context as _, Result};
 use clap::Args;
 use std::io::Write;
+use yb_core::Zeroizing;
 use yb_core::{
     auxiliaries::{
         enable_pin_protected_management_key, generate_random_management_key, KeySwitch,
@@ -176,7 +177,7 @@ impl Settings {
 /// What Phase A established for Phase B.
 pub(crate) struct Prepared {
     /// The card's current management key, accepted by the card.
-    pub management_key: String,
+    pub management_key: Zeroizing<String>,
     pub management_key_in_printed: bool,
     /// The key is already PIN-protected: `--protect` keeps it (spec 0023
     /// §3a).

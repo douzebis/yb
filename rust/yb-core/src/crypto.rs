@@ -104,6 +104,36 @@ pub fn hybrid_encrypt(plaintext: &[u8], peer_public_key: &PublicKey) -> Result<V
     Ok(out)
 }
 
+/// Whether `stored`, an encrypted blob's stored bytes, is legacy AES-CBC
+/// ciphertext (before spec 0006: no version byte, no authentication).
+/// Recognized without decrypting: it starts with the ephemeral key's
+/// `0x04`, a GCM blob with its version byte `0x02`.
+pub fn is_legacy_ciphertext(stored: &[u8]) -> bool {
+    stored.first() == Some(&LEGACY_VERSION)
+}
+
+/// Legacy AES-CBC ciphertext of `plaintext` for `peer_public_key`, as yb
+/// wrote before spec 0006.  For tests of the legacy path: yb never writes
+/// it.
+#[cfg(any(test, feature = "test-utils"))]
+pub fn legacy_encrypt_for_tests(plaintext: &[u8], peer_public_key: &PublicKey) -> Result<Vec<u8>> {
+    use cbc::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
+    type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
+
+    let ephemeral_secret = EphemeralSecret::random(&mut OsRng);
+    let ephemeral_pubkey = p256::PublicKey::from(&ephemeral_secret);
+    let shared_secret = ephemeral_secret.diffie_hellman(peer_public_key);
+    let aes_key = hkdf_expand(shared_secret.raw_secret_bytes())?;
+    let iv: [u8; IV_LEN] = rand::random();
+    let ciphertext =
+        Aes256CbcEnc::new(&aes_key.into(), &iv.into()).encrypt_padded_vec_mut::<Pkcs7>(plaintext);
+
+    let mut out = ephemeral_pubkey.to_encoded_point(false).as_bytes().to_vec();
+    out.extend_from_slice(&iv);
+    out.extend_from_slice(&ciphertext);
+    Ok(out)
+}
+
 /// Decrypt a blob produced by `hybrid_encrypt` (GCM) or a legacy CBC blob.
 ///
 /// `piv` and `reader` identify the backend and device; `slot` is the PIV slot

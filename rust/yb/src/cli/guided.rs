@@ -11,6 +11,7 @@
 use anyhow::{Context as _, Result};
 use std::fmt;
 use std::io::{BufRead as _, Write as _};
+use yb_core::Zeroizing;
 use yb_core::{
     auxiliaries::{DEFAULT_PIN, DEFAULT_PUK},
     context::MANAGEMENT_KEY_NOT_FOUND,
@@ -384,8 +385,8 @@ fn resolve_management_key(ctx: &mut Context, pin: &str, p: &mut dyn Prompter) ->
         Err(_) => {}
     }
     p.say("The management key is not stored on the YubiKey and is not the factory default.");
-    let key = p.ask_secret("Current management key (hex): ")?;
-    ctx.management_key = Some(key.trim().to_owned());
+    let key = Zeroizing::new(p.ask_secret("Current management key (hex): ")?);
+    ctx.management_key = Some(Zeroizing::new(key.trim().to_owned()));
     Prepared::resolve(ctx, true, pin.to_owned()).context(NOTHING_CHANGED)
 }
 

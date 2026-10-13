@@ -56,10 +56,12 @@ pub use orchestrator::{
     remove_blobs, store_blob, BlobInfo, Compression, Encryption, StoreOptions,
 };
 pub use piv::hardware::HardwarePiv;
-pub use piv::{DeviceInfo, FlashHandle, MgmtAlgo, PinRef, PivBackend};
+pub use piv::{fixture_path, open_backend, DeviceInfo, FlashHandle, MgmtAlgo, PinRef, PivBackend};
 #[cfg(any(feature = "virtual-piv", feature = "test-utils"))]
 pub use piv::{Fault, VirtualPiv};
 pub use policy::SecretOp;
+/// Secrets (management key, PIN) are held in `Zeroizing` buffers.
+pub use zeroize::Zeroizing;
 
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;

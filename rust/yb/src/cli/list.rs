@@ -93,10 +93,19 @@ pub fn run(ctx: &Context, args: &ListArgs) -> Result<()> {
             any_corrupted = true;
         }
         let displayed_name = quote_name(&b.name);
+        // CORRUPTED alone; otherwise UNSIGNED and LEGACY (spec 0034 G4).
         let suffix = match verdict {
-            Some(SigVerdict::Corrupted) => "  CORRUPTED",
-            Some(SigVerdict::Unsigned) => "  UNSIGNED",
-            _ => "",
+            Some(SigVerdict::Corrupted) => "  CORRUPTED".to_owned(),
+            _ => {
+                let mut s = String::new();
+                if verdict == Some(SigVerdict::Unsigned) {
+                    s.push_str("  UNSIGNED");
+                }
+                if b.is_legacy_encryption {
+                    s.push_str("  LEGACY");
+                }
+                s
+            }
         };
         if args.long {
             let enc_flag = if b.is_encrypted { '-' } else { 'P' };
