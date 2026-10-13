@@ -6,9 +6,9 @@ SPDX-License-Identifier: MIT
 
 # 0036 — Bash Completion from the Raw Command Line
 
-**Status:** in-progress
+**Status:** implemented
 **App:** yb
-**Implemented in:** <!-- YYYY-MM-DD, fill after implementation -->
+**Implemented in:** 2026-10-13
 
 ## Problem
 
@@ -70,9 +70,12 @@ clap_complete's public API: crate `prototools-complete` (spec 0406).
   maintainer with a personal token, then a trusted publisher is added as
   for `yb` and `yb-core`.
 - **Tests:** the crate's unit tests (line splitting, trimming), and yb
-  tests completing through `complete_line` with yb's command: subcommands,
-  `--serial=`, a path with a space, a path with `:`, a blob name, a quoted
-  blob name.
+  tests completing through `complete_line` with yb's command
+  (`rust/yb/tests/completion_tests.rs`): subcommands, an option, a path
+  with a space (escaped and quoted), a path with `:`, a directory, blob
+  names (plain, escaped, quoted, through a simulated YubiKey) and
+  `--serial=` / `--serial `.  Note: clap_complete's path completer works
+  relative to the process's current directory, so the test changes it.
 
 ## Open questions
 
