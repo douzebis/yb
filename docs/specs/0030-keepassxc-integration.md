@@ -189,8 +189,23 @@ nothing.
 - Entering the PIN updates the YubiKey's retry counter internally, as
   with any smart-card use (SSH, GPG, PIV); unavoidable, and what the
   hardware is designed for.
-- A save of 10 KB through PC/SC takes about a second (to be measured):
-  acceptable at lock or exit, not on every change.
+- **Measured** (YubiKey 5, firmware 5.7.1, 2026-10-13; `yb` with the PIN
+  on standard input, release build):
+
+  | Vault | First store | Replace | Fetch |
+  |---|---|---|---|
+  | 2 KB | 0.73 s | 0.55–0.68 s | 0.26–0.29 s |
+  | 10 KB | 1.55 s | 2.46–3.64 s | 0.30–0.31 s |
+  | 22 KB | 4.14 s | out of card memory | 0.41–0.55 s |
+
+  Fetches are fast enough to be invisible at open; writes take seconds,
+  hence the 5-second delay and one write per burst of edits.
+- **The card's memory is the real limit, not yb's objects:** with 2, 10
+  and 22 KB vaults stored (about 35 KB used), replacing the 22 KB one
+  needs a second copy and runs out of the card's memory (about 51 KB,
+  shared with certificates and the management key).  The save then fails
+  with the previous vault intact (spec 0038), and the user is told to
+  make room.
 
 ### Saves without user edits (KeePassXC behavior)
 
@@ -518,7 +533,6 @@ goes through the same `Database` functions).  About 125 call sites:
 
 ## Open questions
 
-- Write cost on real hardware: a fetch and a store of 2, 10 and 22 KB.
 - Challenge-response and `yb` on the same YubiKey: do they coexist?
 - Windows (after the mock-up): device locations must escape
   `QDir::toNativeSeparators` (`DatabaseTabWidget.cpp:161`, `:889`;
