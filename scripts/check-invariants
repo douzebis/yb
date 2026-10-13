@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+
+# SPDX-FileCopyrightText: 2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+#
+# SPDX-License-Identifier: MIT
+
+# Check docs/invariants/: every invariant names at least one regression
+# test, and every test it names exists (`fn <name>` in the file given, and,
+# for `module::name`, `mod <module>` there too).
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+status=0
+for doc in docs/invariants/[0-9][0-9][0-9][0-9]-*.md; do
+    tests=$(sed -n '/^## Regression tests/,/^## /p' "$doc" | grep '^- `' || true)
+    if [[ -z "$tests" ]]; then
+        echo "$doc: no regression test"
+        status=1
+        continue
+    fi
+    while IFS= read -r line; do
+        file=$(sed -E 's/^- `([^`]+)`:.*/\1/' <<<"$line")
+        if [[ ! -f "$file" ]]; then
+            echo "$doc: no such file $file"
+            status=1
+            continue
+        fi
+        for name in $(sed -E 's/^- `[^`]+`://' <<<"$line" | grep -o '`[^`]*`' | tr -d '`'); do
+            fn=${name##*::}
+            if ! grep -Eq "^\s*(pub )?fn ${fn}\(" "$file"; then
+                echo "$doc: no test $fn in $file"
+                status=1
+            fi
+            if [[ "$name" == *::* ]] && ! grep -Eq "^\s*mod ${name%%::*}\b" "$file"; then
+                echo "$doc: no module ${name%%::*} in $file"
+                status=1
+            fi
+        done
+    done <<<"$tests"
+done
+[[ $status -eq 0 ]] && echo "Invariants: every regression test named exists."
+exit $status

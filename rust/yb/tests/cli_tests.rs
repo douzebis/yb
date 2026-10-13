@@ -3111,3 +3111,231 @@ fn management_key_is_held_in_zeroizing_memory() {
     let _: Option<Zeroizing<String>> = printed.previous;
     let _: Zeroizing<String> = generate_random_management_key(MgmtAlgo::Aes192);
 }
+
+// ---------------------------------------------------------------------------
+// Invariants without a test elsewhere (docs/invariants/)
+// ---------------------------------------------------------------------------
+
+mod invariant_tests {
+    use super::*;
+    use std::sync::Mutex;
+    use yb::cli::fetch::{run as fetch_run, FetchArgs};
+    use yb::cli::fsck::{check as fsck_check, FsckArgs};
+    use yb::cli::list::{run as list_run, ListArgs};
+    use yb::cli::remove::{run as remove_run, RemoveArgs};
+    use yb_core::piv::{DeviceInfo, MgmtAlgo, PinRef, PivBackend};
+    use yb_core::{Fault, Zeroizing};
+
+    fn fsck_args() -> FsckArgs {
+        FsckArgs {
+            verbose: true,
+            nvm: false,
+            check_key: false,
+        }
+    }
+
+    fn list_args() -> ListArgs {
+        ListArgs {
+            pattern: None,
+            long: true,
+            one_per_line: false,
+            sort_time: false,
+            reverse: false,
+        }
+    }
+
+    /// Invariant 0002: reading never writes to the YubiKey, even a store
+    /// holding leftovers of an interrupted write, which reads discard in
+    /// memory only.
+    #[test]
+    fn reads_never_write() {
+        let (piv, ctx) = cards::formatted_card_with_piv();
+        cards::store_one(&ctx, "blob").unwrap();
+        // An interrupted replace: the new copy's first write lands, the
+        // second fails, leaving a leftover object.
+        piv.inject_fault(Fault::WriteFails(2));
+        assert!(cards::store_one(&ctx, "blob").is_err());
+
+        let before = piv.write_count();
+        let out = TempDir::new().unwrap();
+        fetch_run(
+            &ctx,
+            &FetchArgs {
+                patterns: vec!["blob".to_owned()],
+                stdout: false,
+                output: None,
+                output_dir: Some(out.path().to_owned()),
+                extract: false,
+            },
+        )
+        .unwrap();
+        list_run(&ctx, &list_args()).unwrap();
+        fsck_check(&ctx, &fsck_args(), &mut Vec::new()).unwrap();
+        assert_eq!(piv.write_count(), before);
+    }
+
+    /// A backend that serves one YubiKey, lists a decoy reader first, and
+    /// records any operation aimed at another reader than the selected one.
+    struct SelectedOnly {
+        inner: Arc<VirtualPiv>,
+        selected: String,
+        strays: Mutex<Vec<String>>,
+    }
+
+    impl SelectedOnly {
+        fn on(&self, reader: &str, op: &str) {
+            if reader != self.selected {
+                self.strays
+                    .lock()
+                    .unwrap()
+                    .push(format!("{op} on {reader:?}"));
+            }
+        }
+    }
+
+    impl PivBackend for SelectedOnly {
+        fn list_readers(&self) -> anyhow::Result<Vec<String>> {
+            Ok(vec![
+                "Decoy YubiKey 00 00".to_owned(),
+                self.selected.clone(),
+            ])
+        }
+        fn list_devices(&self) -> anyhow::Result<Vec<DeviceInfo>> {
+            self.inner.list_devices()
+        }
+        fn read_object(&self, r: &str, id: u32) -> anyhow::Result<Vec<u8>> {
+            self.on(r, "read_object");
+            self.inner.read_object(r, id)
+        }
+        fn write_object(&self, r: &str, id: u32, d: &[u8], k: &str) -> anyhow::Result<()> {
+            self.on(r, "write_object");
+            self.inner.write_object(r, id, d, k)
+        }
+        fn authenticate_management_key(&self, r: &str, k: &str) -> anyhow::Result<()> {
+            self.on(r, "authenticate_management_key");
+            self.inner.authenticate_management_key(r, k)
+        }
+        fn verify_pin(&self, r: &str, pin: &str) -> anyhow::Result<()> {
+            self.on(r, "verify_pin");
+            self.inner.verify_pin(r, pin)
+        }
+        fn send_apdu(&self, r: &str, apdu: &[u8]) -> anyhow::Result<Vec<u8>> {
+            self.on(r, "send_apdu");
+            self.inner.send_apdu(r, apdu)
+        }
+        fn ecdh(&self, r: &str, s: u8, p: &[u8], pin: Option<&str>) -> anyhow::Result<Vec<u8>> {
+            self.on(r, "ecdh");
+            self.inner.ecdh(r, s, p, pin)
+        }
+        fn ecdsa_sign(
+            &self,
+            r: &str,
+            s: u8,
+            d: &[u8],
+            pin: Option<&str>,
+        ) -> anyhow::Result<[u8; 64]> {
+            self.on(r, "ecdsa_sign");
+            self.inner.ecdsa_sign(r, s, d, pin)
+        }
+        fn read_certificate(&self, r: &str, s: u8) -> anyhow::Result<Vec<u8>> {
+            self.on(r, "read_certificate");
+            self.inner.read_certificate(r, s)
+        }
+        fn generate_key(&self, r: &str, s: u8, k: Option<&str>) -> anyhow::Result<Vec<u8>> {
+            self.on(r, "generate_key");
+            self.inner.generate_key(r, s, k)
+        }
+        fn generate_certificate(
+            &self,
+            r: &str,
+            s: u8,
+            subject: &str,
+            k: &str,
+            pin: Option<&str>,
+        ) -> anyhow::Result<Vec<u8>> {
+            self.on(r, "generate_certificate");
+            self.inner.generate_certificate(r, s, subject, k, pin)
+        }
+        fn read_printed_object_with_pin(&self, r: &str, pin: &str) -> anyhow::Result<Vec<u8>> {
+            self.on(r, "read_printed_object_with_pin");
+            self.inner.read_printed_object_with_pin(r, pin)
+        }
+        fn management_key_algorithm(&self, r: &str) -> anyhow::Result<MgmtAlgo> {
+            self.on(r, "management_key_algorithm");
+            self.inner.management_key_algorithm(r)
+        }
+        fn set_management_key(
+            &self,
+            r: &str,
+            old: &str,
+            new: &str,
+            algo: MgmtAlgo,
+        ) -> anyhow::Result<()> {
+            self.on(r, "set_management_key");
+            self.inner.set_management_key(r, old, new, algo)
+        }
+        fn change_reference(
+            &self,
+            r: &str,
+            which: PinRef,
+            old: &str,
+            new: &str,
+        ) -> anyhow::Result<()> {
+            self.on(r, "change_reference");
+            self.inner.change_reference(r, which, old, new)
+        }
+        fn object_size(&self, r: &str, id: u32) -> anyhow::Result<Option<usize>> {
+            self.on(r, "object_size");
+            self.inner.object_size(r, id)
+        }
+        fn reset_blocked_piv(&self, r: &str) -> anyhow::Result<()> {
+            self.on(r, "reset_blocked_piv");
+            self.inner.reset_blocked_piv(r)
+        }
+    }
+
+    /// Invariant 0007: every command acts on the selected YubiKey only,
+    /// never on another reader, even one listed first.
+    #[test]
+    fn commands_act_only_on_the_selected_yubikey() {
+        let (inner, setup) = cards::formatted_card_with_piv();
+        let backend = Arc::new(SelectedOnly {
+            inner,
+            selected: setup.reader.clone(),
+            strays: Mutex::new(Vec::new()),
+        });
+        let mut ctx = Context::with_backend(backend.clone(), Some(PIN.to_owned()), false).unwrap();
+        ctx.management_key = Some(Zeroizing::new(MGMT.to_owned()));
+        ctx.quiet = true;
+
+        cards::store_one(&ctx, "blob").unwrap();
+        let out = TempDir::new().unwrap();
+        fetch_run(
+            &ctx,
+            &FetchArgs {
+                patterns: vec!["blob".to_owned()],
+                stdout: false,
+                output: None,
+                output_dir: Some(out.path().to_owned()),
+                extract: false,
+            },
+        )
+        .unwrap();
+        list_run(&ctx, &list_args()).unwrap();
+        fsck_check(&ctx, &fsck_args(), &mut Vec::new()).unwrap();
+        remove_run(
+            &ctx,
+            &RemoveArgs {
+                patterns: vec!["blob".to_owned()],
+                ignore_missing: false,
+            },
+        )
+        .unwrap();
+
+        let strays = backend.strays.lock().unwrap();
+        assert!(
+            strays.is_empty(),
+            "operations on another reader: {strays:?}"
+        );
+    }
+}

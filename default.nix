@@ -157,6 +157,18 @@ let
     touch $out
   '');
 
+  # Every invariant names regression tests that exist (docs/invariants/).
+  invariantsCheck = pkgs.runCommand "yb-invariants-check" { } ''
+    mkdir -p source/docs source/scripts
+    cp -r ${rustSrc} source/rust
+    cp -r ${./docs/invariants} source/docs/invariants
+    cp ${./scripts/check-invariants} source/scripts/check-invariants
+    chmod -R u+w source
+    patchShebangs source/scripts
+    source/scripts/check-invariants
+    touch $out
+  '';
+
   # Built as nixpkgs's nixos/tests/all-tests.nix does.
   integrationTests = pkgsLocal.callPackage ./nixpkgs/nixos/tests/yb.nix {
     inherit (pkgsLocal.yb.passthru) ybPivHarnessTests;
@@ -277,6 +289,7 @@ in
   rust-clippy       = rustClippy;
   rust-tests        = rustTests;        # tier-1 only (fast)
   nixpkgs-staging-check = nixpkgsStagingCheck; # nixfmt + version of nixpkgs/
+  invariants-check  = invariantsCheck;  # docs/invariants/ name existing tests
   release-shell     = releaseShell;     # toolchain for scripts/check-crates
   integration-tests = integrationTests; # staged nixpkgs VM test (tier-2)
 }

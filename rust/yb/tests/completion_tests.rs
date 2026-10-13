@@ -62,6 +62,7 @@ fn paths_blob_names_and_serial_numbers() {
     let fixture = dir.path().join("card.yaml");
     piv.save_fixture(&fixture).unwrap();
     std::env::set_var("YB_FIXTURE", &fixture);
+    let card_before = std::fs::read(&fixture).unwrap();
 
     assert_eq!(complete("yb fetch al", "al", &dir), ["alpha"]);
     assert_eq!(complete(r"yb fetch my\ s", r"my\ s", &dir), ["my secret"]);
@@ -70,6 +71,9 @@ fn paths_blob_names_and_serial_numbers() {
     // spec 0020 corrupted this line too).  The fixture's serial is 88888888.
     assert_eq!(complete("yb --serial=8", "8", &dir), ["88888888"]);
     assert_eq!(complete("yb --serial ", "", &dir), ["88888888"]);
+
+    // Invariant 0002: completing reads the YubiKey, never writes to it.
+    assert_eq!(std::fs::read(&fixture).unwrap(), card_before);
 
     std::env::remove_var("YB_FIXTURE");
 }

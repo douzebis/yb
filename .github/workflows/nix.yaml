@@ -35,6 +35,9 @@ jobs:
       - name: Run unit tests (tier-1)
         run: nix-build -A rust-tests
 
+      - name: Check that invariants name existing tests
+        run: nix-build -A invariants-check
+
   # Build the release binary.
   build:
     strategy:

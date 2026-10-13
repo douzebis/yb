@@ -31,6 +31,12 @@ Use sub-sections as needed. Cover:
 - Error handling expectations
 - Performance constraints if any
 
+## Invariants
+
+- Guarantees this spec creates or changes (data safety, write ordering,
+  security): each in `docs/invariants/NNNN-title.md`, with its
+  regression tests.
+
 ## Open questions
 
 - Unresolved questions (remove entries when resolved).
