@@ -224,9 +224,8 @@ let
       # Re-runs on each nix-shell entry so completions stay in sync with
       # the freshly built binary.
       if command -v yb &>/dev/null; then
-        source <(YB_COMPLETE=bash yb | sed \
-          -e 's|-o nospace -o bashdefault|-o nospace -o filenames -o bashdefault|g' \
-          -e 's|words\[COMP_CWORD\]="$2"|local _cur="''${COMP_LINE:0:''${COMP_POINT}}"; _cur="''${_cur##* }"; words[COMP_CWORD]="''${_cur}"|')
+        # The script is used as printed (spec 0036: no patching).
+        source <(YB_COMPLETE=bash yb)
       fi
 
       # Generate rust/rust-toolchain.toml so rust-analyzer uses the same

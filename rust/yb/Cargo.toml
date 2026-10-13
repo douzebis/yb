@@ -36,6 +36,7 @@ p256          = { version = "0.13", features = ["ecdsa"] }
 sha2          = "0.10"
 clap          = { version = "4", features = ["derive", "env"] }
 clap_complete = { version = "4", features = ["unstable-dynamic"] }
+clap-complete-rawline = { workspace = true }
 crossterm     = "0.27"
 anyhow        = "1"
 chrono        = "0.4"

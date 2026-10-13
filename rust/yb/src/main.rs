@@ -19,8 +19,10 @@ use yb_core::{
 static FIRMWARE: OnceLock<String> = OnceLock::new();
 
 fn main() {
+    // Bash from the raw command line, no `COMP_WORDS` splitting (spec 0036).
     CompleteEnv::with_factory(Cli::command)
         .var("YB_COMPLETE")
+        .shells(clap_complete_rawline::shells())
         .complete();
 
     let cli = Cli::parse();

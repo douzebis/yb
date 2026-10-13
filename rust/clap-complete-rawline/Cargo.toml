@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: 2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+#
+# SPDX-License-Identifier: MIT
+
+[package]
+name         = "clap-complete-rawline"
+version      = "0.1.0"
+edition      = "2021"
+rust-version = "1.86"
+license      = "MIT"
+description  = "Bash completion for clap from the raw command line, without COMP_WORDS splitting"
+repository   = "https://github.com/douzebis/yb"
+readme       = "README.md"
+keywords     = ["clap", "completion", "bash"]
+categories   = ["command-line-interface"]
+
+[dependencies]
+clap          = { version = "4.5" }
+clap_complete = { version = "4.5", features = ["unstable-dynamic"] }
+shlex         = "1.3"

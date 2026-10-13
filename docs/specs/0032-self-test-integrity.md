@@ -55,6 +55,14 @@ in-memory model.  The audit of 2026-10-13
   compression on (the default path users run), format through a `yb`
   subprocess (it tests the command), capacity derived from the store.
 
+- **G6 — Start from a reset** (decided 2026-10-13).  The self-test does
+  not rely on existing credentials: it starts by resetting the YubiKey's
+  PIV application (block the PIN and the PUK, then PIV RESET), then runs
+  with factory credentials or its own.  This erases **all** PIV data,
+  every slot's keys and certificates (e.g. an SSH or signing key in
+  9a/9c), not only yb's store; OTP, FIDO2 and OATH are unaffected.  The
+  confirmation prompt says so.
+
 ## Non-goals
 
 - Changing what the self-test exercises (random operations through the
@@ -96,14 +104,6 @@ in-memory model.  The audit of 2026-10-13
 
 ## Open questions
 
-- **Start from a reset, not from existing credentials** (requested
-  2026-10-13): the self-test would begin by resetting the YubiKey's PIV
-  application (block the PIN and the PUK, then PIV RESET), then use the
-  factory credentials, or set its own.  This erases **all** PIV data: keys
-  and certificates of every slot (e.g. an SSH or signing key in 9a/9c),
-  not only yb's store and slot 0x82, which is what the self-test erases
-  today.  OTP, FIDO2 and OATH are unaffected.  The confirmation would say
-  so.  To confirm.
 - How to test G1 without hardware: `VirtualPiv` with two simulated
   YubiKeys, if the fixture format can describe two?
 
