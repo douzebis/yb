@@ -38,6 +38,8 @@ pub enum CardOp {
     Sign(u8),
     Ecdh(u8),
     GetMetadata(u8),
+    /// RESET of the PIV application.
+    ResetPiv,
     /// Any other card command (e.g. a raw `send_apdu`).
     Command,
 }
@@ -59,6 +61,7 @@ impl CardOp {
             Self::Sign(slot) => format!("signature with slot 0x{slot:02x}"),
             Self::Ecdh(slot) => format!("key agreement with slot 0x{slot:02x}"),
             Self::GetMetadata(slot) => format!("metadata of slot 0x{slot:02x}"),
+            Self::ResetPiv => "PIV reset".to_owned(),
             Self::Command => "card command".to_owned(),
         }
     }

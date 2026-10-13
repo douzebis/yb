@@ -22,7 +22,6 @@ pub enum SecretOp {
     Remove,
     Format { protect: bool },
     RotateManagementKey,
-    SelfTest,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,8 +43,6 @@ impl SecretOp {
             // --protect and rotation store the new management key behind the
             // PIN, and replace the factory management key.
             Self::Format { protect: true } | Self::RotateManagementKey => (Refuse, Silent),
-            // Unchanged from before spec 0024.
-            Self::SelfTest => (Refuse, Refuse),
         }
     }
 }
@@ -80,14 +77,6 @@ pub fn default_policy(
 
     if !refused.is_empty() {
         let what = join(&refused);
-        if op == SecretOp::SelfTest {
-            return Err(
-                YbError::new(format!("YubiKey has default credentials: {what}"))
-                    .why("this is insecure")
-                    .fix("use --allow-defaults to override")
-                    .into(),
-            );
-        }
         return Err(
             YbError::new(format!("this YubiKey still has the factory-default {what}"))
                 .why("anything stored on it could be read by whoever holds the key")
@@ -138,14 +127,13 @@ mod tests {
         ..NONE
     };
 
-    const ALL_OPS: [SecretOp; 7] = [
+    const ALL_OPS: [SecretOp; 6] = [
         SecretOp::Fetch,
         SecretOp::Store,
         SecretOp::Remove,
         SecretOp::Format { protect: false },
         SecretOp::Format { protect: true },
         SecretOp::RotateManagementKey,
-        SecretOp::SelfTest,
     ];
 
     /// "refuse", "warn" or "silent" for `op` with `defaults`.
@@ -166,7 +154,7 @@ mod tests {
                 .collect();
             assert_eq!(
                 got,
-                ["warn", "refuse", "warn", "warn", "refuse", "refuse", "refuse"],
+                ["warn", "refuse", "warn", "warn", "refuse", "refuse"],
                 "{creds:?}"
             );
         }
@@ -175,10 +163,7 @@ mod tests {
     #[test]
     fn table_default_management_key() {
         let got: Vec<_> = ALL_OPS.iter().map(|&op| outcome(op, MGMT, false)).collect();
-        assert_eq!(
-            got,
-            ["silent", "warn", "warn", "warn", "silent", "silent", "refuse"]
-        );
+        assert_eq!(got, ["silent", "warn", "warn", "warn", "silent", "silent"]);
     }
 
     #[test]

@@ -72,12 +72,15 @@ let
   rustClippy = crane.cargoClippy (rustCommon // {
     pname              = "yb-clippy";
     cargoArtifacts     = rustDeps;
-    cargoClippyExtraArgs = "-- --deny warnings";
+    # With the self-test feature, so that `yb self-test` is linted too.
+    cargoClippyExtraArgs = "--all-targets --features yb/self-test -- --deny warnings";
   });
 
   rustTests = crane.cargoTest (rustCommon // {
     pname          = "yb-tests";
     cargoArtifacts = rustDeps;
+    # Includes the end-to-end `yb self-test` on a simulated YubiKey.
+    cargoTestExtraArgs = "--features yb/self-test";
   });
 
   # ---------------------------------------------------------------------------

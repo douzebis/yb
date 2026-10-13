@@ -662,3 +662,43 @@ fn test_random_operations() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// PIV reset (spec 0032 G6)
+// ---------------------------------------------------------------------------
+
+/// As the card: RESET is refused while the PIN or the PUK is not blocked.
+const FACTORY_MGMT: &str = "010203040506070801020304050607080102030405060708";
+
+#[test]
+fn reset_refused_unless_pin_and_puk_blocked() {
+    let piv = VirtualPiv::from_fixture(&fixture("with_key.yaml")).unwrap();
+    let reader = piv.reader_name();
+    assert!(piv.reset_blocked_piv(&reader).is_err());
+    piv.verify_pin(&reader, WITH_KEY_PIN).unwrap();
+}
+
+/// `reset_piv` blocks the PIN and PUK, then resets: factory credentials,
+/// no key, no object.  The PIN here is one of the "wrong" values the
+/// blocking tries first, which must then be replaced by another.
+#[test]
+fn reset_piv_restores_the_factory_state() {
+    let with_key = std::fs::read_to_string(fixture("with_key.yaml")).unwrap();
+    let yaml = with_key.replace(WITH_KEY_PIN, "00000000");
+    assert_ne!(yaml, with_key);
+    let piv = VirtualPiv::from_fixture_yaml(&yaml).unwrap();
+    let reader = piv.reader_name();
+    piv.verify_pin(&reader, "00000000").unwrap();
+    piv.write_object(&reader, 0x5F_0000, b"data", FACTORY_MGMT)
+        .unwrap();
+
+    piv.reset_piv(&reader).unwrap();
+
+    piv.verify_pin(&reader, "123456").unwrap();
+    piv.change_reference(&reader, yb_core::piv::PinRef::Puk, "12345678", "12345678")
+        .unwrap();
+    assert!(piv.read_object(&reader, 0x5F_0000).is_err());
+    assert!(piv.read_certificate(&reader, 0x82).is_err());
+    piv.authenticate_management_key(&reader, FACTORY_MGMT)
+        .unwrap();
+}

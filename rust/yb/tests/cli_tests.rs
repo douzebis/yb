@@ -1827,12 +1827,6 @@ mod default_policy_tests {
         )
         .unwrap();
     }
-
-    #[test]
-    fn self_test_policy_refuses_any_default() {
-        let (_piv, ctx, _t) = card(false, false, true);
-        assert!(ctx.enforce_default_policy(SecretOp::SelfTest).is_err());
-    }
 }
 
 // ---------------------------------------------------------------------------

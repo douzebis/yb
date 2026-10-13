@@ -18,7 +18,7 @@
 use crate::piv::session::PcscSession;
 use crate::piv::PivBackend;
 use crate::store::constants::OBJECT_ID_ZERO;
-use anyhow::Result;
+use anyhow::{bail, Result};
 
 /// Maximum number of 3-byte PIV object IDs in the range 0x5F0000..0x5F00FF.
 const MAX_SLOTS: usize = 256;
@@ -55,31 +55,50 @@ pub fn measure_free_nvm(reader: &str, mgmt_key: &str, verbose: bool) -> Result<u
         );
     }
 
-    // Fill each empty slot to maximum via binary search.
-    let mut total = 0usize;
+    // Fill each empty slot to maximum via binary search.  A slot is
+    // recorded before its probe, which writes to it, so that the clean-up
+    // below covers it whatever happens.
     let mut filled: Vec<usize> = Vec::new();
-    for &slot in &empty_slots {
-        let id = OBJECT_ID_ZERO + slot as u32;
-        let size = dichotomy_fill(&mut session, mgmt_key, id)?;
-        if verbose {
-            eprintln!("    slot {slot:3}: {size} bytes");
-        }
-        if size == 0 {
+    let measured = (|| -> Result<usize> {
+        let mut total = 0usize;
+        for &slot in &empty_slots {
+            let id = OBJECT_ID_ZERO + slot as u32;
+            filled.push(slot);
+            let size = dichotomy_fill(&mut session, mgmt_key, id)?;
             if verbose {
-                eprintln!("    NVM full — stopping early.");
+                eprintln!("    slot {slot:3}: {size} bytes");
             }
-            break;
+            if size == 0 {
+                if verbose {
+                    eprintln!("    NVM full — stopping early.");
+                }
+                break;
+            }
+            total += size;
         }
-        total += size;
-        filled.push(slot);
-    }
+        Ok(total)
+    })();
 
-    // Restore all probe slots to empty.
-    for &slot in &filled {
-        let id = OBJECT_ID_ZERO + slot as u32;
-        session.authenticate_management_key(mgmt_key)?;
-        session.try_put_data(id, &[])?;
+    // Restore all probe slots to empty, on every path (spec 0032 G2).
+    let left: Vec<String> = filled
+        .iter()
+        .filter(|&&slot| {
+            let id = OBJECT_ID_ZERO + slot as u32;
+            let emptied = session
+                .authenticate_management_key(mgmt_key)
+                .and_then(|()| session.try_put_data(id, &[]));
+            !matches!(emptied, Ok(true))
+        })
+        .map(|&slot| format!("0x{:06X}", OBJECT_ID_ZERO + slot as u32))
+        .collect();
+    if !left.is_empty() {
+        bail!(
+            "the NVM probe could not empty object(s) {}; they use YubiKey memory \
+             until removed (a PIV reset removes them)",
+            left.join(", ")
+        );
     }
+    let total = measured?;
 
     if verbose {
         eprintln!("  measure_free_nvm: total free = {total} bytes.");

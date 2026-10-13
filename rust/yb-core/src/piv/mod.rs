@@ -194,6 +194,31 @@ pub trait PivBackend: Send + Sync {
         Ok(())
     }
 
+    /// Reload state from a fixture file (no-op for hardware backends): the
+    /// counterpart of [`save_fixture`](Self::save_fixture), for a process
+    /// that shares a simulated YubiKey with its child processes.
+    fn load_fixture(&self, _path: &std::path::Path) -> Result<()> {
+        Ok(())
+    }
+
+    /// Reset the PIV application to its factory state, as `ykman piv
+    /// reset` does: block the PIN and the PUK with wrong values, then
+    /// RESET (`00 FB 00 00`).  Erases every PIV key, certificate and data
+    /// object; the PIN, PUK and management key return to their factory
+    /// values.  OTP, FIDO2 and OATH are unaffected.
+    fn reset_piv(&self, reader: &str) -> Result<()> {
+        block_reference(|wrong| self.verify_pin(reader, wrong))?;
+        block_reference(|wrong| self.change_reference(reader, PinRef::Puk, wrong, wrong))?;
+        self.reset_blocked_piv(reader)
+    }
+
+    /// The RESET command itself; the card accepts it only once the PIN and
+    /// the PUK are blocked.
+    fn reset_blocked_piv(&self, reader: &str) -> Result<()> {
+        self.send_apdu(reader, &[0x00, 0xFB, 0x00, 0x00])
+            .map(|_| ())
+    }
+
     /// Start flashing the LED on the device attached to `reader`.
     ///
     /// `on_ms` — how long the LED stays on per cycle (milliseconds).
@@ -209,4 +234,25 @@ pub trait PivBackend: Send + Sync {
     fn start_flash(&self, _reader: &str, _on_ms: u64, _off_ms: u64) -> Box<dyn FlashHandle> {
         Box::new(NoopFlash)
     }
+}
+
+/// Present wrong values until the card reports the PIN or PUK blocked
+/// (`SW 6983`).  A "wrong" value that turns out to be the right one is
+/// replaced by the next.
+fn block_reference(mut attempt: impl FnMut(&str) -> Result<()>) -> Result<()> {
+    const WRONG: [&str; 3] = ["00000000", "99999999", "13579246"];
+    let mut wrong = 0;
+    // A PIV retry counter is at most 255.
+    for _ in 0..(256 + WRONG.len()) {
+        let Some(value) = WRONG.get(wrong) else { break };
+        match attempt(value) {
+            Ok(()) => wrong += 1,
+            Err(e) => match e.downcast_ref::<crate::errors::CardError>() {
+                Some(crate::errors::CardError::Status { sw: 0x6983, .. }) => return Ok(()),
+                Some(crate::errors::CardError::Status { sw, .. }) if sw & 0xFFF0 == 0x63C0 => {}
+                _ => return Err(e),
+            },
+        }
+    }
+    anyhow::bail!("could not block the PIN or PUK before the PIV reset")
 }

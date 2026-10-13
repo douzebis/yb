@@ -12,6 +12,8 @@ use yb_core::orchestrator::{self, Compression, Encryption, StoreOptions};
 use yb_core::store::{constants::MAX_NAME_LEN, Store};
 use yb_core::{errors::YbError, Context, SecretOp, SlotKeyCheck};
 
+use crate::cli::util::{ExitStatus, StatusError};
+
 #[derive(Args, Debug)]
 pub struct StoreArgs {
     /// Source files to store.  Blob name defaults to each file's basename.
@@ -114,14 +116,7 @@ pub fn run(ctx: &Context, args: &StoreArgs) -> Result<()> {
     // store that would fit.
     let mut free = store.free_count();
     for (name, payload) in &entries {
-        let enc_len = if encrypted {
-            // Approximate: actual encrypted size = payload + GCM overhead.
-            payload.len() + yb_core::crypto::GCM_OVERHEAD
-        } else {
-            payload.len()
-        };
-        let name_len = name.len().min(MAX_NAME_LEN);
-        let needed = yb_core::orchestrator::objects_needed(enc_len, name_len, store.object_size);
+        let needed = objects_for(&store, name, payload.len(), encrypted);
         let old_copy = store
             .find_head(name)
             .map_or(0, |head| store.chunk_chain(head.index()).len());
@@ -132,17 +127,18 @@ pub fn run(ctx: &Context, args: &StoreArgs) -> Result<()> {
             } else {
                 ""
             };
-            if entries.len() == 1 {
-                bail!(
+            let message = if entries.len() == 1 {
+                format!(
                     "store is full — remove some blobs first (need {needed} object(s), \
                      {free} free{replacing})"
-                );
+                )
             } else {
-                bail!(
+                format!(
                     "store is full — not enough room for '{name}' (need {needed} \
                      object(s), {free} free{replacing}); nothing was stored"
-                );
-            }
+                )
+            };
+            return Err(StatusError::new(ExitStatus::StoreFull, message).into());
         }
         free = free - needed + old_copy;
     }
@@ -194,4 +190,18 @@ pub fn run(ctx: &Context, args: &StoreArgs) -> Result<()> {
 
     ctx.complete_pending_repairs();
     Ok(())
+}
+
+/// Objects a blob needs, as the capacity check counts them: the payload
+/// before compression, encryption overhead and signature trailer included
+/// (an upper bound).  `yb self-test` uses it to check a "store full".
+pub fn objects_for(store: &Store, name: &str, payload_len: usize, encrypted: bool) -> usize {
+    let enc_len = if encrypted {
+        // Approximate: actual encrypted size = payload + GCM overhead.
+        payload_len + yb_core::crypto::GCM_OVERHEAD
+    } else {
+        payload_len
+    };
+    let name_len = name.len().min(MAX_NAME_LEN);
+    yb_core::orchestrator::objects_needed(enc_len, name_len, store.object_size)
 }

@@ -118,6 +118,20 @@ List all blobs with details:
 yb list \-\-long
 .fi
 .RE
+.SH EXIT STATUS
+.TP
+\fB0\fR
+Success.
+.TP
+\fB1\fR
+An error other than those below.
+.TP
+\fB2\fR
+A blob name or pattern matched nothing (\fBfetch\fR; \fBremove\fR
+without \fB\-f\fR).
+.TP
+\fB3\fR
+The store has no room for the blobs (\fBstore\fR); nothing was written.
 .SH SECURITY
 Blobs are encrypted with AES-256-GCM using a key derived via ECDH with a
 P-256 private key that never leaves the YubiKey hardware.

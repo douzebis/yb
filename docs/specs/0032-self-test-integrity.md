@@ -6,9 +6,9 @@ SPDX-License-Identifier: MIT
 
 # 0032 — Self-Test Integrity
 
-**Status:** draft
+**Status:** implemented
 **App:** yb
-**Implemented in:** <!-- YYYY-MM-DD, fill after implementation -->
+**Implemented in:** 2026-10-13
 
 ## Problem
 
@@ -58,10 +58,14 @@ in-memory model.  The audit of 2026-10-13
 - **G6 — Start from a reset** (decided 2026-10-13).  The self-test does
   not rely on existing credentials: it starts by resetting the YubiKey's
   PIV application (block the PIN and the PUK, then PIV RESET), then runs
-  with factory credentials or its own.  This erases **all** PIV data,
+  with its own credentials.  This erases **all** PIV data,
   every slot's keys and certificates (e.g. an SSH or signing key in
   9a/9c), not only yb's store; OTP, FIDO2 and OATH are unaffected.  The
-  confirmation prompt says so.
+  confirmation prompt says so.  After the reset: PIN 654321, PUK
+  87654321, and the management key kept on the YubiKey, unlocked by the
+  PIN (spec 0027), the configuration users run.  A successful run ends
+  with another PIV reset; a failed one leaves the YubiKey as it is, for
+  inspection.
 
 ## Non-goals
 
@@ -102,10 +106,42 @@ in-memory model.  The audit of 2026-10-13
   object count (spec 0015 updated accordingly); "store full" outcomes are
   expected and checked (G4).
 
+### PIV reset
+
+`PivBackend::reset_piv(reader)`, in yb-core, by APDUs on the given reader
+only (no `ykman`, which picks its own device): wrong PIN VERIFYs until
+`SW 6983`, wrong PUK CHANGE REFERENCE DATAs until `SW 6983`, then RESET
+(`00 FB 00 00`).  A "wrong" value that happens to be right is replaced by
+another.  `VirtualPiv` refuses the RESET unless both are blocked, as the
+card does.
+
+### NVM measurements
+
+Kept (decided 2026-10-13): they reveal memory that removing blobs does
+not give back.  On the selected reader only (G1).  The probe records each
+object before writing to it, and empties every recorded object whatever
+happens (G2); objects it cannot empty are listed in the error.  Skipped
+on a simulated YubiKey.
+
+### Tests
+
+- `yb/tests/self_test_tests.rs` (feature `self-test`): the whole
+  self-test against a simulated YubiKey (`YB_FIXTURE`), which the parent
+  and its `yb` children share through its file (the parent saves its view
+  before each child and reloads it after): passes, refuses stores that
+  are checked as genuinely full, and leaves a factory-reset card;
+  `--quiet`; cancellation changes nothing.
+- `yb/tests/exit_status_tests.rs`: statuses 2 and 3 through the binary.
+- `yb-core/tests/virtual_piv_tests.rs`: RESET refused unless blocked;
+  `reset_piv` restores the factory state, also when the PIN is one of the
+  "wrong" values.
+- G1 holds by construction (every card operation takes `ctx.reader`);
+  G2's clean-up path needs a real YubiKey's memory limit, and is not
+  tested.
+
 ## Open questions
 
-- How to test G1 without hardware: `VirtualPiv` with two simulated
-  YubiKeys, if the fixture format can describe two?
+None.  Testing G1 without hardware: by construction, see Tests.
 
 ## References
 

@@ -12,7 +12,19 @@ All notable changes to yb are recorded here.  The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Exit statuses:** `yb` exits with status 2 when a blob name or pattern
+  matches nothing (`fetch`, `rm` without `-f`), and 3 when the store has
+  no room (`store`, before writing anything); 1 remains every other error.
+
 ### Changed
+
+- **`yb self-test` starts from a PIV reset** and relies on no credential of
+  the user's: it resets the PIV application (erasing every PIV key and
+  certificate, not only yb's store, as its prompt says), sets PIN 654321
+  and PUK 87654321 and a management key kept on the YubiKey, and resets
+  the PIV application again after a successful run (spec 0032).
 
 - **`yb fetch` verifies signatures** before writing or decrypting
   anything, without the PIN, and refuses a blob that is corrupted or was
@@ -50,6 +62,16 @@ All notable changes to yb are recorded here.  The format follows
 - `yb rm` writes the blob heads first, so an interrupted removal leaves each
   blob whole or gone.
 - `yb fsck` no longer crashes on a store with a corrupt chunk pointer.
+- `yb self-test` measured free memory on the first YubiKey found, not
+  necessarily the one selected with `--serial`, writing temporary objects
+  to it; an error during that measurement could leave them behind.  It
+  now uses the selected YubiKey only, and always removes them, or names
+  those it could not remove.
+- `yb self-test` took any failed fetch for "not found", any failed remove
+  for "nothing to remove", and any message mentioning "store is full" for
+  a full store, so that real errors passed; it now reads `yb`'s exit
+  statuses, checks each "store full" against the store, stops on any
+  other error, gives each `yb` it runs 30 seconds, and honors `--quiet`.
 
 ## [0.5.2] — 2026-10-10
 

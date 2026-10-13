@@ -23,6 +23,10 @@ path = "src/main.rs"
 name = "yb-gen-man"
 path = "src/gen_man.rs"
 
+[[test]]
+name = "self_test_tests"
+required-features = ["self-test"]
+
 [lib]
 name = "yb"
 path = "src/lib.rs"

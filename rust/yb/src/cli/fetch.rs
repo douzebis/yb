@@ -10,7 +10,9 @@ use std::path::PathBuf;
 use yb_core::orchestrator;
 use yb_core::{store::Store, Context, SecretOp};
 
-use crate::cli::util::{check_blob_signature, resolve_patterns, SigVerdict};
+use crate::cli::util::{
+    check_blob_signature, resolve_patterns, ExitStatus, SigVerdict, StatusError,
+};
 use crate::complete::complete_blob_names;
 
 #[derive(Args, Debug)]
@@ -105,7 +107,9 @@ pub fn run(ctx: &Context, args: &FetchArgs) -> Result<()> {
             pin.as_deref(),
             ctx.debug,
         )?
-        .ok_or_else(|| anyhow::anyhow!("blob '{}' not found", name))?;
+        .ok_or_else(|| {
+            StatusError::new(ExitStatus::NotFound, format!("blob '{name}' not found"))
+        })?;
 
         if args.stdout {
             std::io::stdout().write_all(&data)?;

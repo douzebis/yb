@@ -38,7 +38,7 @@ fn main() {
             yb_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
         };
         eprintln!("{}", render(&e, &env));
-        std::process::exit(1);
+        std::process::exit(cli::util::exit_status(&e));
     }
 }
 

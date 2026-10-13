@@ -2,15 +2,22 @@
 //
 // SPDX-License-Identifier: MIT
 
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use clap::Args;
-use std::io::{BufRead as _, Write as _};
+use std::io::{BufRead as _, Read as _, Write as _};
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 use yb_core::{
-    test_utils::{OpType, OperationGenerator, ToyFilesystem},
-    Context, SecretOp,
+    auxiliaries::read_printed_keys,
+    piv::{PinRef, PivBackend},
+    store::Store,
+    test_utils::{OpType, Operation, OperationGenerator, ToyFilesystem},
+    Context,
 };
+
+use crate::cli::store::objects_for;
+use crate::cli::util::ExitStatus;
 
 #[derive(Args, Debug)]
 pub struct SelfTestArgs {
@@ -77,71 +84,153 @@ impl Stats {
 // Subprocess executor
 // ---------------------------------------------------------------------------
 
-struct Executor {
-    yb_bin: PathBuf,
-    serial: u32,
-    pin: String,
-    mgmt_key: String,
+/// What a `yb` child process returned.
+struct Output {
+    code: i32,
+    stdout: Vec<u8>,
+    stderr: String,
 }
 
-impl Executor {
-    fn run(&self, args: &[&str], stdin: Option<&[u8]>) -> Result<(i32, Vec<u8>, String)> {
-        let mut cmd = Command::new(&self.yb_bin);
-        cmd.args(["--serial", &self.serial.to_string(), "--allow-defaults"])
-            .env("YB_PIN", &self.pin)
-            .env("YB_MANAGEMENT_KEY", &self.mgmt_key)
-            .args(args)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
-        if stdin.is_some() {
-            cmd.stdin(std::process::Stdio::piped());
+impl Output {
+    fn describe(&self) -> String {
+        format!("exit status {}: {}", self.code, self.stderr.trim())
+    }
+}
+
+/// Runs `yb` as a user would, on the selected YubiKey, with the self-test's
+/// PIN.  On a simulated YubiKey (`YB_FIXTURE`), which parent and children
+/// share through its file, the parent's view is saved before each child
+/// and reloaded after it.
+struct Executor<'a> {
+    yb_bin: PathBuf,
+    serial: u32,
+    piv: &'a dyn PivBackend,
+    fixture: Option<PathBuf>,
+}
+
+impl Executor<'_> {
+    fn run(&self, args: &[&str], stdin: Option<&[u8]>) -> Result<Output> {
+        if let Some(path) = &self.fixture {
+            self.piv.save_fixture(path)?;
         }
-        let mut child = cmd.spawn()?;
-        if let Some(data) = stdin {
-            child.stdin.as_mut().unwrap().write_all(data)?;
+        let output = self.spawn(args, stdin);
+        if let Some(path) = &self.fixture {
+            self.piv.load_fixture(path)?;
         }
-        let out = child.wait_with_output()?;
-        let code = out.status.code().unwrap_or(1);
-        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-        Ok((code, out.stdout, stderr))
+        output
     }
 
-    fn store(&self, name: &str, payload: &[u8], encrypted: bool) -> Result<StoreResult> {
+    fn spawn(&self, args: &[&str], stdin: Option<&[u8]>) -> Result<Output> {
+        let mut child = Command::new(&self.yb_bin)
+            .args(["--serial", &self.serial.to_string()])
+            .args(args)
+            .env("YB_PIN", PIN)
+            .env_remove("YB_MANAGEMENT_KEY")
+            .stdin(if stdin.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        // Feed stdin and drain the pipes from threads, so that no pipe
+        // fills up while the parent waits.
+        let writer = child.stdin.take().map(|mut pipe| {
+            let data = stdin.unwrap_or_default().to_vec();
+            std::thread::spawn(move || pipe.write_all(&data))
+        });
+        let mut out_pipe = child.stdout.take().expect("piped stdout");
+        let mut err_pipe = child.stderr.take().expect("piped stderr");
+        let out_reader = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            out_pipe.read_to_end(&mut buf).map(|_| buf)
+        });
+        let err_reader = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            err_pipe.read_to_end(&mut buf).map(|_| buf)
+        });
+
+        let deadline = Instant::now() + CHILD_TIMEOUT;
+        let status = loop {
+            if let Some(status) = child.try_wait()? {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                bail!(
+                    "`yb {}` did not finish within {} s",
+                    args.join(" "),
+                    CHILD_TIMEOUT.as_secs()
+                );
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        if let Some(writer) = writer {
+            // A child that exits without reading its input is not an error
+            // here; its exit status says what happened.
+            let _ = writer.join();
+        }
+        let stdout = out_reader.join().expect("stdout reader")?;
+        let stderr = err_reader.join().expect("stderr reader")?;
+        Ok(Output {
+            code: status.code().unwrap_or(-1),
+            stdout,
+            stderr: String::from_utf8_lossy(&stderr).into_owned(),
+        })
+    }
+
+    /// A set-up step that must succeed.
+    fn run_checked(&self, args: &[&str]) -> Result<()> {
+        let out = self.run(args, None)?;
+        if out.code != 0 {
+            bail!("`yb {}` failed, {}", args.join(" "), out.describe());
+        }
+        Ok(())
+    }
+
+    /// `Ok(false)`: `yb` reported the store full (exit status 3).
+    fn store(&self, name: &str, payload: &[u8], encrypted: bool) -> Result<bool> {
         let enc_flag = if encrypted {
             "--encrypted"
         } else {
             "--unencrypted"
         };
-        let (code, _, stderr) = self.run(&["store", enc_flag, "--name", name], Some(payload))?;
-        if code == 0 {
-            return Ok(StoreResult::Ok);
+        let out = self.run(&["store", enc_flag, "--name", name], Some(payload))?;
+        match out.code {
+            0 => Ok(true),
+            c if c == ExitStatus::StoreFull as i32 => Ok(false),
+            _ => bail!("{}", out.describe()),
         }
-        if stderr.to_lowercase().contains("store is full") {
-            return Ok(StoreResult::Full);
-        }
-        Ok(StoreResult::Err(format!("exit {code}: {}", stderr.trim())))
     }
 
+    /// `Ok(None)`: `yb` reported the blob not found (exit status 2).
     fn fetch(&self, name: &str) -> Result<Option<Vec<u8>>> {
-        let (code, stdout, _) = self.run(&["fetch", "--stdout", name], None)?;
-        if code == 0 {
-            Ok(Some(stdout))
-        } else {
-            Ok(None)
+        let out = self.run(&["fetch", "--stdout", name], None)?;
+        match out.code {
+            0 => Ok(Some(out.stdout)),
+            c if c == ExitStatus::NotFound as i32 => Ok(None),
+            _ => bail!("{}", out.describe()),
         }
     }
 
+    /// `Ok(false)`: `yb` reported the blob not found (exit status 2).
     fn remove(&self, name: &str) -> Result<bool> {
-        let (code, _, _) = self.run(&["rm", name], None)?;
-        Ok(code == 0)
+        let out = self.run(&["rm", name], None)?;
+        match out.code {
+            0 => Ok(true),
+            c if c == ExitStatus::NotFound as i32 => Ok(false),
+            _ => bail!("{}", out.describe()),
+        }
     }
 
     fn list(&self) -> Result<Vec<String>> {
-        let (code, stdout, _) = self.run(&["ls"], None)?;
-        if code != 0 {
-            bail!("yb ls failed");
+        let out = self.run(&["ls"], None)?;
+        if out.code != 0 {
+            bail!("{}", out.describe());
         }
-        let names = String::from_utf8_lossy(&stdout)
+        let names = String::from_utf8_lossy(&out.stdout)
             .lines()
             .map(|l| l.trim().to_owned())
             .filter(|l| !l.is_empty())
@@ -150,26 +239,27 @@ impl Executor {
     }
 }
 
-enum StoreResult {
-    Ok,
-    Full,
-    Err(String),
-}
-
 // ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
 
+/// The credentials the self-test sets after the reset (spec 0032 G6).
+const PIN: &str = "654321";
+const PUK: &str = "87654321";
+const FACTORY_PIN: &str = "123456";
+const FACTORY_PUK: &str = "12345678";
+
+const OBJECT_COUNT: &str = "20";
+const CHILD_TIMEOUT: Duration = Duration::from_secs(30);
+
 pub fn run(ctx: &mut Context, args: &SelfTestArgs) -> Result<()> {
-    ctx.enforce_default_policy(SecretOp::SelfTest)?;
     let serial = ctx.serial;
-    let version = {
-        let devices = ctx.piv.list_devices()?;
-        devices
-            .iter()
-            .find(|d| d.serial == serial)
-            .map(|d| d.version.clone())
-            .unwrap_or_else(|| "unknown".to_owned())
+    let version = ctx.firmware.clone();
+    let quiet = ctx.quiet;
+    let say = |line: &str| {
+        if !quiet {
+            eprintln!("{line}");
+        }
     };
 
     // Confirmation prompt — flash the LED at 5 Hz while waiting for 'yes'.
@@ -184,14 +274,7 @@ pub fn run(ctx: &mut Context, args: &SelfTestArgs) -> Result<()> {
         if existing.is_some() {
             existing
         } else {
-            let reader = ctx
-                .piv
-                .list_devices()?
-                .into_iter()
-                .find(|d| d.serial == serial)
-                .map(|d| d.reader)
-                .unwrap_or_default();
-            Some(ctx.piv.start_flash(&reader, 100, 100))
+            Some(ctx.piv.start_flash(&ctx.reader, 100, 100))
         }
     } else {
         drop(ctx.take_flash()); // stop picker flash if --no-flash
@@ -209,68 +292,78 @@ pub fn run(ctx: &mut Context, args: &SelfTestArgs) -> Result<()> {
     }
     eprintln!();
 
-    // Resolve credentials.
-    let pin = ctx
-        .require_pin()?
-        .ok_or_else(|| anyhow::anyhow!("PIN is required for self-test"))?;
+    // Every card operation below acts on the selected YubiKey only (G1).
+    let (reader, piv) = (ctx.reader.as_str(), ctx.piv.as_ref());
+    let executor = Executor {
+        yb_bin: std::env::current_exe()?,
+        serial,
+        piv,
+        fixture: std::env::var_os("YB_FIXTURE").map(PathBuf::from),
+    };
+    // NVM measurements need a real YubiKey's memory.
+    let measure_nvm = executor.fixture.is_none();
 
-    let mgmt_key = ctx.management_key_for_write()?;
+    // Start from a reset, relying on no existing credential (G6), then set
+    // up the configuration users run: own PIN and PUK, management key kept
+    // on the YubiKey, unlocked by the PIN.
+    say("Resetting the PIV application...");
+    piv.reset_piv(reader)?;
+    piv.change_reference(reader, PinRef::Pin, FACTORY_PIN, PIN)?;
+    piv.change_reference(reader, PinRef::Puk, FACTORY_PUK, PUK)?;
+    say(&format!("PIN set to {PIN}, PUK to {PUK}."));
+    executor.run_checked(&["--quiet", "rotate-management-key"])?;
+    say("Management key kept on the YubiKey, unlocked by the PIN.");
 
-    // Resolve the reader string for NVM measurements (single device assumed).
-    let reader = ctx
-        .piv
-        .list_readers()?
-        .into_iter()
-        .next()
-        .unwrap_or_default();
-
-    // Format via subprocess so key generation happens through the full CLI stack.
-    eprintln!("Formatting YubiKey (serial={serial})...");
-    let format_start = std::time::Instant::now();
-    {
-        let yb_bin = std::env::current_exe()?;
-        let status = Command::new(&yb_bin)
-            .args(["--serial", &serial.to_string(), "--allow-defaults"])
-            .env("YB_PIN", &pin)
-            .env("YB_MANAGEMENT_KEY", &mgmt_key)
-            .args(["format", "--generate", "--object-count", "20"])
-            .status()?;
-        if !status.success() {
-            bail!("format failed");
-        }
-    }
-    eprintln!(
+    // Format through `yb`, so that it is tested too.
+    say(&format!("Formatting YubiKey (serial={serial})..."));
+    let format_start = Instant::now();
+    executor.run_checked(&[
+        "--quiet",
+        "format",
+        "--generate",
+        "--object-count",
+        OBJECT_COUNT,
+    ])?;
+    say(&format!(
         "Format complete ({:.1}s).",
         format_start.elapsed().as_secs_f64()
-    );
-    eprintln!();
+    ));
+    say("");
 
-    // Measure free NVM after format (baseline).
-    eprintln!("Measuring free NVM after format (baseline)...");
-    let free_after_format = yb_core::nvm::measure_free_nvm(&reader, &mgmt_key, true)?;
-    eprintln!("Free NVM after format: {free_after_format} bytes.");
-    eprintln!();
+    let mgmt_key = read_printed_keys(reader, piv, PIN)?
+        .current
+        .ok_or_else(|| anyhow!("the management key is not kept on the YubiKey"))?;
 
-    // Run operations.
-    let yb_bin = std::env::current_exe()?;
-    let executor = Executor {
-        yb_bin,
-        serial,
-        pin,
-        mgmt_key: mgmt_key.clone(),
+    let measure = |when: &str| -> Result<Option<usize>> {
+        if !measure_nvm {
+            return Ok(None);
+        }
+        say(&format!("Measuring free NVM {when}..."));
+        let free = yb_core::nvm::measure_free_nvm(reader, &mgmt_key, !quiet)?;
+        say(&format!("Free NVM {when}: {free} bytes."));
+        say("");
+        Ok(Some(free))
     };
+    let free_after_format = measure("after format (baseline)")?;
+
+    // Run operations.  The generator's capacity is the store's object count:
+    // beyond it, stores are refused as full, and checked (G4).
+    let capacity = Store::from_device(reader, piv)?.object_count as usize;
     let mut toy = ToyFilesystem::new();
-    let mut gen = OperationGenerator::new(args.seed, 25);
+    let mut gen = OperationGenerator::new(args.seed, capacity);
     let ops = gen.generate(args.count, 0.5);
 
     let mut stats = Stats::default();
-    let run_start = std::time::Instant::now();
+    let run_start = Instant::now();
     let mut completed = 0usize;
 
-    eprintln!("Running {} operations (seed={})...", args.count, args.seed);
-    eprintln!();
+    say(&format!(
+        "Running {} operations (seed={})...",
+        args.count, args.seed
+    ));
+    say("");
 
-    'ops: for (i, op) in ops.iter().enumerate() {
+    for (i, op) in ops.iter().enumerate() {
         let remaining = args.count - (i + 1);
         let desc = match op.op_type {
             OpType::Store => format!("STORE({})", op.name),
@@ -278,114 +371,41 @@ pub fn run(ctx: &mut Context, args: &SelfTestArgs) -> Result<()> {
             OpType::Remove => format!("REMOVE({})", op.name),
             OpType::List => "LIST".to_owned(),
         };
-        eprint!(
-            "[{:3}/{}, {:3} remaining]  {:30}... ",
-            i + 1,
-            args.count,
-            remaining,
-            desc
-        );
-        std::io::stderr().flush()?;
+        if !quiet {
+            eprint!(
+                "[{:3}/{}, {:3} remaining]  {:30}... ",
+                i + 1,
+                args.count,
+                remaining,
+                desc
+            );
+            std::io::stderr().flush()?;
+        }
 
-        let (ok, msg) = match op.op_type {
-            OpType::Store => {
-                let prev = toy.fetch(&op.name).map(|(p, m)| (p.clone(), *m));
-                let was_present = prev.is_some();
-                toy.store(&op.name, op.payload.clone(), 0);
-
-                match executor.store(&op.name, &op.payload, op.encrypted)? {
-                    StoreResult::Ok => (true, String::new()),
-                    StoreResult::Full => {
-                        // Roll back toy update.
-                        if let Some((old_payload, old_mtime)) = prev {
-                            toy.store(&op.name, old_payload, old_mtime);
-                        } else if !was_present {
-                            toy.remove(&op.name);
-                        }
-                        // Confirm NVM was genuinely insufficient.
-                        eprintln!("FULL");
-                        let free = yb_core::nvm::measure_free_nvm(&reader, &mgmt_key, false)?;
-                        let payload_len = op.payload.len();
-                        let sufficient = free >= payload_len;
-                        eprintln!(
-                            "  store-full check: free_nvm={free}B  payload={payload_len}B  \
-                             free>=payload: {sufficient} (expected false)"
-                        );
-                        (true, String::new())
-                    }
-                    StoreResult::Err(e) => {
-                        // Roll back.
-                        if let Some((old_payload, old_mtime)) = prev {
-                            toy.store(&op.name, old_payload, old_mtime);
-                        } else if !was_present {
-                            toy.remove(&op.name);
-                        }
-                        (false, format!("Op #{} STORE({}): {}", i + 1, op.name, e))
-                    }
+        let result = run_op(&executor, &mut toy, op, reader, piv);
+        let (ok, msg) = match result {
+            Ok(Verdict::Pass) => (true, String::new()),
+            Ok(Verdict::Full { needed, free }) => {
+                if !quiet {
+                    eprint!("FULL (needs {needed} object(s), {free} free) ");
                 }
+                (true, String::new())
             }
-            OpType::Fetch => {
-                let result = executor.fetch(&op.name)?;
-                let expected = toy.fetch(&op.name).map(|(p, _)| p.as_slice());
-                if result.as_deref() == expected {
-                    (true, String::new())
-                } else {
-                    let got = result
-                        .as_ref()
-                        .map(|v| v.len())
-                        .map(|n| format!("{n} bytes"))
-                        .unwrap_or_else(|| "None".to_owned());
-                    let exp = expected
-                        .map(|p| format!("{} bytes", p.len()))
-                        .unwrap_or_else(|| "None".to_owned());
-                    (
-                        false,
-                        format!(
-                            "Op #{} FETCH({}): expected {exp}, got {got}",
-                            i + 1,
-                            op.name
-                        ),
-                    )
-                }
-            }
-            OpType::Remove => {
-                let removed = executor.remove(&op.name)?;
-                let expected = toy.remove(&op.name);
-                if removed == expected {
-                    (true, String::new())
-                } else {
-                    (
-                        false,
-                        format!(
-                            "Op #{} REMOVE({}): expected {expected}, got {removed}",
-                            i + 1,
-                            op.name
-                        ),
-                    )
-                }
-            }
-            OpType::List => {
-                let mut actual = executor.list()?;
-                let expected = toy.list();
-                actual.sort();
-                if actual == expected {
-                    (true, String::new())
-                } else {
-                    (
-                        false,
-                        format!("Op #{} LIST: expected {expected:?}, got {actual:?}", i + 1),
-                    )
-                }
-            }
+            Ok(Verdict::Mismatch(m)) => (false, format!("Op #{} {desc}: {m}", i + 1)),
+            Err(e) => (false, format!("Op #{} {desc}: {e:#}", i + 1)),
         };
 
         stats.record(&op.op_type, ok, &msg);
         completed += 1;
 
         if ok {
-            eprintln!("OK");
+            if !quiet {
+                eprintln!("OK");
+            }
         } else {
-            eprintln!("FAIL");
+            if !quiet {
+                eprintln!("FAIL");
+            }
             eprintln!("  Error: {msg}");
             eprintln!();
             eprintln!(
@@ -393,44 +413,39 @@ pub fn run(ctx: &mut Context, args: &SelfTestArgs) -> Result<()> {
                 i + 1,
                 args.count
             );
-            eprintln!("Run 'yb --serial {serial} fsck -v' to inspect.");
-            break 'ops;
+            break;
         }
     }
 
     let duration = run_start.elapsed().as_secs_f64();
 
-    // Measure free NVM after ops.
-    if stats.all_passed() {
-        eprintln!();
-        eprintln!("Measuring free NVM after ops...");
-        let free_after_ops = yb_core::nvm::measure_free_nvm(&reader, &mgmt_key, true)?;
-        eprintln!("Free NVM after ops: {free_after_ops} bytes.");
-    }
-
-    // Cleanup on success.
+    // Clean up on success: remove every blob, measure the memory given
+    // back, then reset the PIV application again.
     if stats.all_passed() && !args.no_cleanup {
-        eprintln!();
-        eprintln!("Cleaning up...");
-        let names = executor.list()?;
-        for name in &names {
-            executor.remove(name)?;
+        measure("after ops")?;
+        say("Cleaning up...");
+        for name in executor.list()? {
+            executor.remove(&name)?;
         }
-        eprintln!("Store emptied.");
-
-        // Measure free NVM after cleanup.
+        say("Store emptied.");
+        say("");
+        if let (Some(after), Some(baseline)) = (measure("after cleanup")?, free_after_format) {
+            say(&format!(
+                "NVM delta (cleanup − format): {:+} bytes.",
+                after as isize - baseline as isize
+            ));
+            say("");
+        }
+        say("Resetting the PIV application...");
+        piv.reset_piv(reader)?;
+        if let Some(path) = &executor.fixture {
+            piv.save_fixture(path)?;
+        }
+        say("PIV application reset to its factory state.");
+    } else {
         eprintln!();
-        eprintln!("Measuring free NVM after cleanup...");
-        let free_after_cleanup = yb_core::nvm::measure_free_nvm(&reader, &mgmt_key, true)?;
-        eprintln!("Free NVM after cleanup: {free_after_cleanup} bytes.");
-        eprintln!(
-            "NVM delta (cleanup − format): {:+} bytes.",
-            free_after_cleanup as isize - free_after_format as isize
-        );
-    } else if !stats.all_passed() {
-        eprintln!();
-        eprintln!("NOTE: YubiKey state preserved for debugging.");
-        eprintln!("      Run 'yb --serial {serial} ls' to inspect.");
+        eprintln!("NOTE: YubiKey state preserved (PIN {PIN}, PUK {PUK}).");
+        eprintln!("      Run 'yb --serial {serial} fsck' or 'yb --serial {serial} ls' to inspect.");
     }
 
     // Report.
@@ -441,6 +456,87 @@ pub fn run(ctx: &mut Context, args: &SelfTestArgs) -> Result<()> {
         std::process::exit(1);
     }
     Ok(())
+}
+
+/// The outcome of one operation, compared with the model.
+enum Verdict {
+    Pass,
+    /// `yb` reported the store full, and it was (G4).
+    Full {
+        needed: usize,
+        free: usize,
+    },
+    /// `yb` and the model disagree.
+    Mismatch(String),
+}
+
+/// Run one operation and compare its outcome with the model.  An error is
+/// any outcome other than the expected ones (G3).
+fn run_op(
+    executor: &Executor,
+    toy: &mut ToyFilesystem,
+    op: &Operation,
+    reader: &str,
+    piv: &dyn PivBackend,
+) -> Result<Verdict> {
+    match op.op_type {
+        OpType::Store => {
+            if executor.store(&op.name, &op.payload, op.encrypted)? {
+                toy.store(&op.name, op.payload.clone(), 0);
+                return Ok(Verdict::Pass);
+            }
+            // "Store full" only if it was: checked against the store as
+            // read here, with the same count as `yb store` (G4).
+            let mut store = Store::from_device(reader, piv)?;
+            store.sanitize();
+            let needed = objects_for(&store, &op.name, op.payload.len(), op.encrypted);
+            let free = store.free_count();
+            if needed > free {
+                Ok(Verdict::Full { needed, free })
+            } else {
+                Ok(Verdict::Mismatch(format!(
+                    "yb reported the store full, but the blob needs {needed} object(s) \
+                     and {free} are free"
+                )))
+            }
+        }
+        OpType::Fetch => {
+            let got = executor.fetch(&op.name)?;
+            let expected = toy.fetch(&op.name).map(|(p, _)| p.as_slice());
+            if got.as_deref() == expected {
+                return Ok(Verdict::Pass);
+            }
+            let size = |p: Option<&[u8]>| {
+                p.map_or("not found".to_owned(), |p| format!("{} bytes", p.len()))
+            };
+            Ok(Verdict::Mismatch(format!(
+                "expected {}, got {}",
+                size(expected),
+                size(got.as_deref())
+            )))
+        }
+        OpType::Remove => {
+            let removed = executor.remove(&op.name)?;
+            let expected = toy.remove(&op.name);
+            if removed == expected {
+                return Ok(Verdict::Pass);
+            }
+            Ok(Verdict::Mismatch(format!(
+                "expected removed={expected}, got removed={removed}"
+            )))
+        }
+        OpType::List => {
+            let mut actual = executor.list()?;
+            let expected = toy.list();
+            actual.sort();
+            if actual == expected {
+                return Ok(Verdict::Pass);
+            }
+            Ok(Verdict::Mismatch(format!(
+                "expected {expected:?}, got {actual:?}"
+            )))
+        }
+    }
 }
 
 fn print_warning(serial: u32, version: &str, count: usize) {
@@ -454,11 +550,16 @@ fn print_warning(serial: u32, version: &str, count: usize) {
     eprintln!("  Version: {version}");
     eprintln!();
     eprintln!("This self-test will:");
-    eprintln!("  1. FORMAT the YubiKey  (destroys all existing blob data)");
-    eprintln!("  2. Run {count} store/fetch/remove/list operations");
-    eprintln!("  3. Stop on the first error");
+    eprintln!("  1. RESET the YubiKey's PIV application");
+    eprintln!("  2. Set PIN {PIN}, PUK {PUK}, a management key kept on the");
+    eprintln!("     YubiKey, and format a store");
+    eprintln!("  3. Run {count} store/fetch/remove/list operations, stopping on");
+    eprintln!("     the first error (the YubiKey is then left as it is)");
+    eprintln!("  4. On success, reset the PIV application again");
     eprintln!();
-    eprintln!("ALL EXISTING BLOB DATA WILL BE PERMANENTLY LOST.");
+    eprintln!("ALL PIV DATA WILL BE PERMANENTLY LOST: every key and certificate");
+    eprintln!("(e.g. SSH or signing keys in slots 9a, 9c), not only yb's store.");
+    eprintln!("OTP, FIDO2 and OATH are not affected.");
     eprintln!();
 }
 

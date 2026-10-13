@@ -84,7 +84,7 @@ still at its factory value:
 | `format` (flag-driven), with `--protect` | **refuse**: `--protect` stores the new management key behind the PIN | allowed: `--protect` replaces it |
 | `format` (flag-driven), without `--protect` | warn | warn |
 | `format` (guided, spec 0023) | handled in the flow (spec 0023 §4) | handled in the flow |
-| `self-test` | **refuse** unless `--allow-defaults`: today's behavior, unchanged | same |
+| `self-test` | n/a: resets the PIV application first (spec 0032) | same |
 
 `format` applies the policy in spec 0022 Phase A step 2, next to the
 protection-mode check.  A refusal therefore reports "nothing was changed on
@@ -152,7 +152,7 @@ YubiKey section, which do not exist yet.  Spec 0023 adds those pointers:
 - A new function, `Context::enforce_default_policy(op: SecretOp)`, is
   called by each command at the point it is about to act.
   - `SecretOp` values: `Fetch`, `Store`, `Remove`, `Fsck`,
-    `Format { protect: bool }`, `SelfTest`.
+    `Format { protect: bool }`, `SelfTest` (removed by spec 0032).
   - It applies the §2 table.  A refusal returns `Err`.  Otherwise it
     returns the warnings that apply (`Vec<String>`), and prints them
     unless `--quiet`.  Returning them lets the in-process tests check
@@ -210,6 +210,8 @@ Also:
   and no `YB_MANAGEMENT_KEY`, `store` and `rm` work, through the spec 0022
   resolver.
 - **`self-test`**: refused on any default without `--allow-defaults`.
+  (Superseded by spec 0032: the self-test resets the PIV application and
+  sets its own credentials, so the policy no longer applies to it.)
 - **`format` refusal writes nothing**: `format --protect` with a default
   PIN fails with "nothing was changed on the YubiKey" and zero writes.
 - **Truthful reporting**: after the virtual card's PIN, PUK or management

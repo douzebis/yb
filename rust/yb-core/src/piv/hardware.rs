@@ -94,6 +94,12 @@ impl PivBackend for HardwarePiv {
         session.change_reference(which, old, new)
     }
 
+    fn reset_blocked_piv(&self, reader: &str) -> Result<()> {
+        let mut session = PcscSession::open(reader)?;
+        session.transmit_check(&[0x00, 0xFB, 0x00, 0x00], CardOp::ResetPiv)?;
+        Ok(())
+    }
+
     fn ecdh(
         &self,
         reader: &str,

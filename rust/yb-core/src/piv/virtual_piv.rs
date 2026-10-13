@@ -816,6 +816,43 @@ impl PivBackend for VirtualPiv {
     fn save_fixture(&self, path: &std::path::Path) -> Result<()> {
         self.do_save_fixture(path)
     }
+
+    fn load_fixture(&self, path: &std::path::Path) -> Result<()> {
+        let loaded = Self::from_fixture(path)?;
+        let state = std::mem::replace(
+            &mut *loaded.state.lock().unwrap(),
+            VirtualState::default_state(0, String::new(), String::new()),
+        );
+        *self.state.lock().unwrap() = state;
+        Ok(())
+    }
+
+    /// As the card: refused (`SW 6985`) unless the PIN and the PUK are
+    /// blocked; then every key and object goes, and the credentials return
+    /// to the factory values of the firmware (AES-192 management key from
+    /// 5.7).
+    fn reset_blocked_piv(&self, reader: &str) -> Result<()> {
+        let mut s = self.state.lock().unwrap();
+        check_reader(&s, reader)?;
+        if s.pin_retries != 0 || s.puk_retries != 0 {
+            return Err(CardError::status(CardOp::ResetPiv, 0x69, 0x85).into());
+        }
+        let mut fresh = VirtualState::default_state(s.serial, s.reader.clone(), s.version.clone());
+        if firmware_at_least(&s.version, (5, 7)) {
+            fresh.mgmt_algo = MgmtAlgo::Aes192;
+        }
+        fresh.writes = s.writes + 1;
+        *s = fresh;
+        Ok(())
+    }
+}
+
+/// Whether a firmware version string ("5.7.1") is at least `min`.
+fn firmware_at_least(version: &str, min: (u32, u32)) -> bool {
+    let mut parts = version.split('.').map(|p| p.parse::<u32>().unwrap_or(0));
+    let major = parts.next().unwrap_or(0);
+    let minor = parts.next().unwrap_or(0);
+    (major, minor) >= min
 }
 
 // ---------------------------------------------------------------------------

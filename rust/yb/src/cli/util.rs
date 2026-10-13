@@ -4,9 +4,54 @@
 
 //! Shared CLI helpers.
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use globset::GlobBuilder;
 use std::collections::HashSet;
+
+// ---------------------------------------------------------------------------
+// Exit statuses (spec 0032)
+// ---------------------------------------------------------------------------
+
+/// yb's exit statuses besides 0 (success) and 1 (any other error), so that
+/// callers need not parse messages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExitStatus {
+    /// A blob name or pattern matched nothing (`fetch`, `rm` without `-f`).
+    NotFound = 2,
+    /// The store has no room; checked before writing (`store`).
+    StoreFull = 3,
+}
+
+/// An error that ends yb with a specific [`ExitStatus`].
+#[derive(Debug)]
+pub struct StatusError {
+    pub status: ExitStatus,
+    message: String,
+}
+
+impl std::fmt::Display for StatusError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for StatusError {}
+
+impl StatusError {
+    pub fn new(status: ExitStatus, message: impl Into<String>) -> Self {
+        Self {
+            status,
+            message: message.into(),
+        }
+    }
+}
+
+/// The exit status for `err`: its [`StatusError`]'s, or 1.
+pub fn exit_status(err: &anyhow::Error) -> i32 {
+    err.chain()
+        .find_map(|e| e.downcast_ref::<StatusError>())
+        .map_or(1, |e| e.status as i32)
+}
 
 // ---------------------------------------------------------------------------
 // Signature verdict
@@ -69,7 +114,11 @@ pub fn resolve_patterns(
                 if ignore_missing {
                     continue;
                 }
-                bail!("pattern '{}' matched no blobs", pattern);
+                return Err(StatusError::new(
+                    ExitStatus::NotFound,
+                    format!("pattern '{pattern}' matched no blobs"),
+                )
+                .into());
             }
             for name in hits {
                 if seen.insert(name.to_owned()) {
@@ -81,7 +130,11 @@ pub fn resolve_patterns(
                 if ignore_missing {
                     continue;
                 }
-                bail!("blob '{}' not found", pattern);
+                return Err(StatusError::new(
+                    ExitStatus::NotFound,
+                    format!("blob '{pattern}' not found"),
+                )
+                .into());
             }
             if seen.insert(pattern.clone()) {
                 result.push(pattern.clone());

@@ -10,6 +10,14 @@ SPDX-License-Identifier: MIT
 **App:** yb (Rust)
 **Implemented in:** 2026-03-21
 
+> **Amended by spec 0032** (2026-10-13): the self-test starts and ends with
+> a PIV reset and sets its own credentials (§2, §3, §8); outcomes are read
+> from `yb`'s exit statuses, and a "store full" is checked against the
+> card (§4, §5); compression is on, the format goes through `yb`, the
+> capacity follows the store (§4, §5, §9); `--quiet` is honored (§6).  It
+> also runs end to end on a simulated YubiKey in the tests, despite the
+> non-goal below.
+
 ## Problem
 
 There is no way to validate that a YubiKey and its `yb` store are working
@@ -67,11 +75,17 @@ invoked first.
 ```
 1. [select device]          — spec 0013 picker if multiple devices
 2. [confirm]                — destructive warning, LED flash, "yes" prompt
-3. [request credentials]    — PIN if not provided; mgmt key if not provided
+3. [reset]                  — PIV reset; PIN 654321, PUK 87654321;
+                              yb rotate-management-key (kept on the YubiKey)
 4. [format]                 — yb format --generate --object-count 20
 5. [run operations]         — N operations via SubprocessExecutor (§4)
-6. [cleanup or preserve]    — remove all blobs on success; keep on failure
+6. [cleanup or preserve]    — on success: remove all blobs, then PIV reset;
+                              on failure: keep the state
 7. [report]                 — per-type statistics, pass/fail, error list
+
+Free NVM is measured after the format, after the operations and after the
+clean-up (real YubiKeys only), to reveal memory that removing blobs does
+not give back.
 ```
 
 ### 3. Confirmation prompt
@@ -88,11 +102,16 @@ YubiKey to test:
   Version: 5.4.3
 
 This self-test will:
-  1. FORMAT the YubiKey  (destroys all existing blob data)
-  2. Run 200 store/fetch/remove/list operations (unencrypted + encrypted)
-  3. Stop on the first error
+  1. RESET the YubiKey's PIV application
+  2. Set PIN 654321, PUK 87654321, a management key kept on the
+     YubiKey, and format a store
+  3. Run 200 store/fetch/remove/list operations, stopping on
+     the first error (the YubiKey is then left as it is)
+  4. On success, reset the PIV application again
 
-ALL EXISTING BLOB DATA WILL BE PERMANENTLY LOST.
+ALL PIV DATA WILL BE PERMANENTLY LOST: every key and certificate
+(e.g. SSH or signing keys in slots 9a, 9c), not only yb's store.
+OTP, FIDO2 and OATH are not affected.
 
 YubiKey LED is flashing to help you identify the correct device...
 
@@ -126,18 +145,18 @@ Each operation maps to one subprocess call:
 
 | Operation | Command |
 |-----------|---------|
-| Store | `yb --serial S --pin P store [--no-compress] --name N < payload` |
-| Fetch | `yb --serial S --pin P fetch --stdout N` |
-| Remove | `yb --serial S --pin P rm N` |
-| List | `yb --serial S --pin P ls` |
+| Store | `yb --serial S store --encrypted\|--unencrypted --name N < payload` |
+| Fetch | `yb --serial S fetch --stdout N` |
+| Remove | `yb --serial S rm N` |
+| List | `yb --serial S ls` |
 
-Store uses `--no-compress` so payloads round-trip exactly (random bytes don't
-compress, but avoiding compression keeps the test independent of spec 0012).
-Encrypted stores use the normal encrypted default.
+The PIN is passed as `YB_PIN`; the management key is read by each `yb`
+from the YubiKey.  Stores compress, as users' stores do.
 
-The executor detects "store is full" from stderr (`"store is full"`,
-case-insensitive) and treats it as a valid non-error outcome, rolling back the
-ground-truth update (same logic as the Python version).
+Outcomes are read from `yb`'s exit statuses (spec 0032): 2 "not found"
+for fetch and remove, 3 "store full" for store; any other non-zero status
+is a failure.  A "store full" is accepted only if the store, read by the
+self-test from the card, lacks the objects the blob needs.
 
 Subprocess timeout: 30 seconds per operation.
 
@@ -146,7 +165,7 @@ Subprocess timeout: 30 seconds per operation.
 Uses `ToyFilesystem` and `OperationGenerator` from spec 0014.
 
 ```
-OperationGenerator::new(seed, max_capacity=15)
+OperationGenerator::new(seed, max_capacity=<the store's object count>)
     .generate(count, encryption_ratio=0.5)
 ```
 
@@ -155,12 +174,14 @@ exercises the full decrypt path on fetch.
 
 Verification rules (identical to Python):
 
-- **Store**: if `yb store` succeeds → update `ToyFilesystem`.  If "store full"
-  → roll back toy update.  Any other non-zero exit → failure.
+- **Store**: if `yb store` succeeds → update `ToyFilesystem`.  Exit 3
+  ("store full", checked as above) → no update.  Any other non-zero exit →
+  failure.
 - **Fetch**: compare `yb fetch --stdout` stdout bytes against
   `ToyFilesystem::fetch`.  If toy says blob doesn't exist, `yb fetch` must exit
-  non-zero.
-- **Remove**: `yb rm` exit-0 iff `ToyFilesystem::remove` returns true.
+  with status 2.
+- **Remove**: `yb rm` exit 0 iff `ToyFilesystem::remove` returns true, exit 2
+  otherwise.
 - **List**: `yb ls` stdout (one name per line, sorted) must match
   `ToyFilesystem::list()`.
 
@@ -182,7 +203,9 @@ Stopping at operation 47/200.
 State preserved — run 'yb --serial 12345678 fsck -v' to inspect.
 ```
 
-In `--quiet` mode, suppress per-operation lines; print only the final report.
+In `--quiet` mode (global option), suppress per-operation and progress
+lines; the confirmation prompt, any failure and the final report are still
+printed.
 
 ### 7. Final report
 
@@ -214,13 +237,11 @@ Exit code 0 on full pass, 1 on any failure or cancellation.
 
 ### 8. Credential resolution
 
-- **PIN**: resolved via the normal `Context` PIN chain (env var → `--pin-stdin`
-  → interactive prompt).  Because self-test runs many subprocesses, the PIN is
-  passed to each subprocess via the `YB_PIN` environment variable (set in the
-  subprocess environment, not on the command line, to avoid shell history
-  exposure).
-- **Management key**: resolved from `YB_MANAGEMENT_KEY` env var or prompted
-  interactively if not set.  Passed to subprocesses via `YB_MANAGEMENT_KEY`.
+None of the user's credentials is used (spec 0032 G6): after the reset,
+the self-test sets PIN 654321 and PUK 87654321, and `yb
+rotate-management-key` replaces the factory management key with a random
+one kept on the YubiKey, unlocked by the PIN.  Subprocesses get the PIN
+as `YB_PIN`, set in their environment, not on the command line.
 
 ### 9. `self-test` and `Context`
 
@@ -229,8 +250,10 @@ rather than using `ctx.piv` directly for the test operations.  `Context` is
 still constructed (for device selection and credential resolution) but is not
 used for the actual store/fetch/remove/list calls — those go through subprocess.
 
-The format step at the start uses `ctx.piv` directly (via `Store::format`) to
-avoid a subprocess round-trip for the single format call.
+The format step goes through a `yb format` subprocess too, so that it is
+tested.  The reset, the PIN and PUK changes, the "store full" checks and
+the NVM measurements use `ctx.piv` and `ctx.reader`: the selected YubiKey,
+and no other.  Each subprocess has a 30-second timeout.
 
 ### 10. Feature flag
 
