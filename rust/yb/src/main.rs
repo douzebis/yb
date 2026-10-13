@@ -144,6 +144,10 @@ fn make_pin_resolver(
     pin_deprecated: Option<String>,
 ) -> Result<(Option<String>, PinFn)> {
     if pin_stdin {
+        // Spec 0037: the PIN is the first line of standard input, read
+        // here, before any command runs; a payload read from standard
+        // input (`yb store`) is everything after it, byte for byte.  Both
+        // reads go through the process's one shared stdin buffer.
         use std::io::BufRead as _;
         let mut line = String::new();
         std::io::stdin().lock().read_line(&mut line)?;

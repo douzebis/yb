@@ -16,10 +16,14 @@ use yb_core::{store_blob, Compression, Encryption, PivBackend, StoreOptions, Vir
 
 const MGMT: &str = "010203040506070801020304050607080102030405060708";
 
-/// A YubiKey with a 4-object store holding the blob `present`.
+/// A YubiKey with a certificate in slot 0x82 and a 4-object store holding
+/// the blob `present`.
 fn card(dir: &TempDir) -> PathBuf {
     let piv = VirtualPiv::from_fixture_yaml(fixtures::WITH_KEY).unwrap();
     let reader = piv.reader_name();
+    // A certificate, so that encrypted stores work (spec 0037 tests).
+    piv.generate_certificate(&reader, 0x82, "CN=Test", MGMT, None)
+        .unwrap();
     let mut store = Store::format(&reader, &piv, 4, 0x82, MGMT).unwrap();
     let plain = StoreOptions {
         encryption: Encryption::None,
@@ -86,4 +90,76 @@ fn store_full_is_status_3_and_other_errors_1() {
         yb(&card, &["store", "--unencrypted", "--name", "small"], b"x"),
         0
     );
+}
+
+// ---------------------------------------------------------------------------
+// Spec 0037: the PIN and the payload on one standard input
+// ---------------------------------------------------------------------------
+
+/// Run `yb --pin-stdin` with `stdin` as its whole standard input (no
+/// `YB_PIN`); its exit status and standard output.
+fn yb_pin_stdin(card: &Path, args: &[&str], stdin: &[u8]) -> (i32, Vec<u8>) {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_yb"))
+        .env("YB_FIXTURE", card)
+        .env_remove("YB_PIN")
+        .env_remove("YB_MANAGEMENT_KEY")
+        .args(["--allow-defaults", "--quiet", "--pin-stdin"])
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut pipe = child.stdin.take().unwrap();
+    let _ = pipe.write_all(stdin);
+    drop(pipe);
+    let out = child.wait_with_output().unwrap();
+    (out.status.code().unwrap(), out.stdout)
+}
+
+/// Store `payload` after the PIN line `pin_line`, fetch it back with the
+/// PIN alone on standard input, and return what came back.
+fn round_trip(card: &Path, pin_line: &[u8], payload: &[u8]) -> Vec<u8> {
+    let input = [pin_line, payload].concat();
+    let store = ["store", "--encrypted", "--no-compress", "-n", "blob2"];
+    assert_eq!(yb_pin_stdin(card, &store, &input).0, 0);
+    let (code, out) = yb_pin_stdin(card, &["fetch", "-p", "blob2"], b"654321\n");
+    assert_eq!(code, 0);
+    out
+}
+
+/// The payload after the PIN line comes through byte for byte: NUL bytes,
+/// `\r\n`, runs of `\n`, no final newline.
+#[test]
+fn binary_payload_follows_the_pin_line() {
+    let dir = TempDir::new().unwrap();
+    let card = card(&dir);
+    let payload = b"\0KDBX\r\n\n\n\x00\xff line\r\nlast, no newline";
+    assert_eq!(round_trip(&card, b"654321\n", payload), payload);
+}
+
+/// An empty payload is stored as an empty blob.
+#[test]
+fn empty_payload_after_the_pin_line() {
+    let dir = TempDir::new().unwrap();
+    let card = card(&dir);
+    assert_eq!(round_trip(&card, b"654321\n", b""), b"");
+}
+
+/// A `\r\n` line end is not part of the PIN, and only the first line is.
+#[test]
+fn pin_line_with_crlf() {
+    let dir = TempDir::new().unwrap();
+    let card = card(&dir);
+    let payload = b"\r\nstarts with a line end";
+    assert_eq!(round_trip(&card, b"654321\r\n", payload), payload);
+}
+
+/// Input without a newline is all PIN.
+#[test]
+fn pin_without_newline() {
+    let dir = TempDir::new().unwrap();
+    let card = card(&dir);
+    let (code, out) = yb_pin_stdin(&card, &["fetch", "-p", "present"], b"654321");
+    assert_eq!((code, out), (0, b"x".to_vec()));
 }

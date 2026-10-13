@@ -14,6 +14,11 @@ All notable changes to yb are recorded here.  The format follows
 
 ### Added
 
+- **`--pin-stdin` with a payload:** the first line of standard input is
+  the PIN, and a payload read from standard input (`yb store`) is
+  everything after it, byte for byte, so that a program can store a blob
+  with no file and no PIN in its arguments or environment.  Documented and
+  tested (spec 0037).
 - **Exit statuses:** `yb` exits with status 2 when a blob name or pattern
   matches nothing (`fetch`, `rm` without `-f`), and 3 when the store has
   no room (`store`, before writing anything); 1 remains every other error.

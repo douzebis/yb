@@ -293,6 +293,15 @@ pass show mysite | yb store \-\-name mysite
 .fi
 .RE
 .PP
+The PIN and the content on one standard input, with no file (for
+programs driving \fByb\fR): the first line is the PIN, the rest is the
+blob, byte for byte:
+.RS
+.nf
+{ printf '%s\\n' "$PIN"; cat vault.kdbx; } | yb \-\-pin\-stdin store \-n vault.kdbx
+.fi
+.RE
+.PP
 Store unencrypted (plain-text blob):
 .RS
 .nf

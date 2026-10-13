@@ -31,7 +31,8 @@ pub struct Cli {
     #[arg(short = 'q', long = "quiet")]
     pub quiet: bool,
 
-    /// Read PIN from stdin (one line).
+    /// Read the PIN from the first line of standard input; a payload read
+    /// from standard input (yb store) follows it.
     #[arg(long = "pin-stdin")]
     pub pin_stdin: bool,
 
