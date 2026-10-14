@@ -519,12 +519,18 @@ goes through the same `Database` functions).  About 125 call sites:
   --encrypted --no-compress -n <vault>.kdbx <file>`.
 - **Restore:** store the backup onto a (new) YubiKey under the same name.
 
+### Through libyubiblob (2026-10-14)
+
+The mock-up now reaches the YubiKey through libyubiblob, yb's C library
+(spec 0039), in KeePassXC's process, on branch `yb-libyubiblob` of
+`douzebis/keepassxc` (the subprocess version stays on
+`yb-device-storage`, not maintained beside it).  KeePassXC's feature
+switch is `KPXC_FEATURE_YUBIBLOB` (off by default; when on, libyubiblob
+is required, found through pkg-config).  A changed vault is told by its
+generation, exactly; errors by status code.
+
 ### Later, depending on the discussion with KeePassXC
 
-- A C library wrapping `yb-core` (`extern "C"`, `cbindgen` header), for
-  calls in-process instead of a subprocess; it would add a Rust-built
-  dependency to KeePassXC's builds, and commit yb to a stable C
-  interface.
 - Machine-readable output (`--json`) in yb.
 - Extending Remote Sync instead; or reading yb's on-card format in C++.
 - A launcher outside KeePassXC, for users of an unmodified KeePassXC.
