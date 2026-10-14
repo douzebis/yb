@@ -24,44 +24,7 @@ Linux only for now.
 - [Nix](https://nixos.org/download/) (recommended: it provides everything
   else), or the build tools listed under "Without Nix".
 
-## 1. Set up the YubiKey for yb
-
-Install the `yb` command (version 0.6.0 or later) and run its guided
-setup:
-
-```shell
-nix-shell -p cargo rustc pkg-config pcsclite --run 'cargo install yb --locked'
-~/.cargo/bin/yb format
-```
-
-`yb format` explains what it will do and asks before changing anything.
-It sets up yb's store in the YubiKey's PIV application, a key in slot 0x82,
-and has the YubiKey keep its management key, unlocked by your PIN.  It
-offers to change a factory-default PIN and PUK.  It does not touch other
-PIV slots (e.g. an SSH key in 9a), nor FIDO2, OTP or OATH.
-
-## 2. Put your database on the YubiKey
-
-From a copy of your usual database (keep the original as a backup):
-
-```shell
-~/.cargo/bin/yb store --encrypted --no-compress -n MyVault.kdbx ~/MyVault.kdbx
-~/.cargo/bin/yb ls -l
-```
-
-The name must end in `.kdbx`.  The YubiKey holds about 50 KB in all, and
-saving needs room for a second copy of the database while it writes, so a
-database of up to about 20 KB is comfortable.
-
-Optionally, keep the database's master password on the YubiKey too, so
-that it opens with the YubiKey and the PIN alone (a trade-off: the master
-password then no longer adds a separate factor):
-
-```shell
-read -rs pw && printf '%s' "$pw" | ~/.cargo/bin/yb store -n MyVault.passwd; unset pw
-```
-
-## 3. Build KeePassXC
+## 1. Build KeePassXC
 
 ```shell
 git clone --branch feature/yubikey-storage https://github.com/douzebis/keepassxc
@@ -93,6 +56,55 @@ cmake -G Ninja -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DKPXC_FEATURE_YU
 ninja -C build
 ```
 
+## 2. Set up the YubiKey for yb
+
+Install the `yb` command (version 0.6.0 or later) and run its guided
+setup:
+
+```shell
+nix-shell -p cargo rustc pkg-config pcsclite --run 'cargo install yb --locked'
+~/.cargo/bin/yb format
+```
+
+`yb format` explains what it will do and asks before changing anything.
+It sets up yb's store in the YubiKey's PIV application, a key in slot 0x82,
+and has the YubiKey keep its management key, unlocked by your PIN.  It
+offers to change a factory-default PIN and PUK.  It does not touch other
+PIV slots (e.g. an SSH key in 9a), nor FIDO2, OTP or OATH.
+
+## 3. Create a database on the YubiKey
+
+With KeePassXC's command-line tool, from the build:
+
+```shell
+./build/src/cli/keepassxc-cli db-create -p yubikey:/Test.kdbx
+~/.cargo/bin/yb ls -l
+```
+
+It asks for the new database's master password (twice), then the
+YubiKey's PIN.  `yubikey:/Test.kdbx` names a database on the YubiKey
+connected; the name must end in `.kdbx`.  (The graphical New Database
+still saves to a file only.)
+
+To use a copy of an existing database instead (keep the original as a
+backup):
+
+```shell
+~/.cargo/bin/yb store --encrypted --no-compress -n MyVault.kdbx ~/MyVault.kdbx
+```
+
+The YubiKey holds about 50 KB in all, and saving needs room for a second
+copy of the database while it writes, so a database of up to about 20 KB
+is comfortable.
+
+Optionally, keep the database's master password on the YubiKey too, so
+that it opens with the YubiKey and the PIN alone (a trade-off: the master
+password then no longer adds a separate factor):
+
+```shell
+read -rs pw && printf '%s' "$pw" | ~/.cargo/bin/yb store -n Test.passwd; unset pw
+```
+
 ## 4. Use it
 
 Quit any KeePassXC already running (it would take over the new one), then:
@@ -102,9 +114,9 @@ Quit any KeePassXC already running (it would take over the new one), then:
 ```
 
 - **Database → Open Database…** (or the button on the welcome screen):
-  with the YubiKey connected, a list offers `MyVault.kdbx (on the
-  YubiKey)`, next to "A file…".  Pick it, enter the YubiKey's PIN, then
-  the master password (unless it is stored on the YubiKey).
+  with the YubiKey connected, a list offers `Test.kdbx (on the YubiKey)`,
+  next to "A file…".  Pick it, enter the YubiKey's PIN, then the master
+  password (unless it is stored on the YubiKey).
 - **Saving is automatic:** a few seconds after your last change, and at
   once when you lock or close the database, or quit.  Writing to the
   YubiKey takes a few seconds.  Pulling it out during a save loses
@@ -114,6 +126,9 @@ Quit any KeePassXC already running (it would take over the new one), then:
 - The database never touches the disk: KeePassXC holds it in memory, as
   it always does once unlocked.
 
+To check: add an entry, quit KeePassXC, start it again and reopen
+`Test.kdbx` from the YubiKey: the entry is there.
+
 ## Good to know
 
 - A desktop notification "YubiKey is waiting for a touch" may flash on the
@@ -121,7 +136,7 @@ Quit any KeePassXC already running (it would take over the new one), then:
   probing the YubiKey's challenge-response slots, as it always does; no
   touch is needed.
 - To get your database back as a file at any time:
-  `yb fetch -o ~/MyVault-copy.kdbx MyVault.kdbx` (it stays encrypted by
+  `yb fetch -o ~/Test-copy.kdbx Test.kdbx` (it stays encrypted by
   its master password, as any KeePassXC database).
 - Feedback is welcome: what worked, what did not, how large your database
   is, how the saving delay feels.
