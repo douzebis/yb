@@ -310,6 +310,7 @@ in
   rust-clippy       = rustClippy;
   rust-tests        = rustTests;        # tier-1 only (fast)
   libyubiblob       = libyubiblob;      # the C API (spec 0039), for C/C++ builds
+  nixpkgs           = pkgs;             # the pinned nixpkgs, for builds against libyubiblob
   nixpkgs-staging-check = nixpkgsStagingCheck; # nixfmt + version of nixpkgs/
   invariants-check  = invariantsCheck;  # docs/invariants/ name existing tests
   release-shell     = releaseShell;     # toolchain for scripts/check-crates
