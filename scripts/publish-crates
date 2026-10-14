@@ -3,9 +3,11 @@
 #
 # SPDX-License-Identifier: MIT
 
-# Publish yb-core, then yb, to crates.io, skipping a crate already published
-# at this version: if an upload fails halfway, running it again finishes the
-# release (spec 0029 §9).
+# Publish the crates to crates.io, dependencies first (clap-complete-rawline,
+# yb-core, yb, yubiblob), each at its own version, skipping a crate already
+# published at its version: if an upload fails halfway, running it again
+# finishes the release (spec 0029 §9).  A crate not yet on crates.io stops
+# the run: its first upload is done once by hand.
 #
 # Run from the repository root, in the release shell, after
 # scripts/check-crates; .github/workflows/publish.yaml runs it with a
@@ -19,31 +21,45 @@ if [ ! -f "$manifest" ]; then
     exit 1
 fi
 
-pkgid=$(cargo pkgid --manifest-path "$manifest" -p yb-core)
-version=${pkgid##*[#@]}
+# Dependencies first; each crate has its own version.
+crates=(clap-complete-rawline yb-core yb yubiblob)
 
-# 0 if crate@version is on crates.io, 1 if not; fails on any other answer.
-published() {
-    local status
-    status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+version_of() {
+    local pkgid
+    pkgid=$(cargo pkgid --manifest-path "$manifest" -p "$1")
+    echo "${pkgid##*[#@]}"
+}
+
+# crates.io's answer for a crate (and a version): 200 or 404.
+lookup() {
+    curl --silent --output /dev/null --write-out '%{http_code}' \
         --user-agent "yb publish-crates (https://github.com/douzebis/yb)" \
-        "https://crates.io/api/v1/crates/$1/$version")
-    case "$status" in
-        200) return 0 ;;
-        404) return 1 ;;
+        "https://crates.io/api/v1/crates/$1"
+}
+
+for crate in "${crates[@]}"; do
+    version=$(version_of "$crate")
+    case "$(lookup "$crate")" in
+        200) ;;
+        404)
+            # Trusted publishing works only for a crate that exists: its
+            # first upload is done once by hand, with a personal token.
+            echo "publish-crates: $crate is not on crates.io yet; publish it once by hand:" >&2
+            echo "  cargo publish --manifest-path $manifest -p $crate --locked" >&2
+            echo "then add this repository as its trusted publisher, and run again." >&2
+            exit 1
+            ;;
         *)
-            echo "publish-crates: crates.io answered $status for $1 $version" >&2
+            echo "publish-crates: crates.io did not answer for $crate" >&2
             exit 1
             ;;
     esac
-}
-
-# In dependency order.  `check-crates` already built and tested the
-# packages from this source and lock file, hence --no-verify.
-for crate in yb-core yb; do
-    if published "$crate"; then
-        echo "$crate $version is already on crates.io: skipped"
-    else
-        cargo publish --manifest-path "$manifest" -p "$crate" --locked --no-verify
-    fi
+    case "$(lookup "$crate/$version")" in
+        200) echo "$crate $version is already on crates.io: skipped" ;;
+        404) cargo publish --manifest-path "$manifest" -p "$crate" --locked --no-verify ;;
+        *)
+            echo "publish-crates: crates.io did not answer for $crate $version" >&2
+            exit 1
+            ;;
+    esac
 done

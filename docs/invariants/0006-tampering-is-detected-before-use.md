@@ -34,7 +34,12 @@ rename blobs unnoticed.
 - Someone with the PIN can sign anything.
 - A stripped signature yields an UNSIGNED blob, fetched with a warning
   (spec 0033 non-goal).
+- A signature version this yb does not know (written by a newer yb) is
+  not checkable here: the blob is fetched with a warning, not called
+  CORRUPTED, so that a new version raises no false alarm on older
+  installations (yb 0.5 did).  Changing the version byte gains an
+  attacker nothing a stripped signature does not already give.
 
 ## Regression tests
 
-- `rust/yb/tests/cli_tests.rs`: `renamed_blob_is_corrupted_and_not_fetched`, `tampered_blob_is_not_fetched`, `tampered_mtime_is_corrupted`, `one_tampered_blob_among_several_fetches_nothing`, `signing_failure_stores_nothing`
+- `rust/yb/tests/cli_tests.rs`: `renamed_blob_is_corrupted_and_not_fetched`, `tampered_blob_is_not_fetched`, `tampered_mtime_is_corrupted`, `one_tampered_blob_among_several_fetches_nothing`, `signing_failure_stores_nothing`, `newer_signature_version_is_not_corruption`

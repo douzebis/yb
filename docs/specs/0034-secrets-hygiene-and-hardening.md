@@ -77,7 +77,8 @@ findings 1.2 and 1.3) found several smaller weaknesses, each unrecorded:
   non-interactive path.
 - Removing the hidden, deprecated `--pin` and `--key` options, which put
   secrets on the command line: kept for a while longer (decision of
-  2026-10-13); a later spec removes them.
+  2026-10-13); a later spec removes them.  Since 0.6.0, their warnings
+  announce the removal for yb 0.7 (decided 2026-10-14).
 
 ## Specification
 

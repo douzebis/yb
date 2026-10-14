@@ -12,8 +12,28 @@ All notable changes to yb are recorded here.  The format follows
 
 ## [Unreleased]
 
+### Upgrading
+
+- **Update yb on every computer that uses the same YubiKey.**  Blobs
+  stored by this version (or by a program using libyubiblob) carry a new
+  signature (version 2, which also covers the blob's name and metadata).
+  yb 0.5 does not know it and marks those blobs **CORRUPTED** in `yb ls`
+  and `yb fsck`, which then exit with an error; they are not corrupted,
+  and yb 0.5's `yb fetch` still reads them.  From this version on, a
+  signature version yb does not know is reported as "signed by a newer
+  version of yb", not as corruption.
+- **Scripts:** `yb` now exits with status 2 when a blob is not found and
+  3 when the store is full (1 remains every other error).
+- **The deprecated `--pin` and `--key` options** still work, and now say
+  that they will be removed in yb 0.7.
+- **`YB_FIXTURE`** (a simulated YubiKey for tests) is ignored by release
+  builds.
+
 ### Added
 
+- **CI** checks that the crates build and pass their tests with Rust
+  1.86, the oldest version they declare, and builds libyubiblob on
+  Windows.
 - **libyubiblob, a C library** (`rust/yubiblob`, spec 0039): yb's blob
   store for C and C++ programs, built and installed with `cargo-c`
   (`yubiblob.h`, `libyubiblob`, pkg-config `yubiblob`).  Its own version,
@@ -29,6 +49,11 @@ All notable changes to yb are recorded here.  The format follows
 
 ### Changed
 
+- A signature version yb does not know (written by a newer yb) is no
+  longer reported as corruption: the blob is listed and fetched, with a
+  warning that a newer yb wrote it (`UNVERIFIABLE` in `yb fsck`).
+- The deprecated `--pin` and `--key` options announce their removal in
+  yb 0.7.
 - **`YB_FIXTURE` is for tests only.**  Only a yb built with the new
   `test-fixture` feature uses the simulated YubiKey this variable names;
   release and debug builds ignore it, so that a stray variable can no

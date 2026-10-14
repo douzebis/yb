@@ -6,9 +6,9 @@ SPDX-License-Identifier: MIT
 
 # 0007 — CLI Improvements
 
-**Status:** draft
+**Status:** implemented (goal 10, completion scripts generated at build time, superseded by dynamic completion: specs 0020, 0036)
 **App:** yb
-**Implemented in:** <!-- YYYY-MM-DD, fill after implementation -->
+**Implemented in:** 2026-03-23
 
 ## Problem
 

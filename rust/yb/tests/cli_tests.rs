@@ -882,6 +882,31 @@ mod fsck_tests {
         assert_eq!(fetch_to(&ctx, "blob").unwrap(), b"the payload bytes");
     }
 
+    /// A signature version this yb does not know (a newer yb wrote it) is
+    /// not taken for corruption: the blob is fetched, with a warning, and
+    /// fsck stays healthy.  yb 0.5 called such blobs CORRUPTED.
+    #[test]
+    fn newer_signature_version_is_not_corruption() {
+        let ctx = setup_signed_store();
+        let idx = head_index(&ctx, "blob");
+        let mut raw = read_raw(&ctx, idx);
+        let at = raw.len() - 65;
+        assert_eq!(raw[at], 0x02);
+        raw[at] = 0x03;
+        write_raw(&ctx, idx, &raw);
+
+        let store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
+        let head = store.objects.iter().find(|o| o.is_head()).unwrap();
+        assert_eq!(
+            check_blob_signature(head, &store, Some(&verifying_key(&ctx))),
+            SigVerdict::NewerVersion
+        );
+        assert_eq!(fetch_to(&ctx, "blob").unwrap(), b"the payload bytes");
+        let (healthy, out) = fsck_output(&ctx);
+        assert!(healthy, "{out}");
+        assert!(out.contains("signed by a newer version of yb"), "{out}");
+    }
+
     /// A version 1 trailer (spec 0017: payload only) still verifies.
     #[test]
     fn v1_signature_still_verifies() {

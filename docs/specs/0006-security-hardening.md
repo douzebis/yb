@@ -6,9 +6,9 @@ SPDX-License-Identifier: MIT
 
 # 0006 — Security Hardening (Rust)
 
-**Status:** ready
+**Status:** implemented
 **App:** yb-core, yb
-**Implemented in:** <!-- YYYY-MM-DD, fill after implementation -->
+**Implemented in:** 2026-03-23
 
 ## Problem
 

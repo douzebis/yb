@@ -527,8 +527,9 @@ ECDSA signature is present and cryptographically valid.
 No signature trailer (written by a yb version before 0.3).
 .TP
 \fBUNVERIFIABLE\fR
-Signature present, but the store's key slot has no readable certificate
-to check it with.
+Signature present, but it cannot be checked here: the store's key slot
+has no readable certificate, or the signature was made by a newer version
+of yb (update yb to check it).
 .TP
 \fBCORRUPTED\fR
 Signature present but verification failed (the blob's bytes or its

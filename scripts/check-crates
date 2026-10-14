@@ -3,15 +3,16 @@
 #
 # SPDX-License-Identifier: MIT
 
-# Package yb-core and yb as crates.io will receive them, and test them from
-# the .crate files alone (spec 0029 §9).
+# Package the published crates (clap-complete-rawline, yb-core, yb,
+# yubiblob) as crates.io will receive them, and test them from the .crate
+# files alone (spec 0029 §9).
 #
 # Run from the repository root, with network access, in the release shell:
 #   nix-shell default.nix -A release-shell --run scripts/check-crates
 # (the dev shell works too).  Extra arguments go to `cargo package`.
 #
 # 1. `cargo package` builds each .crate and verifies it by compiling it on
-#    its own; yb is built against the packaged yb-core.
+#    its own, against the packaged crates of this workspace it depends on.
 # 2. Each .crate is unpacked outside the workspace and its tests run there,
 #    as a distribution packager would.
 # The .crate files are left in rust/target/package/.
@@ -29,27 +30,47 @@ fi
 cargo package --manifest-path "$manifest" --locked \
     --workspace --exclude yb-piv-harness "$@"
 
-pkgid=$(cargo pkgid --manifest-path "$manifest" -p yb-core)
-version=${pkgid##*[#@]}
+# The published crates, dependencies first; each has its own version
+# (yb-core and yb share the workspace's).
+crates=(clap-complete-rawline yb-core yb yubiblob)
+
+version_of() {
+    local pkgid
+    pkgid=$(cargo pkgid --manifest-path "$manifest" -p "$1")
+    echo "${pkgid##*[#@]}"
+}
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-for crate in yb-core yb; do
+declare -A unpacked
+for crate in "${crates[@]}"; do
+    version=$(version_of "$crate")
     tar -xzf "rust/target/package/$crate-$version.crate" -C "$work"
+    unpacked[$crate]=$work/$crate-$version
 done
 
-# yb-core: its integration tests need the test-utils feature.
-echo "Testing yb-core $version from its .crate"
-(cd "$work/yb-core-$version" &&
-    CARGO_TARGET_DIR="$work/target" cargo test --features test-utils)
+# Crates that depend on others of this workspace, not yet on crates.io at
+# release time, are tested against the unpacked crates instead.
+local_deps=(
+    --config "patch.crates-io.yb-core.path='${unpacked[yb-core]}'"
+    --config "patch.crates-io.clap-complete-rawline.path='${unpacked[clap-complete-rawline]}'"
+)
 
-# yb: depends on yb-core $version, not yet on crates.io at release time, so
-# it is patched to the unpacked yb-core crate.
-echo "Testing yb $version from its .crate"
-(cd "$work/yb-$version" &&
-    CARGO_TARGET_DIR="$work/target" cargo test \
-        --config "patch.crates-io.yb-core.path='$work/yb-core-$version'")
+run_tests() {
+    local crate=$1
+    shift
+    echo "Testing $crate $(version_of "$crate") from its .crate"
+    (cd "${unpacked[$crate]}" && CARGO_TARGET_DIR="$work/target" cargo test "$@")
+}
+
+run_tests clap-complete-rawline
+# yb-core: its integration tests need the test-utils feature.
+run_tests yb-core --features test-utils
+run_tests yb "${local_deps[@]}"
+run_tests yubiblob "${local_deps[@]}"
 
 echo "Packages ready:"
-ls -1 rust/target/package/*-"$version".crate
+for crate in "${crates[@]}"; do
+    ls -1 "rust/target/package/$crate-$(version_of "$crate").crate"
+done

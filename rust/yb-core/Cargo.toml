@@ -21,13 +21,20 @@ path = "src/lib.rs"
 
 [features]
 default          = []
+# Dates for the modification times of blobs.
 chrono           = ["dep:chrono"]
-virtual-piv      = []          # phase 3: VirtualPiv in-memory backend
-integration-tests = []         # phase 5: vsmartcard + piv-authenticator
-hardware-tests   = []          # manual only: real YubiKey destructive tests
-test-utils       = []          # ToyFilesystem + OperationGenerator for self-test
+
+# For tests only: none of these belongs in a build that is shipped.
+# VirtualPiv, a simulated YubiKey in memory (used by the test suites).
+virtual-piv      = []
+# Tests against an emulated PIV card behind a virtual reader (NixOS VM).
+integration-tests = []
+# Destructive tests against a real YubiKey, run by hand.
+hardware-tests   = []
+# ToyFilesystem and OperationGenerator, for `yb self-test` and the tests.
+test-utils       = []
 # Honor YB_FIXTURE: a simulated YubiKey described in a file (spec 0034 G3).
-# Tests only; without it, YB_FIXTURE is ignored.
+# Without it, YB_FIXTURE is ignored.
 test-fixture     = ["virtual-piv"]
 
 [dependencies]

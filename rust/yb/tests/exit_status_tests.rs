@@ -163,3 +163,27 @@ fn pin_without_newline() {
     let (code, out) = yb_pin_stdin(&card, &["fetch", "-p", "present"], b"654321");
     assert_eq!((code, out), (0, b"x".to_vec()));
 }
+
+/// The deprecated `--pin` still works in 0.6, and announces its removal.
+#[test]
+fn deprecated_pin_option_announces_its_removal() {
+    let dir = TempDir::new().unwrap();
+    let card = card(&dir);
+    let out = Command::new(env!("CARGO_BIN_EXE_yb"))
+        .env("YB_FIXTURE", &card)
+        .env_remove("YB_PIN")
+        .args([
+            "--allow-defaults",
+            "--pin",
+            "654321",
+            "fetch",
+            "-p",
+            "present",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert_eq!(out.stdout, b"x");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("will be removed in yb 0.7"), "{stderr}");
+}

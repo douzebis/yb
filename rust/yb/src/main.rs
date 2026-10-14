@@ -53,10 +53,17 @@ fn run(cli: Cli) -> Result<()> {
 
     // Emit deprecation warnings for legacy flags.
     if cli.pin_deprecated.is_some() {
-        eprintln!("Warning: --pin is deprecated; use YB_PIN, --pin-stdin, or interactive prompt");
+        eprintln!(
+            "Warning: --pin is deprecated and will be removed in yb 0.7 (a PIN on the command \
+             line is visible to other users); use YB_PIN, --pin-stdin, or the prompt"
+        );
     }
     if cli.key_deprecated.is_some() {
-        eprintln!("Warning: --key is deprecated; use YB_MANAGEMENT_KEY");
+        eprintln!(
+            "Warning: --key is deprecated and will be removed in yb 0.7 (a key on the command \
+             line is visible to other users); use YB_MANAGEMENT_KEY, or keep the key on the \
+             YubiKey (yb rotate-management-key)"
+        );
     }
 
     let (pin, pin_fn) = make_pin_resolver(cli.pin_stdin, cli.pin_deprecated)?;

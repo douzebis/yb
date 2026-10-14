@@ -8,15 +8,15 @@ use crate::piv::PivBackend;
 use crate::store::{Object, ObjectParams, Store};
 use sha2::{Digest, Sha256};
 
-/// Compute SHA-256(payload) and ask the PIV key to sign it.  Append the
 /// Length of the signature trailer appended after a blob's data (spec 0017).
 pub const SIG_TRAILER_LEN: usize = 65;
 
-/// 65-byte trailer `[SIG_VERSION=0x01 || r (32 bytes) || s (32 bytes)]`
-/// after the last payload byte in the assembled chain.
+/// Sign the blob just built with the store's slot key and append the
+/// 65-byte trailer `[0x02 || r (32 bytes) || s (32 bytes)]` (version 2,
+/// spec 0033) after its last payload byte, in a spill chunk if needed.
 ///
-/// If signing fails for any reason the trailer is silently omitted and a
-/// warning is printed, as required by spec §3.
+/// If signing fails, the store fails before anything is written: a blob is
+/// never stored unsigned (spec 0033).
 pub(super) fn append_signature_trailer(
     store: &mut Store,
     piv: &dyn PivBackend,
@@ -173,6 +173,10 @@ pub enum SigVerdict {
     Unsigned,
     /// Signed, but the slot has no certificate to check it against.
     Unverifiable,
+    /// Signed with a signature version this yb does not know: written by a
+    /// newer yb.  Not checkable here, and not taken for corruption, so that
+    /// a new version does not raise false alarms on older installations.
+    NewerVersion,
     /// A signature that does not verify, or a damaged chain.
     Corrupted,
 }
@@ -182,7 +186,7 @@ impl std::fmt::Display for SigVerdict {
         f.write_str(match self {
             SigVerdict::Verified => "VERIFIED",
             SigVerdict::Unsigned => "UNSIGNED",
-            SigVerdict::Unverifiable => "UNVERIFIABLE",
+            SigVerdict::Unverifiable | SigVerdict::NewerVersion => "UNVERIFIABLE",
             SigVerdict::Corrupted => "CORRUPTED",
         })
     }
@@ -232,7 +236,7 @@ pub fn check_blob_signature(
     let digest: [u8; 32] = match trailing[0] {
         SIG_V1 => Sha256::digest(&payload).into(),
         SIG_V2 => signed_digest_v2(head, &payload),
-        _ => return SigVerdict::Corrupted,
+        _ => return SigVerdict::NewerVersion,
     };
     let Some(vk) = verifying_key else {
         return SigVerdict::Unverifiable;

@@ -6,9 +6,9 @@ SPDX-License-Identifier: MIT
 
 # 0002 — Crate structure: library + CLI split
 
-**Status:** draft
+**Status:** implemented
 **App:** yb (Rust)
-**Implemented in:** <!-- YYYY-MM-DD, fill after implementation -->
+**Implemented in:** 2026-03-23 (crate split); first published on crates.io with 0.5.0, 2026-10-09
 
 ## Problem
 

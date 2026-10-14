@@ -98,6 +98,10 @@ pub fn run(ctx: &Context, args: &FetchArgs) -> Result<()> {
                      0x{:02x}",
                     store.store_key_slot
                 ),
+                SigVerdict::NewerVersion => eprintln!(
+                    "Warning: blob '{name}' was signed by a newer version of yb, so its \
+                     integrity cannot be checked here; update yb to check it"
+                ),
             }
         }
     }

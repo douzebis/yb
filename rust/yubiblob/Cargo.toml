@@ -14,6 +14,9 @@ repository   = "https://github.com/douzebis/yb"
 homepage     = "https://github.com/douzebis/yb"
 keywords     = ["yubikey", "piv", "ffi", "storage"]
 categories   = ["api-bindings", "cryptography", "hardware-support"]
+readme       = "README.md"
+# The C test needs cargo-c and scripts/check-libyubiblob: not in the crate.
+exclude      = ["tests/c"]
 
 [lib]
 name = "yubiblob"

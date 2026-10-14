@@ -81,7 +81,8 @@ pub type SignatureVerdict = i32;
 pub const YUBIBLOB_SIGNATURE_VERIFIED: SignatureVerdict = 0;
 /// Stored by a yb version before signatures.
 pub const YUBIBLOB_SIGNATURE_UNSIGNED: SignatureVerdict = 1;
-/// No certificate to check it with.
+/// Not checkable here: no certificate to check it with, or a signature
+/// version newer than this library knows.
 pub const YUBIBLOB_SIGNATURE_UNVERIFIABLE: SignatureVerdict = 2;
 pub const YUBIBLOB_SIGNATURE_CORRUPTED: SignatureVerdict = 3;
 
@@ -385,7 +386,7 @@ fn verdict(v: SigVerdict) -> SignatureVerdict {
     match v {
         SigVerdict::Verified => YUBIBLOB_SIGNATURE_VERIFIED,
         SigVerdict::Unsigned => YUBIBLOB_SIGNATURE_UNSIGNED,
-        SigVerdict::Unverifiable => YUBIBLOB_SIGNATURE_UNVERIFIABLE,
+        SigVerdict::Unverifiable | SigVerdict::NewerVersion => YUBIBLOB_SIGNATURE_UNVERIFIABLE,
         SigVerdict::Corrupted => YUBIBLOB_SIGNATURE_CORRUPTED,
     }
 }

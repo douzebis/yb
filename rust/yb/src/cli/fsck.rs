@@ -110,6 +110,7 @@ fn check_store(ctx: &Context, args: &FsckArgs, store: &Store, out: &mut dyn Writ
     let mut sig_verified = 0usize;
     let mut sig_unsigned = 0usize;
     let mut sig_unverifiable = 0usize;
+    let mut sig_newer = 0usize;
     let mut sig_corrupted = 0usize;
     let mut legacy = 0usize;
 
@@ -120,6 +121,7 @@ fn check_store(ctx: &Context, args: &FsckArgs, store: &Store, out: &mut dyn Writ
             SigVerdict::Verified => sig_verified += 1,
             SigVerdict::Unsigned => sig_unsigned += 1,
             SigVerdict::Unverifiable => sig_unverifiable += 1,
+            SigVerdict::NewerVersion => sig_newer += 1,
             SigVerdict::Corrupted => sig_corrupted += 1,
         }
         blob_verdicts.push((head, verdict));
@@ -219,6 +221,13 @@ fn check_store(ctx: &Context, args: &FsckArgs, store: &Store, out: &mut dyn Writ
             writeln!(
                 out,
                 "  {sig_unverifiable} signed blob(s) not checked: no certificate in the store's key slot"
+            )?;
+        }
+        if sig_newer > 0 {
+            writeln!(
+                out,
+                "  {sig_newer} blob(s) not checked: signed by a newer version of yb (update yb \
+                 to check them)"
             )?;
         }
         if legacy > 0 {

@@ -6,9 +6,9 @@ SPDX-License-Identifier: MIT
 
 # 0003 — Implementation plan for spec 0002 evolutions
 
-**Status:** draft
+**Status:** implemented
 **App:** yb (Rust)
-**Implemented in:** <!-- YYYY-MM-DD, fill after implementation -->
+**Implemented in:** 2026-03-23, with spec 0002
 
 ## Purpose
 

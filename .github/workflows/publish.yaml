@@ -2,7 +2,9 @@
 #
 # SPDX-License-Identifier: MIT
 
-# Publish yb-core and yb to crates.io (spec 0029 §9).
+# Publish the crates to crates.io (spec 0029 §9): clap-complete-rawline,
+# yb-core, yb and yubiblob, each at its own version (yb-core and yb at the
+# tag's), skipped if already published.
 #
 # A pushed tag v* starts it.  `verify` checks the tag and builds and tests
 # the .crate files (artifact `crates`, to inspect before approving).
@@ -68,7 +70,7 @@ jobs:
 
       # `verify` already built and tested the packages from the same tagged
       # source and lock file, so the upload does not build them again.
-      - name: Publish yb-core, then yb
+      - name: Publish the crates, dependencies first
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         run: nix-shell default.nix -A release-shell --run scripts/publish-crates

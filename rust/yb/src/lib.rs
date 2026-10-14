@@ -44,11 +44,11 @@ pub struct Cli {
     #[arg(long = "allow-defaults")]
     pub allow_defaults: bool,
 
-    /// YubiKey PIN [deprecated: use YB_PIN, --pin-stdin, or interactive prompt].
+    /// YubiKey PIN [deprecated, removed in yb 0.7: use YB_PIN, --pin-stdin, or the prompt].
     #[arg(long = "pin", hide = true)]
     pub pin_deprecated: Option<String>,
 
-    /// Management key [deprecated: use YB_MANAGEMENT_KEY].
+    /// Management key [deprecated, removed in yb 0.7: use YB_MANAGEMENT_KEY].
     #[arg(short = 'k', long = "key", hide = true)]
     pub key_deprecated: Option<String>,
 
