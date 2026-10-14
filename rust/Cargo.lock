@@ -3190,7 +3190,7 @@ dependencies = [
 
 [[package]]
 name = "yb"
-version = "0.5.3-dev"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "atty",
@@ -3211,7 +3211,7 @@ dependencies = [
 
 [[package]]
 name = "yb-core"
-version = "0.5.3-dev"
+version = "0.6.0"
 dependencies = [
  "aes",
  "aes-gcm",
