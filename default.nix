@@ -190,6 +190,8 @@ let
       rustfmt
       clippy
       pkg-config
+      # libyubiblob, the C API (spec 0039): cargo cbuild / cinstall / ctest
+      cargo-c
       # Project tooling
       reuse
       ruff

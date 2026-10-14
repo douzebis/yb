@@ -14,6 +14,10 @@ All notable changes to yb are recorded here.  The format follows
 
 ### Added
 
+- **libyubiblob, a C library** (`rust/yubiblob`, spec 0039): yb's blob
+  store for C and C++ programs, built and installed with `cargo-c`
+  (`yubiblob.h`, `libyubiblob`, pkg-config `yubiblob`).  Its own version,
+  0.1.0; tested on Linux and, in CI, Windows.
 - **`--pin-stdin` with a payload:** the first line of standard input is
   the PIN, and a payload read from standard input (`yb store`) is
   everything after it, byte for byte, so that a program can store a blob

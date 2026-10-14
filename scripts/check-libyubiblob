@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+
+# SPDX-FileCopyrightText: 2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+#
+# SPDX-License-Identifier: MIT
+
+# libyubiblob from C (spec 0039): install the library with cargo-c into a
+# temporary prefix, compile yubiblob/tests/c/smoke.c through its pkg-config
+# file, and run it on a YubiKey simulated in a file, set up by the real
+# `yb format` (both built with the test-fixture feature, which honors
+# YB_FIXTURE; never in a shipped build).
+#
+# Run from the repository root, in the dev shell (cargo-c, a C compiler).
+set -euo pipefail
+cd "$(dirname "$0")/../rust"
+
+target=target/capi-test
+cargo build -q -p yb --release --features test-fixture --target-dir "$target"
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+cp yb-core/tests/fixtures/with_key.yaml "$work/card.yaml"
+chmod u+w "$work/card.yaml"
+export YB_FIXTURE=$work/card.yaml
+# The set-up the library assumes: a store, the management key kept on the
+# YubiKey behind the PIN (with_key.yaml: PIN 654321).
+YB_PIN=654321 "$target/release/yb" --quiet --allow-defaults format --generate --protect
+
+# Installed as a distribution would (versioned library, header, pkg-config
+# file), into a temporary prefix; compiled through the pkg-config file.
+cargo cinstall -p yubiblob --release --features test-fixture --target-dir "$target" \
+    --prefix "$work/prefix" --libdir lib
+export PKG_CONFIG_PATH=$work/prefix/lib/pkgconfig
+read -ra flags <<<"$(pkg-config --cflags --libs yubiblob)"
+cc -std=c11 -Wall -Wextra -Werror yubiblob/tests/c/smoke.c -o "$work/smoke" "${flags[@]}"
+LD_LIBRARY_PATH=$work/prefix/lib "$work/smoke" 654321

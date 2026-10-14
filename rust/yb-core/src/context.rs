@@ -272,6 +272,14 @@ impl Context {
         *self.pin.borrow_mut() = Some(Zeroizing::new(pin.to_owned()));
     }
 
+    /// Forget the PIN and the resolved management key, overwriting them in
+    /// memory.  Library sessions hold secrets for one call only (spec 0039
+    /// G5).
+    pub fn clear_secrets(&self) {
+        *self.pin.borrow_mut() = None;
+        *self.resolved.borrow_mut() = None;
+    }
+
     /// Detect the factory-default credentials again, after changing some
     /// of them (spec 0023 §6).
     pub fn refresh_defaults(&mut self) {
@@ -504,7 +512,7 @@ impl Context {
     /// warning and does not fail the command: the next write retries.
     pub fn complete_pending_repairs(&self) {
         let (key, repairs) = match self.resolved.borrow_mut().as_mut() {
-            Some(r) => (r.key.to_string(), std::mem::take(&mut r.repairs)),
+            Some(r) => (r.key.clone(), std::mem::take(&mut r.repairs)),
             None => return,
         };
         let (reader, piv) = (self.reader.as_str(), self.piv.as_ref());

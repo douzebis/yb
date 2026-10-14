@@ -340,6 +340,27 @@ Requires YubiKey firmware 5.3 or later for credential detection.
 
 ---
 
+## C Library (libyubiblob)
+
+`rust/yubiblob` builds **libyubiblob**, a C interface to yb's blob store,
+for programs that want a small, safe store on a YubiKey without running
+the `yb` command: list, fetch, store and remove blobs, with typed status
+codes, the PIN passed in memory, and the same guarantees as `yb`
+(interrupted writes lose nothing, tampering is detected).  It assumes a
+YubiKey set up with `yb format`.
+
+```shell
+cd rust
+cargo cinstall -p yubiblob --release --prefix /usr/local   # needs cargo-c
+pkg-config --cflags --libs yubiblob
+```
+
+The interface, its rules (memory, strings, errors, threads) and its
+versioning: [spec 0039](docs/specs/0039-c-api.md).  Before 1.0, each
+minor version may change the interface.
+
+---
+
 ## Format Specification
 
 The yblob binary format is fully documented in

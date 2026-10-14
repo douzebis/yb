@@ -3259,6 +3259,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "yubiblob"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "p256 0.13.2",
+ "tempfile",
+ "yb-core",
+ "zeroize",
+]
+
+[[package]]
 name = "zerocopy"
 version = "0.8.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -1,0 +1,49 @@
+# SPDX-FileCopyrightText: 2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+#
+# SPDX-License-Identifier: MIT
+
+[package]
+name         = "yubiblob"
+# Its own version (spec 0039): the C interface's, not the yb command's.
+version      = "0.1.0"
+edition      = "2021"
+rust-version = "1.86"
+license      = "MIT"
+description  = "libyubiblob: a blob store on a YubiKey, for C and C++ programs (yb's C API)"
+repository   = "https://github.com/douzebis/yb"
+homepage     = "https://github.com/douzebis/yb"
+keywords     = ["yubikey", "piv", "ffi", "storage"]
+categories   = ["api-bindings", "cryptography", "hardware-support"]
+
+[lib]
+name = "yubiblob"
+
+[features]
+# Turned on by cargo-c when it builds the C library (its convention).
+capi = []
+# The simulated YubiKey of YB_FIXTURE (yb-core spec 0034 G3), for the C
+# test program only: never in a library that is shipped.
+test-fixture = ["yb-core/test-fixture"]
+
+[dependencies]
+yb-core = { workspace = true }
+anyhow  = "1"
+p256    = { version = "0.13", features = ["ecdsa"] }
+zeroize = "1"
+
+[dev-dependencies]
+yb-core  = { workspace = true, features = ["virtual-piv", "test-fixture"] }
+tempfile = "3"
+
+# cargo-c (spec 0039): libyubiblob.so.0 / .a / yubiblob.dll, yubiblob.h,
+# yubiblob.pc.
+[package.metadata.capi.header]
+name         = "yubiblob"
+subdirectory = false
+
+[package.metadata.capi.library]
+name = "yubiblob"
+
+[package.metadata.capi.pkg_config]
+name        = "yubiblob"
+description = "A blob store on a YubiKey"

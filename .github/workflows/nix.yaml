@@ -72,6 +72,26 @@ jobs:
       - name: Run unit tests (tier-1)
         run: cargo test --locked --manifest-path rust/Cargo.toml -p yb-core -p yb --features yb/self-test
 
+  # libyubiblob, the C API (spec 0039), on Windows: plain cargo, against
+  # the simulated YubiKey; PC/SC comes from Windows (WinSCard).  Keeps the
+  # interface and the code free of Unix-only assumptions (yb itself is not
+  # shipped for Windows).
+  windows-libyubiblob:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Test libyubiblob
+        run: cargo test --locked --manifest-path rust/Cargo.toml -p yubiblob
+
+      - name: Build the C library (cargo-c)
+        run: |
+          cargo install cargo-c --locked
+          cargo cbuild --manifest-path rust/Cargo.toml -p yubiblob --release
+
   # Release artifacts: the crates.io packages (built and tested from the
   # .crate files alone) and the staged nixpkgs files (nixfmt, version).
   packaging:
@@ -85,6 +105,11 @@ jobs:
 
       - name: Check the staged nixpkgs files
         run: nix-build -A nixpkgs-staging-check
+
+      # libyubiblob from C: installed with cargo-c, compiled through its
+      # pkg-config file, run on a simulated YubiKey (spec 0039).
+      - name: Check libyubiblob from C
+        run: nix-shell default.nix -A dev-shell --run scripts/check-libyubiblob
 
       # Outside the Nix sandbox: cargo needs the network to package crates
       # that depend on each other (spec 0029 §9).
