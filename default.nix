@@ -83,6 +83,25 @@ let
     cargoTestExtraArgs = "--features yb/self-test";
   });
 
+  # libyubiblob, the C API (spec 0039): the libraries, yubiblob.h and
+  # yubiblob.pc, installed with cargo-c, for programs built against it
+  # (e.g. KeePassXC, through pkg-config yubiblob).
+  libyubiblob = crane.mkCargoDerivation (rustCommon // {
+    pname          = "libyubiblob";
+    version        = (pkgs.lib.importTOML ./rust/yubiblob/Cargo.toml).package.version;
+    cargoArtifacts = rustDeps;
+    nativeBuildInputs = rustCommon.nativeBuildInputs ++ [ pkgs.cargo-c ];
+    buildPhaseCargoCommand = ''
+      cargo cbuild --release --offline -p yubiblob --prefix $out --libdir $out/lib
+    '';
+    installPhaseCommand = ''
+      cargo cinstall --release --offline -p yubiblob --prefix $out --libdir $out/lib
+    '';
+    doCheck = false;
+    # The package is the library, not crane's build cache.
+    doInstallCargoArtifacts = false;
+  });
+
   # ---------------------------------------------------------------------------
   # CRATES.IO RELEASE SHELL (spec 0029 §9)
   # ---------------------------------------------------------------------------
@@ -290,6 +309,7 @@ in
   rust-fmt          = rustFmt;
   rust-clippy       = rustClippy;
   rust-tests        = rustTests;        # tier-1 only (fast)
+  libyubiblob       = libyubiblob;      # the C API (spec 0039), for C/C++ builds
   nixpkgs-staging-check = nixpkgsStagingCheck; # nixfmt + version of nixpkgs/
   invariants-check  = invariantsCheck;  # docs/invariants/ name existing tests
   release-shell     = releaseShell;     # toolchain for scripts/check-crates
