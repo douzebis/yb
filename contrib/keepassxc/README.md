@@ -36,7 +36,8 @@ ninja -C build
 ```
 
 The first `nix-shell` downloads and builds its dependencies (Qt, and
-libyubiblob from yb's release): it takes a while once.
+libyubiblob and the `yb` command from yb's release): it takes a while
+once.
 
 ### Without Nix
 
@@ -58,13 +59,26 @@ ninja -C build
 
 ## 2. Set up the YubiKey for yb
 
-Install the `yb` command (version 0.6.0 or later) and run its guided
-setup:
+You need the `yb` command, version 0.6.0 or later.
 
-```shell
-nix-shell -p cargo rustc pkg-config pcsclite --run 'cargo install yb --locked'
-~/.cargo/bin/yb format
-```
+- **With Nix:** the `nix-shell` of step 1 already provides it (from the
+  same yb release as libyubiblob).  In that shell:
+
+  ```shell
+  yb format
+  ```
+
+- **With Cargo** (any Linux; needs Rust 1.86 or later, `pkg-config` and
+  the PC/SC development files, e.g. `libpcsclite-dev` on Debian and
+  Ubuntu, `pcsc-lite-devel` on Fedora):
+
+  ```shell
+  cargo install yb --locked
+  ~/.cargo/bin/yb format
+  ```
+
+  Below, `yb` is `~/.cargo/bin/yb` unless `~/.cargo/bin` is in your
+  `PATH`.
 
 `yb format` explains what it will do and asks before changing anything.
 It sets up yb's store in the YubiKey's PIV application, a key in slot 0x82,
@@ -85,7 +99,7 @@ start the one you built, with the YubiKey connected:
 encryption settings, master password).  When it saves, KeePassXC asks
 where: choose **On the YubiKey…**, accept or change the proposed name
 (`.kdbx` is added), and enter the YubiKey's PIN.  The database now lives
-on the YubiKey; `~/.cargo/bin/yb ls -l` lists it.
+on the YubiKey; `yb ls -l` lists it.
 
 To put an existing database on the YubiKey instead, open it, then
 **Database → Save As… → On the YubiKey…**.  Save As leaves the original
@@ -105,7 +119,7 @@ that it opens with the YubiKey and the PIN alone (a trade-off: the master
 password then no longer adds a separate factor):
 
 ```shell
-read -rs pw && printf '%s' "$pw" | ~/.cargo/bin/yb store -n Test.passwd; unset pw
+read -rs pw && printf '%s' "$pw" | yb store -n Test.passwd; unset pw
 ```
 
 ## 4. Use it

@@ -4,7 +4,7 @@
 
 # Build environment for KeePassXC with databases stored on a YubiKey
 # (branch feature/yubikey-storage of https://github.com/douzebis/keepassxc),
-# with libyubiblob from yb's v0.6.0 release.
+# with libyubiblob and the yb command from yb's v0.6.0 release.
 #
 # Everything comes from the nixpkgs that yb pins, so it works whatever the
 # host's channel, and libyubiblob and KeePassXC share their libraries.
@@ -17,7 +17,8 @@
   pkgs ? (import yb { }).nixpkgs,
 }:
 let
-  libyubiblob = (import yb { inherit pkgs; }).libyubiblob;
+  ybPackages = import yb { inherit pkgs; };
+  inherit (ybPackages) libyubiblob;
   qt = pkgs.qt6;
 in
 pkgs.mkShell {
@@ -27,6 +28,8 @@ pkgs.mkShell {
     pkg-config
     asciidoctor
     qt.wrapQtAppsHook
+    # The yb command, to set up the YubiKey and manage its store.
+    ybPackages.yb
   ];
   buildInputs = with pkgs; [
     qt.qtbase
