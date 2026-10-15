@@ -13,7 +13,7 @@ proposal for the KeePassXC project, built on
 [yb](https://github.com/douzebis/yb) (its C library, libyubiblob).
 
 **This is a prototype.**  Keep your usual database file as a backup, and
-use a YubiKey whose PIV application you can set up for this (see step 1).
+use a YubiKey whose PIV application you can set up for this (see step 2).
 Linux only for now.
 
 ## What you need
@@ -74,28 +74,31 @@ PIV slots (e.g. an SSH key in 9a), nor FIDO2, OTP or OATH.
 
 ## 3. Create a database on the YubiKey
 
-With KeePassXC's command-line tool, from the build:
+Quit any KeePassXC already running (it would take over the new one), then
+start the one you built, with the YubiKey connected:
 
 ```shell
-./build/src/cli/keepassxc-cli db-create -p yubikey:/Test.kdbx
-~/.cargo/bin/yb ls -l
+./build/src/keepassxc
 ```
 
-It asks for the new database's master password (twice), then the
-YubiKey's PIN.  `yubikey:/Test.kdbx` names a database on the YubiKey
-connected; the name must end in `.kdbx`.  (The graphical New Database
-still saves to a file only.)
+**Database → New Database…**, then go through the wizard as usual (name,
+encryption settings, master password).  When it saves, KeePassXC asks
+where: choose **On the YubiKey…**, accept or change the proposed name
+(`.kdbx` is added), and enter the YubiKey's PIN.  The database now lives
+on the YubiKey; `~/.cargo/bin/yb ls -l` lists it.
 
-To use a copy of an existing database instead (keep the original as a
-backup):
+To put an existing database on the YubiKey instead, open it, then
+**Database → Save As… → On the YubiKey…**.  Save As leaves the original
+file where it was: keep it as a backup, or delete it.
 
-```shell
-~/.cargo/bin/yb store --encrypted --no-compress -n MyVault.kdbx ~/MyVault.kdbx
-```
-
+A name already used on the YubiKey is replaced only after you confirm.
 The YubiKey holds about 50 KB in all, and saving needs room for a second
 copy of the database while it writes, so a database of up to about 20 KB
 is comfortable.
+
+From the command line, `./build/src/cli/keepassxc-cli db-create -p
+yubikey:/Test.kdbx` does the same (master password twice, then the PIN;
+it replaces a database of the same name without asking).
 
 Optionally, keep the database's master password on the YubiKey too, so
 that it opens with the YubiKey and the PIN alone (a trade-off: the master
@@ -107,16 +110,12 @@ read -rs pw && printf '%s' "$pw" | ~/.cargo/bin/yb store -n Test.passwd; unset p
 
 ## 4. Use it
 
-Quit any KeePassXC already running (it would take over the new one), then:
-
-```shell
-./build/src/keepassxc
-```
-
 - **Database → Open Database…** (or the button on the welcome screen):
-  with the YubiKey connected, a list offers `Test.kdbx (on the YubiKey)`,
-  next to "A file…".  Pick it, enter the YubiKey's PIN, then the master
-  password (unless it is stored on the YubiKey).
+  with the YubiKey connected, a list offers "A file…", then the databases
+  on the YubiKey, e.g. `Test.kdbx (on the YubiKey)`.  Pick one, enter the
+  YubiKey's PIN, then the master password (unless it is stored on the
+  YubiKey).  With several YubiKeys connected, choose one by its serial
+  number.
 - **Saving is automatic:** a few seconds after your last change, and at
   once when you lock or close the database, or quit.  Writing to the
   YubiKey takes a few seconds.  Pulling it out during a save loses
