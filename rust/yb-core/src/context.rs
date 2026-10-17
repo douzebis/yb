@@ -326,6 +326,11 @@ impl Context {
         *self.pin.borrow_mut() = Some(Zeroizing::new(pin.to_owned()));
     }
 
+    /// Remember the FIDO2 PIN (e.g. just set by the guided format).
+    pub fn set_fido2_pin(&self, pin: &str) {
+        *self.fido2_pin.borrow_mut() = Some(Zeroizing::new(pin.to_owned()));
+    }
+
     /// The FIDO2 PIN of a post-quantum store: the PIN given
     /// non-interactively (`--pin-stdin`, `YB_PIN`), else the FIDO2 prompt.
     /// Never the PIV factory PIN (spec 0028, D10).

@@ -121,6 +121,7 @@ fn run(cli: Cli) -> Result<()> {
         Commands::Remove(args) => cli::remove::run(&ctx, &args),
         Commands::Fsck(args) => cli::fsck::run(&ctx, &args),
         Commands::RotateManagementKey(args) => cli::rotate_management_key::run(&ctx, &args),
+        Commands::ManagementKey(args) => cli::management_key::run(&ctx, &args),
         Commands::ListReaders(_) | Commands::Select(_) => unreachable!("handled above"),
         #[cfg(feature = "self-test")]
         Commands::SelfTest(args) => cli::self_test::run(&mut ctx, &args),

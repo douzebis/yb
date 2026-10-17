@@ -91,6 +91,12 @@ pub fn run(ctx: &mut Context, p: &mut dyn Prompter) -> Result<()> {
     p.say(&report.render(None, false));
     p.say(&store_summary(&store));
     p.say("");
+
+    // The kind of store (spec 0028, D1): post-quantum first, recommended.
+    #[cfg(not(windows))]
+    if ask_post_quantum(p)? {
+        return crate::cli::format_pq::run_guided(ctx, p, &store);
+    }
     stop_if_blocked(ctx, &report).context(NOTHING_CHANGED)?;
 
     // 2–3. PIN and PUK.
@@ -167,6 +173,23 @@ pub fn run(ctx: &mut Context, p: &mut dyn Prompter) -> Result<()> {
 // ---------------------------------------------------------------------------
 // Report
 // ---------------------------------------------------------------------------
+
+/// Ask for the kind of store; `true` for post-quantum (spec 0028).
+#[cfg(not(windows))]
+fn ask_post_quantum(p: &mut dyn Prompter) -> Result<bool> {
+    p.say(
+        "What kind of store?\n  1) post-quantum (recommended): protected by the YubiKey's FIDO2\n     \
+         application; asks for the FIDO2 PIN and a touch for each blob\n  2) legacy: \
+         protected by the PIV application; asks for the PIV PIN",
+    );
+    loop {
+        match p.ask("Kind of store (1–2) [1]: ")?.trim() {
+            "" | "1" => return Ok(true),
+            "2" => return Ok(false),
+            _ => p.say("Please answer 1 or 2."),
+        }
+    }
+}
 
 fn store_summary(store: &StorePresence) -> String {
     match store {

@@ -694,9 +694,10 @@ struct PqFixture {
 }
 
 impl PqFixture {
-    fn new() -> Self {
-        use yb_core::fido2::{pairing::open_yubikey, socket::SOCKET_ENV};
-        use yb_core::orchestrator::post_quantum::create_post_quantum_store;
+    /// The card with the user's own management key, and the emulator (no
+    /// FIDO2 PIN yet); no post-quantum store.
+    fn bare() -> Self {
+        use yb_core::fido2::socket::SOCKET_ENV;
         use yb_core::piv::{MgmtAlgo, PivBackend, VirtualPiv};
 
         let fx = Fixture::new();
@@ -705,14 +706,32 @@ impl PqFixture {
             Some(PQ_SERIAL),
         )
         .unwrap();
-        // The store is made here, through the same emulator.
+        // For the work done here, through the same emulator.
         std::env::set_var(SOCKET_ENV, &server.path);
         let piv = VirtualPiv::from_fixture(&fx.path()).unwrap();
         let reader = piv.reader_name();
         piv.set_management_key(&reader, MGMT, OWN_MGMT, MgmtAlgo::Tdes)
             .unwrap();
-        let dev = open_yubikey(PQ_SERIAL, 1, &|| {}).unwrap();
+        piv.save_fixture(&fx.path()).unwrap();
+        Self { fx, server }
+    }
+
+    /// Set the emulator's FIDO2 PIN (the fixture's PIN).
+    fn set_fido2_pin(&self) -> yb_core::fido2::Device {
+        let dev = yb_core::fido2::pairing::open_yubikey(PQ_SERIAL, 1, &|| {}).unwrap();
         dev.set_pin(PIN).unwrap();
+        dev
+    }
+
+    /// A post-quantum store, made through the library.
+    fn new() -> Self {
+        use yb_core::orchestrator::post_quantum::create_post_quantum_store;
+        use yb_core::piv::{MgmtAlgo, PivBackend, VirtualPiv};
+
+        let f = Self::bare();
+        let dev = f.set_fido2_pin();
+        let piv = VirtualPiv::from_fixture(&f.fx.path()).unwrap();
+        let reader = piv.reader_name();
         create_post_quantum_store(
             &piv,
             &reader,
@@ -725,8 +744,8 @@ impl PqFixture {
         )
         .unwrap();
         drop(dev);
-        piv.save_fixture(&fx.path()).unwrap();
-        Self { fx, server }
+        piv.save_fixture(&f.fx.path()).unwrap();
+        f
     }
 
     fn run(&self, extra_env: &[(&str, &str)], args: &[&str]) -> Output {
@@ -905,6 +924,139 @@ fn pq_low_pin_attempts() {
     assert_eq!(out, "data");
 }
 
+fn pq_format_flags() {
+    let f = PqFixture::bare();
+    drop(f.set_fido2_pin());
+    let path = f.file("old.txt", b"old");
+    let own = [("YB_MANAGEMENT_KEY", OWN_MGMT)];
+    f.expect(0, &own, &["format", "-g"]);
+    f.expect(0, &own, &["store", "-u", &path]);
+    let before = f.server.touches();
+    let (_, err) = f.expect(0, &own, &["format", "--post-quantum", "--yes", "-c", "8"]);
+    assert!(err.contains("will be destroyed: old.txt"), "{err}");
+    assert_eq!(f.server.touches() - before, 2, "format: two touches");
+    let (out, _) = f.expect(0, &[], &["fsck"]);
+    assert!(out.contains("Store: post-quantum, 8 objects"), "{out}");
+    let doc = f.file("doc.txt", b"after format");
+    f.expect(0, &[], &["store", &doc]);
+    let (out, _) = f.expect(0, &[], &["fetch", "-p", "doc.txt"]);
+    assert_eq!(out, "after format");
+}
+
+fn pq_format_refusals() {
+    let f = PqFixture::bare();
+    // The factory management key is refused.
+    let factory = [("YB_MANAGEMENT_KEY", MGMT)];
+    let (_, err) = f.expect(1, &factory, &["format", "--post-quantum", "--yes"]);
+    assert!(err.contains("factory default"), "{err}");
+    // No FIDO2 PIN: set one first.
+    let own = [("YB_MANAGEMENT_KEY", OWN_MGMT)];
+    let (_, err) = f.expect(1, &own, &["format", "--post-quantum", "--yes"]);
+    assert!(err.contains("no FIDO2 PIN is set"), "{err}");
+    // Legacy options are refused with --post-quantum.
+    drop(f.set_fido2_pin());
+    let (_, err) = f.expect(1, &own, &["format", "--post-quantum", "-g"]);
+    assert!(err.contains("legacy stores"), "{err}");
+    // Nothing was written: still no store.
+    use yb_core::piv::{PivBackend, VirtualPiv};
+    let piv = VirtualPiv::from_fixture(&f.fx.path()).unwrap();
+    assert!(
+        piv.read_object(&piv.reader_name(), 0x5F_0000).is_err(),
+        "a refused format wrote"
+    );
+}
+
+fn pq_rotate_management_key_refused() {
+    let f = PqFixture::new();
+    let (_, err) = f.expect(1, &[], &["rotate-management-key"]);
+    assert!(err.contains("yb management-key set"), "{err}");
+}
+
+/// The user changes the management key with another tool: fetch exits 4
+/// until `yb management-key set` (D7, D11).
+fn pq_management_key_set() {
+    use yb_core::piv::{MgmtAlgo, PivBackend, VirtualPiv};
+    const NEW_MGMT: &str = "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a6978";
+    let f = PqFixture::new();
+    let path = f.file("doc.txt", b"kept");
+    f.expect(0, &[], &["store", &path]);
+    let piv = VirtualPiv::from_fixture(&f.fx.path()).unwrap();
+    piv.set_management_key(&piv.reader_name(), OWN_MGMT, NEW_MGMT, MgmtAlgo::Tdes)
+        .unwrap();
+    piv.save_fixture(&f.fx.path()).unwrap();
+
+    f.expect(4, &[], &["fetch", "-p", "doc.txt"]);
+    let (_, err) = f.expect(
+        1,
+        &[("YB_MANAGEMENT_KEY", MGMT)],
+        &["management-key", "set"],
+    );
+    assert!(err.contains("factory default"), "{err}");
+    let (_, err) = f.expect(
+        1,
+        &[("YB_MANAGEMENT_KEY", OWN_MGMT)],
+        &["management-key", "set"],
+    );
+    assert!(err.contains("rejects"), "{err}");
+    f.expect(
+        0,
+        &[("YB_MANAGEMENT_KEY", NEW_MGMT)],
+        &["management-key", "set"],
+    );
+    let (out, _) = f.expect(0, &[], &["fetch", "-p", "doc.txt"]);
+    assert_eq!(out, "kept");
+}
+
+/// Scripted answers for the guided format, run in-process.
+struct Script {
+    answers: std::collections::VecDeque<String>,
+    transcript: Vec<String>,
+}
+
+impl yb::cli::guided::Prompter for Script {
+    fn say(&mut self, text: &str) {
+        self.transcript.push(text.to_owned());
+    }
+    fn ask(&mut self, prompt: &str) -> anyhow::Result<String> {
+        self.transcript.push(prompt.to_owned());
+        self.answers
+            .pop_front()
+            .ok_or_else(|| anyhow::anyhow!("no answer for {prompt:?}"))
+    }
+    fn ask_secret(&mut self, prompt: &str) -> anyhow::Result<String> {
+        self.ask(prompt)
+    }
+}
+
+/// The guided format, post-quantum, in-process: set a FIDO2 PIN, type the
+/// management key, default object count, confirm.
+fn pq_guided_format() {
+    use std::sync::Arc;
+    use yb_core::piv::{PivBackend, VirtualPiv};
+    let f = PqFixture::bare();
+    let piv = Arc::new(VirtualPiv::from_fixture(&f.fx.path()).unwrap());
+    std::env::set_var("YB_SKIP_DEFAULT_CHECK", "1");
+    let mut ctx = yb_core::Context::with_backend(piv.clone(), None, false).unwrap();
+    let mut script = Script {
+        answers: ["1", "654321", "654321", OWN_MGMT, "", "y"]
+            .iter()
+            .map(|a| a.to_string())
+            .collect(),
+        transcript: Vec::new(),
+    };
+    let before = f.server.touches();
+    yb::cli::guided::run(&mut ctx, &mut script)
+        .unwrap_or_else(|e| panic!("{e:#}\n{}", script.transcript.join("\n")));
+    assert!(script.answers.is_empty(), "unused answers");
+    let text = script.transcript.join("\n");
+    assert!(text.contains("post-quantum (recommended)"), "{text}");
+    assert!(text.contains("no unblocking code"), "{text}");
+    assert_eq!(f.server.touches() - before, 2, "format: two touches");
+    piv.save_fixture(&f.fx.path()).unwrap();
+    let (out, _) = f.expect(0, &[], &["fsck"]);
+    assert!(out.contains("Store: post-quantum, 32 objects"), "{out}");
+}
+
 fn main() {
     macro_rules! test {
         ($f:ident) => {
@@ -923,6 +1075,11 @@ fn main() {
         test!(pq_piv_reset_exits_4),
         test!(pq_refused_touch),
         test!(pq_low_pin_attempts),
+        test!(pq_format_flags),
+        test!(pq_format_refusals),
+        test!(pq_rotate_management_key_refused),
+        test!(pq_management_key_set),
+        test!(pq_guided_format),
         test!(store_and_list),
         test!(store_multiple_files_list),
         test!(store_name_override),

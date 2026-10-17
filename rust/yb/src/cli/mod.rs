@@ -4,10 +4,13 @@
 
 pub mod fetch;
 pub mod format;
+#[cfg(not(windows))]
+pub mod format_pq;
 pub mod fsck;
 pub mod guided;
 pub mod list;
 pub mod list_readers;
+pub mod management_key;
 pub mod picker;
 pub mod remove;
 pub mod rotate_management_key;

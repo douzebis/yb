@@ -3372,6 +3372,7 @@ dependencies = [
 name = "yb-piv-harness"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "libtest-mimic",
  "p256 0.13.2",
  "pcsc",
@@ -3381,6 +3382,7 @@ dependencies = [
  "tempfile",
  "trussed",
  "vpicc",
+ "yb",
  "yb-core",
  "yb-fido2-emulator",
 ]

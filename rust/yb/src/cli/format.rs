@@ -67,6 +67,12 @@ pub struct FormatArgs {
     #[arg(long = "yes")]
     pub yes: bool,
 
+    /// Create a post-quantum store (spec 0028): protected by the YubiKey's
+    /// FIDO2 application, with the YubiKey's own management key (from
+    /// YB_MANAGEMENT_KEY) and the FIDO2 PIN (already set).
+    #[arg(long = "post-quantum")]
+    pub post_quantum: bool,
+
     /// Run the checks and show what the format would do, then stop.
     ///
     /// Talks to the YubiKey (and verifies the PIN) but writes nothing.
@@ -84,12 +90,19 @@ impl FormatArgs {
             || self.key_slot.is_some()
             || self.subject.is_some()
             || self.yes
-            || self.plan)
+            || self.plan
+            || self.post_quantum)
     }
 }
 
 /// Flag-driven `yb format` (and `--plan`).
 pub fn run(ctx: &Context, args: &FormatArgs) -> Result<()> {
+    if args.post_quantum {
+        #[cfg(not(windows))]
+        return crate::cli::format_pq::run_flags(ctx, args);
+        #[cfg(windows)]
+        bail!("post-quantum stores are not supported on Windows");
+    }
     run_with_output(ctx, args, &mut std::io::stdout().lock())
 }
 

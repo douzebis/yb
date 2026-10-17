@@ -66,6 +66,16 @@ impl MgmtAlgo {
         }
     }
 
+    /// The name ykman shows ("3DES", "AES-192", …).
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Tdes => "3DES",
+            Self::Aes128 => "AES-128",
+            Self::Aes192 => "AES-192",
+            Self::Aes256 => "AES-256",
+        }
+    }
+
     /// Key length in bytes.
     pub fn key_len(self) -> usize {
         match self {

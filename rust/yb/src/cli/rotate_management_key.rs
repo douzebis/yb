@@ -8,6 +8,7 @@
 
 use anyhow::{Context as _, Result};
 use clap::Args;
+use yb_core::report::StorePresence;
 use yb_core::Zeroizing;
 use yb_core::{
     auxiliaries::{
@@ -24,6 +25,14 @@ use crate::cli::util::read_back_hint;
 pub struct RotateManagementKeyArgs {}
 
 pub fn run(ctx: &Context, _args: &RotateManagementKeyArgs) -> Result<()> {
+    // A post-quantum store uses the YubiKey's own key (spec 0028, D7).
+    if let StorePresence::Present(store) = StorePresence::probe(&ctx.reader, ctx.piv.as_ref()) {
+        if store.kind.is_post_quantum() {
+            anyhow::bail!(
+                "this store uses your own management key; change it with ykman, then run                  `yb management-key set`"
+            );
+        }
+    }
     let (old_key, old_key_in_printed, was_stored) =
         preflight(ctx).context("nothing was changed on the YubiKey")?;
 

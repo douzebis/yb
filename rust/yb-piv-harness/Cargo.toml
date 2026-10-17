@@ -26,6 +26,8 @@ integration-tests = [
     "dep:tempfile",
     "dep:trussed",
     "dep:yb-fido2-emulator",
+    "dep:yb",
+    "dep:anyhow",
     "yb-core/test-fixture",
 ]
 
@@ -41,6 +43,9 @@ rand             = { version = "0.8", optional = true }
 tempfile         = { version = "3", optional = true }
 # The FIDO2 emulator, served to the yb processes of yb_cli_tests (spec 0028).
 yb-fido2-emulator = { path = "../yb-fido2-emulator", optional = true }
+# The guided format, run in-process with scripted answers (spec 0028).
+yb                = { path = "../yb", optional = true }
+anyhow            = { version = "1", optional = true }
 # piv-authenticator uses trussed without default features, hence without any
 # `clients-N` feature: trussed then has room for 0 clients, and the emulated
 # card panics on start-up.  `clients-1` gives its one client a channel (the

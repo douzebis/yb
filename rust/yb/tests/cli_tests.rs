@@ -2298,9 +2298,14 @@ mod guided_tests {
         }
     }
 
-    /// Run the guided flow; the script must be used up exactly.
+    /// Run the guided flow, choosing a legacy store first (these tests
+    /// predate post-quantum stores, spec 0028); the script must be used up
+    /// exactly.
     fn guided(ctx: &mut Context, answers: &[&str]) -> (anyhow::Result<()>, Script) {
-        let mut script = Script::new(answers);
+        let answers: Vec<&str> = std::iter::once("2")
+            .chain(answers.iter().copied())
+            .collect();
+        let mut script = Script::new(&answers);
         let outcome = guided_run(ctx, &mut script);
         assert!(
             script.answers.is_empty(),

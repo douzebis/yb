@@ -80,6 +80,9 @@ pub enum Commands {
     /// Replace the management key with a random one, kept on the YubiKey
     /// and unlocked by the PIN (the store is kept).
     RotateManagementKey(cli::rotate_management_key::RotateManagementKeyArgs),
+    /// The management key of a post-quantum store (`set`: after changing
+    /// it with ykman).
+    ManagementKey(cli::management_key::ManagementKeyArgs),
     /// List PC/SC readers.
     ListReaders(cli::list_readers::ListReadersArgs),
     /// Interactively select a YubiKey and print its serial number.

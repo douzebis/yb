@@ -338,7 +338,7 @@ fn check_post_quantum_store(
         out,
         "Credential: {}-byte ID; management key: {}",
         descriptor.credential_id.len(),
-        algorithm_name(descriptor.mgmt_algo)
+        descriptor.mgmt_algo.name()
     )?;
     writeln!(
         out,
@@ -426,17 +426,6 @@ fn check_post_quantum_store(
 ) -> Result<bool> {
     writeln!(out, "Store: post-quantum (not supported on Windows)")?;
     Ok(false)
-}
-
-/// The name of a management key algorithm, as ykman shows it.
-#[cfg(not(windows))]
-fn algorithm_name(algo: yb_core::MgmtAlgo) -> &'static str {
-    match algo {
-        yb_core::MgmtAlgo::Tdes => "3DES",
-        yb_core::MgmtAlgo::Aes128 => "AES-128",
-        yb_core::MgmtAlgo::Aes192 => "AES-192",
-        yb_core::MgmtAlgo::Aes256 => "AES-256",
-    }
 }
 
 fn write_nvm(ctx: &Context, store_ids: &HashSet<u32>, out: &mut dyn Write) -> Result<()> {

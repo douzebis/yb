@@ -367,6 +367,45 @@ pub fn quick_check(head: &Object, store: &Store) -> SigVerdict {
     }
 }
 
+/// Wrap a new management key into the store's descriptor (`yb
+/// management-key set`, spec 0028, D7): one assertion (one touch) for the
+/// management key's K2, a fresh nonce, the card's current algorithm; the
+/// descriptor is rewritten with the new key, which the card must accept.
+/// Returns the new descriptor.
+#[allow(clippy::too_many_arguments)]
+pub fn rewrap_management_key(
+    piv: &dyn PivBackend,
+    reader: &str,
+    descriptor: &Descriptor,
+    fido2: &fido2::Device,
+    pin: &str,
+    new_key: &str,
+    algo: MgmtAlgo,
+    on_touch: &dyn Fn(),
+) -> Result<Descriptor> {
+    piv.authenticate_management_key(reader, new_key)
+        .context("the YubiKey rejects this management key")?;
+    let key_bytes = Zeroizing::new(hex::decode(new_key).context("management key hex")?);
+    if key_bytes.len() != algo.key_len() {
+        bail!("the management key does not fit its algorithm");
+    }
+    on_touch();
+    let k2 = fido2.hmac_secret(&descriptor.credential_id, &[descriptor.mgmt_salt], pin)?;
+    let mut updated = descriptor.clone();
+    updated.mgmt_algo = algo;
+    let (nonce, wrapped) = wrap_management_key(k2[0].as_ref(), &updated.wrap_ad(), &key_bytes)?;
+    updated.mgmt_nonce = nonce;
+    updated.mgmt_wrapped = wrapped;
+    piv.write_object(
+        reader,
+        crate::store::constants::OBJECT_ID_ZERO,
+        &updated.to_bytes(),
+        new_key,
+    )
+    .context("writing the store descriptor")?;
+    Ok(updated)
+}
+
 /// Create a post-quantum store's credential and descriptor, then format
 /// it (spec 0028, D13): the credential (one touch), the management key
 /// wrapped by its K2 (one touch), then `Store::format_post_quantum`, which
