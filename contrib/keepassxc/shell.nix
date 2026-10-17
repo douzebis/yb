@@ -33,6 +33,8 @@ pkgs.mkShell {
     # clang-format and git-clang-format, to format changed lines only
     # (KeePassXC's .clang-format).
     clang-tools
+    # Backtraces of crashes.
+    gdb
   ];
   buildInputs = with pkgs; [
     qt.qtbase
