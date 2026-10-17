@@ -23,3 +23,5 @@
 
 /attic/poc-opensk/target/
 /attic/poc-opensk/Cargo.lock
+/attic/poc-fido-hw/target/
+/attic/poc-fido-hw/Cargo.lock

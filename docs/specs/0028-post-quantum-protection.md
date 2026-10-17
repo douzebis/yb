@@ -258,7 +258,9 @@ would be confusing.
 - yb never tries one PIN as the other (no wasted attempts), and never
   changes the FIDO2 PIN.  Users often already have one for passkeys.
 - The guided format sets a FIDO2 PIN if none exists (FIDO2 has no default
-  PIN, and `hmac-secret` with the PIN needs one).
+  PIN, and `hmac-secret` with the PIN needs one).  Whether a PIN is set
+  comes from the device info (`clientPin` option, as ykman shows it),
+  without using an attempt.
 - `--pin-stdin` provides the PIN of the store's kind.
 - Before asking, yb reads the remaining attempts and refuses when **3 or
   fewer** remain, unless forced; the wizard explains that a blocked FIDO2
@@ -309,8 +311,8 @@ Consequences:
   (post-quantum); update yb" instead of "bad magic", and accept unknown
   signature trailers of any length as "newer version".  Neither is needed
   for safety.
-- The `file` magic database must learn the new magic (see "Format and
-  registration tasks").
+- The `file` magic database must learn the new magic (see "Documentation,
+  format and release tasks").
 
 ### D13. The store descriptor in object `0x5F_0000`
 
@@ -631,7 +633,7 @@ one touch per blob.
   missing; no access to the FIDO2 device.
 - ABI version bumped.
 
-### Format and registration tasks
+### Documentation, format and release tasks
 
 - `docs/YBLOB_FORMAT.md`: a section for post-quantum stores (this
   specification).
@@ -646,6 +648,10 @@ one touch per blob.
 - Documentation: access to `/dev/hidraw*` (udev `uaccess` rules from
   systemd or libfido2; on NixOS `services.udev.packages = [ pkgs.libfido2
   ]`, plus group `plugdev` for users without a local seat, e.g. over SSH).
+- **READMEs** (GitHub, and crates.io for `yb`, `yb-core` and `yubiblob`):
+  rework them with post-quantum stores; a poor README quickly shows in
+  download counts.  Probably include a summary of the threat model (to be
+  confirmed).
 
 ## Code structure (proposal)
 
@@ -785,17 +791,25 @@ with the hardware results below:
 | with PIN vs without PIN | different outputs, UV set / clear | same |
 | `credProtect` 3 without PIN | refused, `NO_CREDENTIALS`, **no touch** | refused, `NO_CREDENTIALS`, after a touch |
 | `credProtect` 3 with PIN | OK | OK |
-| two salts | 64 bytes, first half = single-salt output | not tested |
-| touch refused | `OPERATION_DENIED` | not tested |
-| output after a power cycle | unchanged | not tested |
+| two salts | 64 bytes, first half = single-salt output | same (2026-10-17) |
+| touch refused | `OPERATION_DENIED` | `OPERATION_DENIED` after ~30 s, no PIN attempt used (2026-10-17) |
+| output after a power cycle | unchanged | unchanged (2026-10-17) |
 | ES256 signature over yb's `clientDataHash` | verifies (`fido_assert_verify`) | not tested |
 | PIN attempts | 8; 3rd wrong PIN in a row: `PIN_AUTH_BLOCKED` until power cycle; counter kept (5); correct PIN resets to 8 | 8, replug after 3 (documented) |
-| credential ID size | 241 bytes | to measure (≤ 128 per metadata) |
+| credential ID size | 241 bytes | **64 bytes** (2026-10-17) |
 
 Differences that matter for yb: none.  yb always asks for a touch
 (`up = true`), so the different refusal codes for `up = false` do not
-arise; yb must not assume a credential ID size (241 bytes here).  (The
-ES256 row is kept for the record: yb no longer uses signatures, D5.)
+arise; yb must not assume a credential ID size (241 bytes here, 64 on
+the YubiKey).  (The ES256 row is kept for the record: yb no longer uses
+signatures, D5.)
+
+**Hardware checks (2026-10-17)**, YubiKey 5 NFC, firmware 5.7.1, through
+libfido2 with `attic/poc-fido-hw` (one non-resident credential, nothing
+stored on the key): credential ID 64 bytes; one salt 32 bytes; two salts
+64 bytes, the first half equal to the one-salt output; no touch for 30 s
+gives `OPERATION_DENIED` without using a PIN attempt; the output is
+unchanged after unplugging and replugging.
 
 **State across processes.**  The command-line tests run the `yb` binary
 repeatedly, so the emulator's state must survive between processes, like
@@ -833,6 +847,13 @@ on Linux was rejected: likely to need privileges.)
   sudo; desktops grant access through udev `uaccess` rules (systemd
   `60-fido-id.rules`, or libfido2's rules, which also use group
   `plugdev`).
+- **macOS:** the same vendor command works there: python-fido2, which
+  ykman uses, sends raw CTAPHID reports through IOKit
+  (`IOHIDDeviceSetReport` and input-report callbacks;
+  `fido2/hid/macos.py`), and ykman reads the serial this way on macOS
+  too.  So yb needs a raw HID channel on both systems, not `/dev/hidraw`
+  specifically: e.g. the `hidapi` crate (hidraw on Linux, IOHIDManager on
+  macOS).  To verify on a Mac.
 - yb's implementation is Rust, in `yb-core::fido2`.
 
 ## Compatibility with older yb
@@ -1036,9 +1057,9 @@ refused request still asked for a touch first.
   AES-256-CCM under a device master key (U2F key generation page: 64-byte
   key handles; FIPS 140-2 policy for firmware 5.4: "Wrapping Key — AES-256
   CCM", "Offline Key — HMAC SHA256 … HMAC-Secret").  No FIDO2 length is
-  documented; metadata gives `maxCredentialIdLength` 128.  yb treats the ID
-  as opaque, up to 255 bytes (OpenSK's are 241); the YubiKey's actual size
-  is to measure on hardware.
+  documented; metadata gives `maxCredentialIdLength` 128.  **Measured:
+  64 bytes** (YubiKey 5.7.1, non-resident, `credProtect` 3, 2026-10-17).
+  yb treats the ID as opaque, up to 255 bytes (OpenSK's are 241).
 - **FIDO2 reset** regenerates the master key: earlier non-resident IDs and
   their `hmac-secret` outputs are gone (Yubico U2F page; FIPS policy
   §2.6.3).  Confirms D4 and "Losing the store".

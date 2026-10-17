@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: 2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+#
+# SPDX-License-Identifier: MIT
+
+[package]
+name = "poc-fido-hw"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
