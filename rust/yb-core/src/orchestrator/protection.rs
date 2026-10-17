@@ -54,11 +54,14 @@ impl BlobMeta {
 }
 
 /// A blob ready to be written: its stored bytes, the `BLOB_KEY_SLOT` byte
-/// of its head, and the trailer that follows the stored bytes in its chain.
+/// of its head (`BLOB_FLAGS` in a post-quantum store), the trailer that
+/// follows the stored bytes in its chain, and the management key for the
+/// writes when the protection provides it (post-quantum stores, D7).
 pub struct Protected {
     pub stored: Vec<u8>,
     pub key_byte: u8,
     pub trailer: Vec<u8>,
+    pub management_key: Option<zeroize::Zeroizing<String>>,
 }
 
 /// What a store kind does to protect blobs (spec 0028, "Code structure").
@@ -155,6 +158,7 @@ impl Protection for LegacyProtection<'_> {
             stored,
             key_byte,
             trailer,
+            management_key: None,
         })
     }
 

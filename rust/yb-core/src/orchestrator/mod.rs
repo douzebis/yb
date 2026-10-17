@@ -12,6 +12,9 @@
 //! - this module     — `store_blob`, `fetch_blob`, `remove_blob`, `list_blobs`
 
 mod compression;
+// Post-quantum stores need the FIDO2 module, not built on Windows.
+#[cfg(not(windows))]
+pub mod post_quantum;
 mod protection;
 mod signature;
 mod types;
@@ -91,7 +94,7 @@ pub fn store_blob(
         payload,
         encrypt,
         options.compression,
-        management_key,
+        Some(management_key),
     )
 }
 
@@ -99,7 +102,9 @@ pub fn store_blob(
 ///
 /// Returns `false` if the store is full, found before anything else.  The
 /// blob is compressed, then protected (which may ask for the PIN), and only
-/// then written: a failure before the writes stores nothing.
+/// then written: a failure before the writes stores nothing.  The writes
+/// use the management key the protection provides (post-quantum stores),
+/// else `management_key`.
 #[allow(clippy::too_many_arguments)]
 pub fn store_blob_with(
     store: &mut Store,
@@ -109,7 +114,7 @@ pub fn store_blob_with(
     payload: &[u8],
     encrypt: bool,
     compression: Compression,
-    management_key: &str,
+    management_key: Option<&str>,
 ) -> Result<bool> {
     validate_name(name)?;
 
@@ -152,6 +157,14 @@ pub fn store_blob_with(
     if protected.stored.len() != data_len || protected.trailer.len() != trailer_len {
         bail!("blob '{name}': protected size differs from the announced overhead (bug)");
     }
+    let protected_key = protected.management_key;
+    let Some(management_key) = protected_key
+        .as_deref()
+        .map(String::as_str)
+        .or(management_key)
+    else {
+        bail!("blob '{name}': no management key to write it");
+    };
     let data = protected.stored;
     let blob_key_slot = protected.key_byte;
     let blob_size = data.len() as u32;

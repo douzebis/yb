@@ -55,6 +55,7 @@ impl Protection for Plain {
             stored: payload.to_vec(),
             key_byte: 0,
             trailer: b"test".to_vec(),
+            management_key: None,
         })
     }
     fn open(&self, _: &BlobMeta, stored: &[u8], trailer: &[u8]) -> Result<Vec<u8>> {
@@ -143,7 +144,7 @@ fn chunks_store_and_fetch() {
         &data,
         false,
         Compression::None,
-        MGMT
+        Some(MGMT)
     )
     .unwrap());
 
@@ -173,7 +174,7 @@ fn legacy_parser_refuses_every_object() {
         &[1; 5000],
         false,
         Compression::None,
-        MGMT,
+        Some(MGMT),
     )
     .unwrap();
     for i in 0..=4u32 {

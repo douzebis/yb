@@ -85,6 +85,9 @@ pub const YUBIBLOB_SIGNATURE_UNSIGNED: SignatureVerdict = 1;
 /// version newer than this library knows.
 pub const YUBIBLOB_SIGNATURE_UNVERIFIABLE: SignatureVerdict = 2;
 pub const YUBIBLOB_SIGNATURE_CORRUPTED: SignatureVerdict = 3;
+/// A blob of a post-quantum store whose checksum matches (spec 0028, D5):
+/// not corrupted; its authenticity is checked when it is fetched.
+pub const YUBIBLOB_SIGNATURE_CHECKSUM_OK: SignatureVerdict = 4;
 
 /// `yubiblob_open` flag: allow writes with the factory PIN or PUK.
 pub const YUBIBLOB_OPEN_ALLOW_DEFAULT_CREDENTIALS: u32 = 0x1;
@@ -388,6 +391,7 @@ fn verdict(v: SigVerdict) -> SignatureVerdict {
         SigVerdict::Unsigned => YUBIBLOB_SIGNATURE_UNSIGNED,
         SigVerdict::Unverifiable | SigVerdict::NewerVersion => YUBIBLOB_SIGNATURE_UNVERIFIABLE,
         SigVerdict::Corrupted => YUBIBLOB_SIGNATURE_CORRUPTED,
+        SigVerdict::ChecksumOk => YUBIBLOB_SIGNATURE_CHECKSUM_OK,
     }
 }
 

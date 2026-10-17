@@ -41,6 +41,7 @@ test-fixture     = ["virtual-piv"]
 # Cryptography (RustCrypto)
 p256    = { version = "0.13", features = ["ecdh", "ecdsa", "pkcs8"] }
 hkdf    = "0.12"
+hmac    = "0.12"
 sha2    = "0.10"
 aes     = "0.8"
 aes-gcm = "0.10"

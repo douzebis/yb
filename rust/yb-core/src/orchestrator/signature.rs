@@ -150,6 +150,9 @@ pub enum SigVerdict {
     NewerVersion,
     /// A signature that does not verify, or a damaged chain.
     Corrupted,
+    /// A post-quantum blob whose checksum matches (spec 0028, D5): not
+    /// corrupted; its authenticity is checked at fetch (the seal).
+    ChecksumOk,
 }
 
 impl std::fmt::Display for SigVerdict {
@@ -159,6 +162,7 @@ impl std::fmt::Display for SigVerdict {
             SigVerdict::Unsigned => "UNSIGNED",
             SigVerdict::Unverifiable | SigVerdict::NewerVersion => "UNVERIFIABLE",
             SigVerdict::Corrupted => "CORRUPTED",
+            SigVerdict::ChecksumOk => "CHECKSUM OK",
         })
     }
 }

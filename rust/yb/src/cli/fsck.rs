@@ -118,7 +118,9 @@ fn check_store(ctx: &Context, args: &FsckArgs, store: &Store, out: &mut dyn Writ
     for head in &heads {
         let verdict = check_blob_signature(head, store, verifying_key.as_ref());
         match verdict {
-            SigVerdict::Verified => sig_verified += 1,
+            // Post-quantum stores (spec 0028) get their own report in
+            // `yb fsck`; the legacy check never gives a checksum verdict.
+            SigVerdict::Verified | SigVerdict::ChecksumOk => sig_verified += 1,
             SigVerdict::Unsigned => sig_unsigned += 1,
             SigVerdict::Unverifiable => sig_unverifiable += 1,
             SigVerdict::NewerVersion => sig_newer += 1,

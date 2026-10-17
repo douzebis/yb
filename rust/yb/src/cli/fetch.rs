@@ -84,7 +84,9 @@ pub fn run(ctx: &Context, args: &FetchArgs) -> Result<()> {
     for name in &matched {
         if let Some(head) = store.find_head(name) {
             match check_blob_signature(head, &store, verifying_key.as_ref()) {
-                SigVerdict::Verified => {}
+                // A checksum verdict comes from post-quantum stores only
+                // (spec 0028, D5), whose fetch checks the seal.
+                SigVerdict::Verified | SigVerdict::ChecksumOk => {}
                 SigVerdict::Corrupted => bail!(
                     "blob '{name}' is corrupted or was tampered with: its signature does \
                      not verify; nothing was fetched"

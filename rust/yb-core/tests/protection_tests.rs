@@ -78,7 +78,7 @@ fn refused_protection_writes_nothing() {
         &[0xCC; 100],
         false,
         Compression::None,
-        MGMT,
+        Some(MGMT),
     );
     assert!(refused.is_err());
     assert_eq!(piv.write_count(), writes, "a refused protection wrote");
@@ -118,7 +118,7 @@ fn legacy_protection_round_trip() {
         &data,
         true,
         Compression::Auto,
-        MGMT,
+        Some(MGMT),
     )
     .unwrap());
 

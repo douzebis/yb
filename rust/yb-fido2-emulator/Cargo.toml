@@ -19,3 +19,4 @@ opensk = { git = "https://github.com/google/OpenSK", rev = "636d85b8ae492f30157c
 [dev-dependencies]
 yb-core = { path = "../yb-core", features = ["test-utils"] }
 anyhow  = "1"
+rand    = "0.8"
