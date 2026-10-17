@@ -227,6 +227,8 @@ let
     cp -r ${rustSrc} source/rust
     cp -r ${./docs/invariants} source/docs/invariants
     cp ${./scripts/check-invariants} source/scripts/check-invariants
+    # Named as a regression check by invariant 0018.
+    cp ${./scripts/check-release-workflow} source/scripts/check-release-workflow
     chmod -R u+w source
     patchShebangs source/scripts
     source/scripts/check-invariants
