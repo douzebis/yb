@@ -28,7 +28,7 @@ fi
 # Extra arguments go to `cargo package`, e.g. --allow-dirty to check a
 # working tree with uncommitted changes.
 cargo package --manifest-path "$manifest" --locked \
-    --workspace --exclude yb-piv-harness "$@"
+    --workspace --exclude yb-piv-harness --exclude yb-fido2-emulator "$@"
 
 # The published crates, dependencies first; each has its own version
 # (yb-core and yb share the workspace's).
