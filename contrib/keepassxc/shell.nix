@@ -35,6 +35,10 @@ pkgs.mkShell {
     clang-tools
     # Backtraces of crashes.
     gdb
+    # The tests on a headless machine (CI, a VM): a virtual X server, and a
+    # clipboard tool for the CLI's clip test.
+    xvfb-run
+    xclip
   ];
   buildInputs = with pkgs; [
     qt.qtbase
