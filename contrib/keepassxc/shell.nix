@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: MIT
 
 # Build environment for KeePassXC with databases stored on a YubiKey
-# (branch feature/yubikey-storage of https://github.com/douzebis/keepassxc),
+# (branch feature/yubikey-storage of https://github.com/douzebis/keepassyb),
 # with libyubiblob and the yb command from yb's v0.6.0 release.
 #
 # Everything comes from the nixpkgs that yb pins, so it works whatever the

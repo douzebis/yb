@@ -27,8 +27,8 @@ Linux only for now.
 ## 1. Build KeePassXC
 
 ```shell
-git clone --branch feature/yubikey-storage https://github.com/douzebis/keepassxc
-cd keepassxc
+git clone --branch feature/yubikey-storage https://github.com/douzebis/keepassyb
+cd keepassyb
 curl -LO https://raw.githubusercontent.com/douzebis/yb/main/contrib/keepassxc/shell.nix
 nix-shell
 cmake -G Ninja -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DKPXC_FEATURE_YUBIBLOB=ON
@@ -51,8 +51,8 @@ git clone --branch yubiblob-v0.1.0 https://github.com/douzebis/yb
 (cd yb/rust && cargo cinstall -p yubiblob --release --prefix ~/.local --libdir lib)
 export PKG_CONFIG_PATH=~/.local/lib/pkgconfig:$PKG_CONFIG_PATH
 
-git clone --branch feature/yubikey-storage https://github.com/douzebis/keepassxc
-cd keepassxc
+git clone --branch feature/yubikey-storage https://github.com/douzebis/keepassyb
+cd keepassyb
 cmake -G Ninja -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DKPXC_FEATURE_YUBIBLOB=ON
 ninja -C build
 ```
