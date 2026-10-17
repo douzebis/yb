@@ -168,13 +168,15 @@ Notes:
 | File | Content |
 |---|---|
 | `yb-<V>-windows-x86_64.zip` | `yb.exe`, `LICENSE`, `README.md` |
-| `libyubiblob-<L>-windows-x86_64.zip` | `bin/yubiblob.dll`, `lib/yubiblob.dll.lib`, `lib/yubiblob.lib`, `include/yubiblob.h`, `lib/pkgconfig/yubiblob.pc`, `LICENSE`, `README.md` |
+| `libyubiblob-<L>-windows-x86_64.zip` | `bin/yubiblob.dll`, `lib/yubiblob.dll.lib`, `lib/yubiblob.lib`, `lib/yubiblob.def`, `include/yubiblob.h`, `lib/pkgconfig/yubiblob.pc`, `LICENSE`, `README.md` |
 | `SHA256SUMS` | SHA-256 of both zips, `sha256sum` format |
 
 - `<V>` is the tag's version, which is also the workspace version
   (checked by `verify`).
 - `<L>` is libyubiblob's own version (`rust/yubiblob/Cargo.toml`).
 - The zips hold no top-level folder: unpacking gives the files.
+- The debug symbols that cargo-c installs (`bin/yubiblob.pdb`, half the
+  size) are left out.
 - A provenance attestation is made for each zip
   (`actions/attest-build-provenance`).  Users check it with
   `gh attestation verify <zip> --repo douzebis/yb`.

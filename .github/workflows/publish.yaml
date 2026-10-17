@@ -100,6 +100,8 @@ jobs:
           New-Item -ItemType Directory -Force dist, stage/yb | Out-Null
           Copy-Item rust/target/release/yb.exe, LICENSE, README.md stage/yb
           Copy-Item LICENSE, rust/yubiblob/README.md stage/libyubiblob
+          # Debug symbols stay out: half the size, for debugging only.
+          Remove-Item stage/libyubiblob/bin/*.pdb
           Compress-Archive -Path stage/yb/* -DestinationPath "dist/yb-$yb-windows-x86_64.zip"
           Compress-Archive -Path stage/libyubiblob/* -DestinationPath "dist/libyubiblob-$lib-windows-x86_64.zip"
           $lines = Get-ChildItem dist/*.zip | Sort-Object Name | ForEach-Object {
