@@ -6,9 +6,9 @@ SPDX-License-Identifier: MIT
 
 # 0047 — KeePassYB and a Slow YubiKey
 
-**Status:** draft
+**Status:** implemented
 **App:** KeePassYB (`douzebis/keepassyb`, branch `keepassyb`)
-**Implemented in:** <!-- YYYY-MM-DD, fill after implementation -->
+**Implemented in:** 2026-10-17
 
 ## Problem
 
@@ -283,8 +283,12 @@ challenge-response.  A file database's dialog is unchanged.
 ### S6. The desktop entry
 
 `Exec=` and `TryExec=` give the installed program's full path,
-`@CMAKE_INSTALL_FULL_BINDIR@/keepassyb`.  The Flatpak and AppImage builds
-keep their own handling: AppImage rewrites `Exec`, Flatpak exports it.
+`<prefix>/bin/keepassyb`.  The path is written at install time, since
+`cmake --install --prefix` may change the prefix after configuring.  The
+AppImage, Flatpak and Snap builds keep the bare name: AppImage rewrites
+`Exec`, Flatpak exports it.  The application icons' install patterns
+are fixed along the way (they still named `keepassx`, so a native
+install had no icons).
 
 ### Order of work
 
@@ -323,6 +327,15 @@ they run:
   wait, touch wait, YubiKey time).
 - `testInteractionsTable`: each row of S2b, counting PIN prompts,
   touches, reads and writes.
+
+## Result (host test, 2026-10-17)
+
+Post-quantum store, KDBX 4 vault:
+- open, then quit: no PIN, no touch, no write; 2.9 s of YubiKey time at
+  the unlock dialog (listing, store kind and read, about 0.95 s each)
+  and 0.96 s at unlock (a fresh listing, data from the cache);
+- a change, then quit and Save: one FIDO2 PIN prompt, one touch;
+  2.1 s of YubiKey time (a listing before and after the write).
 
 ## Further optimizations (not in this spec)
 
