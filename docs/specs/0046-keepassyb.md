@@ -131,8 +131,9 @@ force-pushes only the branch rebased, with `--force-with-lease`.
   With Yes, it reads with `yubiblob_fetch_unencrypted` (spec 0044).
   "Locked" means `PIN_BLOCKED`, `REPLUG`, `FEW_PIN_ATTEMPTS`,
   `NO_CREDENTIAL` or `NO_FIDO2_ACCESS`.
-  - The database then opens read-only.  Saving to a locked YubiKey
-    would fail anyway; "Save As" to a file works.
+  - KeePassXC 2.8 has no read-only mode.  The database opens as usual,
+    and saving to the locked YubiKey fails with its error.  The prompt
+    says so, and suggests Save As to a file.
   - **KDBX 4** databases authenticate every block with an HMAC keyed by
     the master key, so a modified file fails to open.
   - **KDBX 3.1** databases have no such MAC: AES-CBC, a header hash and
@@ -143,8 +144,12 @@ force-pushes only the branch rebased, with `--force-with-lease`.
     > modified database might open without notice.  Open it anyway?
     > (To avoid this, convert it: Database settings → Encryption →
     > KDBX 4.)
-- **Legacy stores:** an unencrypted database never needs the PIN to
-  open, so the fallback is never needed there.
+- **Legacy stores:** an unencrypted database opens without any PIN
+  (`yubiblob_fetch_unencrypted` checks its signature), so the fallback is
+  never needed there.  The PIV PIN is needed only to save.
+- **Post-quantum stores:** the PIN prompts name the PIN ("FIDO2 PIN",
+  "PIV PIN"), and "Touch your YubiKey…" is shown when the YubiKey waits
+  for a touch (libyubiblob's touch callback).
 
 ### S3. The stored master password (`<db>.passwd`)
 
@@ -165,9 +170,12 @@ YubiKey thus replace typing the master password.
 
 Deleting needs the store's PIN; it is the user's choice.
 
-**Storing:** the database settings offer "Remember the master password
-on this YubiKey" only on post-quantum stores.  It writes `<db>.passwd`
-encrypted.  The option is absent elsewhere.
+**Storing:** the unlock dialog offers "Remember the master password on
+this YubiKey" only for a vault of a post-quantum store that has no
+stored password yet.  It is placed there rather than in the database
+settings, because that is where the password is typed.  It writes
+`<db>.passwd` encrypted, for a password-only key.  The option is absent
+elsewhere.
 
 **Windows:** post-quantum stores are not supported there yet (spec 0041
 phase 2).  So no `.passwd` is ever used on Windows until they are, and
