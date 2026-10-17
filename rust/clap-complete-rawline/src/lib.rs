@@ -386,6 +386,8 @@ mod tests {
         );
     }
 
+    // Unix only: Windows forbids ':' in file names (spec 0043).
+    #[cfg(unix)]
     #[test]
     fn a_directory_candidate_gets_its_slash() {
         let root =

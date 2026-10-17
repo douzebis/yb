@@ -31,6 +31,7 @@ test named there exists.
 | [0015](0015-management-key-is-checked-before-every-write-and-fetch.md) | The Management Key Is Checked Before Every Write and Fetch |
 | [0016](0016-a-post-quantum-store-exists-once-its-descriptor-is-written.md) | A Post-Quantum Store Exists Only Once Its Descriptor Is Written |
 | [0017](0017-the-fido2-pin-is-not-tried-with-few-attempts-left.md) | The FIDO2 PIN Is Not Tried With Few Attempts Left |
+| [0018](0018-release-files-are-built-tested-and-approved.md) | Release Files Are Built, Tested and Approved |
 
 ## Not guaranteed
 

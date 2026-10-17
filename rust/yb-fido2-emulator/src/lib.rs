@@ -276,11 +276,13 @@ pub mod server {
                             )
                         } > 0
                         {
+                            // Counted before the reply leaves: a client
+                            // that got it sees the touch (spec 0028).
+                            n.store(super::touches(), Ordering::SeqCst);
                             if stream.write_all(&report).is_err() {
                                 break;
                             }
                         }
-                        n.store(super::touches(), Ordering::SeqCst);
                     }
                 }
             });
