@@ -6,14 +6,14 @@ SPDX-License-Identifier: MIT
 
 # 0028 — Post-Quantum Stores (FIDO2 hmac-secret)
 
-**Status:** draft
+**Status:** ready
 **App:** yb
 **Implemented in:** <!-- YYYY-MM-DD, fill after implementation -->
 
-> **Complete draft, for review.**  Goals, decisions with their rationale,
-> the specification (formats, card operations, commands, libyubiblob),
-> the code structure, the test approach and the ANSSI assessment.  Do not
-> implement it until it is marked `ready`.
+> Goals, decisions with their rationale, the specification (formats,
+> card operations, commands, libyubiblob), invariants, code structure,
+> tests and the ANSSI assessment.  Implementation follows "Order of work"
+> (Code structure).
 
 ## Problem
 
@@ -514,6 +514,26 @@ Checks, in order:
 Overhead per blob: 94 bytes encrypted (29 + 65), 97 unencrypted; legacy
 v2: 159 encrypted (94 + 65), 65 unencrypted.
 
+### Writing
+
+The chunk machinery is shared with legacy stores, so their write
+guarantees apply unchanged: a new copy goes into free objects,
+continuation chunks first and head last, and the old copy is freed only
+afterwards (spec 0031, invariant 0001); a write the card refuses for lack
+of memory is cleaned up by the next write (spec 0038); a store without
+room writes nothing (invariant 0004).
+
+Per blob, `yb store`:
+
+1. compresses the payload if asked (before encryption, as today);
+2. runs the blob's assertion (one touch), checks the management key
+   (D11), and computes `STORED` and the trailer;
+3. only then writes, with the same ordering as legacy stores.
+
+A refused assertion (no touch, wrong PIN, missing credential) therefore
+writes nothing for that blob.  With several blobs, each one is complete
+or untouched; a refusal stops the command before the next blob.
+
 ### Card operations
 
 Each FIDO2 operation costs one touch:
@@ -592,8 +612,8 @@ with `--post-quantum`.
 **PIN prompts** name the PIN: `FIDO2 PIN:` or `PIV PIN:`.  `--pin-stdin`
 carries the PIN of the store's kind (spec 0037 unchanged otherwise).
 
-**Touch:** before each assertion, `Touch your YubiKey (serial NNN)…` on
-standard error (not with `--quiet`).
+**Touch:** before each assertion, `Touch your YubiKey…` on standard
+error (not with `--quiet`).  No serial number (invariant 0011).
 
 **FIDO2 PIN attempts:** with 3 or fewer left, yb refuses: "only N FIDO2
 PIN attempts left; a blocked FIDO2 PIN cannot be unblocked, and would
@@ -618,20 +638,46 @@ one touch per blob.
 **`yb fetch`, `yb store`, `yb rm`:** as today, with one touch per blob
 (store, fetch) or per command (rm), and the checks above.
 
+### Exit statuses (`yb`)
+
+Existing: 0 success, 1 error, 2 not found, 3 store full.  New:
+
+| Status | Meaning |
+|---|---|
+| **4** | integrity check failed on a post-quantum store: checksum mismatch, seal failure, or management key mismatch (D11); nothing was returned or written |
+
+Every other new failure (no touch, wrong or blocked FIDO2 PIN, too few
+attempts, missing credential, no access to the FIDO2 device) is status 1,
+with its message.  Legacy stores keep their statuses (G5).
+
 ### libyubiblob 0.2.0
 
-- `yubiblob_store_info` reports the store kind (`YUBIBLOB_STORE_LEGACY`,
-  `YUBIBLOB_STORE_POST_QUANTUM`), so the application knows which PIN to
-  ask for; the `pin` arguments carry the PIN of the store's kind;
-  `yubiblob_last_pin_tries()` also reports FIDO2 PIN attempts.
-- `yubiblob_set_touch_callback(session, void (*cb)(void *user), user)`:
-  called before each operation that waits for a touch (KeePassXC shows
-  "Touch your YubiKey").
-- Open flag `YUBIBLOB_OPEN_ALLOW_LOW_PIN_ATTEMPTS`.
-- New statuses: touch not received; possibly tampered with (seal or
-  management key); too few PIN attempts left; PIN blocked; credential
-  missing; no access to the FIDO2 device.
-- ABI version bumped.
+The ABI is still 0 (spec 0039 G7: changes may break callers before
+1.0); the library version becomes 0.2.0.
+
+- **Store kind.**  `StoreInfo` gains `uint32_t kind`:
+  `YUBIBLOB_KIND_LEGACY = 0`, `YUBIBLOB_KIND_POST_QUANTUM = 1`.  The
+  application asks for the PIN of that kind ("FIDO2 PIN" or "PIV PIN");
+  the `pin` arguments carry it; `yubiblob_last_pin_tries()` reports the
+  attempts left for that PIN.
+- **Touch.**  `yubiblob_set_touch_callback(Session *session, void
+  (*callback)(void *user), void *user)`: called before each operation
+  that waits for a touch (KeePassXC shows "Touch your YubiKey"); NULL
+  removes it.
+- **Open flag** `YUBIBLOB_OPEN_ALLOW_LOW_PIN_ATTEMPTS = 0x2`.
+- **Verdict** `YUBIBLOB_SIGNATURE_CHECKSUM_OK = 4`: a post-quantum blob
+  whose checksum matches (D5); a mismatch is `..._CORRUPTED` as today.
+- **New statuses** (existing ones keep their values; `WRONG_PIN` and
+  `PIN_BLOCKED` also cover the FIDO2 PIN):
+
+  | Value | Name | Meaning |
+  |---|---|---|
+  | 14 | `YUBIBLOB_ERR_TAMPERED` | seal failure or management key mismatch (D6, D11); nothing returned or written |
+  | 15 | `YUBIBLOB_ERR_NO_TOUCH` | the YubiKey was not touched in time |
+  | 16 | `YUBIBLOB_ERR_FEW_PIN_ATTEMPTS` | 3 or fewer FIDO2 PIN attempts left, and the open flag not given |
+  | 17 | `YUBIBLOB_ERR_REPLUG` | 3 wrong FIDO2 PINs in a row: unplug and replug |
+  | 18 | `YUBIBLOB_ERR_NO_CREDENTIAL` | the store's FIDO2 credential is gone (FIDO2 reset) |
+  | 19 | `YUBIBLOB_ERR_NO_FIDO2_ACCESS` | the FIDO2 device cannot be opened (permissions) |
 
 ### Documentation, format and release tasks
 
@@ -652,6 +698,45 @@ one touch per blob.
   rework them with post-quantum stores; a poor README quickly shows in
   download counts.  Probably include a summary of the threat model (to be
   confirmed).
+
+## Invariants
+
+Each new or extended invariant gets its `docs/invariants/` file and its
+regression tests during implementation (`scripts/check-invariants`
+checks that the named tests exist).
+
+**Existing invariants, extended to post-quantum stores:**
+
+| # | Invariant | For post-quantum stores |
+|---|---|---|
+| 0001 | Interrupted writes lose nothing | unchanged (shared chunk machinery, "Writing") |
+| 0002 | Reading never writes | `ls`, `fetch`, `fsck` (also `--seals`) never write |
+| 0003 | Only complete chains are visible | unchanged |
+| 0004 | A store refused for room writes nothing | also: a refused assertion writes nothing for its blob |
+| 0005 | Existing stores stay readable | legacy stores, unchanged by this spec (G5) |
+| 0006 | Tampering is detected before use | the seal replaces the signature: `yb fetch` checks every matched blob's checksum, seal and management key before returning or writing any, and returns nothing if one fails |
+| 0007 | Commands act only on the selected YubiKey | also the FIDO2 device: matched by serial, else the only one present, else refused |
+| 0008 | Format never strands blobs | the analogue of "slot key matches its certificate": a blob is only ever written under the credential the descriptor names, since the descriptor is written last, with the credential it was created with (0016) |
+| 0009 | The management key is never lost | yb never changes the card's management key in a post-quantum store; `yb management-key set` checks the new key against the card before wrapping it |
+| 0010 | No secrets behind factory credentials | format refuses the factory management key; FIDO2 has no factory PIN, and a post-quantum store cannot be used without one |
+| 0011 | Errors reveal no identity or secret | also: no FIDO2 PIN, K2, derived key or credential ID in messages, nor the serial in the touch prompt |
+| 0012 | A simulated YubiKey only in test builds | also the FIDO2 emulator (OpenSK), only with `test-fixture` |
+| 0013 | The management key is held in zeroizing memory | also the FIDO2 PIN, every K2, every derived key and the unwrapped management key |
+
+**New invariants:**
+
+| # | Invariant | Regression tests (to write) |
+|---|---|---|
+| 0014 | **Older yb never writes to a post-quantum store** (D12): every object starts with the new magic, so the legacy parser stops before any write | parse every object of a post-quantum store with the legacy parser: refused; a legacy `store` and `rm` against it fail with no card write |
+| 0015 | **The management key is checked before every write and every fetch** of a post-quantum store (D11) | after a simulated PIV reset (default key on the card), `store`, `fetch`, `rm` refuse with the tampering error, exit status 4, nothing written or returned |
+| 0016 | **A post-quantum store exists only once its descriptor is written** (D13) | interrupt format at each step: every version refuses the half-written objects, and a new format succeeds |
+| 0017 | **The FIDO2 PIN is never tried with 3 or fewer attempts left** without `--allow-low-pin-attempts`, and never tried as the PIV PIN or vice versa (D10) | emulator with 3 attempts left: refused, counter unchanged; with the flag: tried once |
+
+**"Not guaranteed"** (`docs/invariants/README.md`) gains, for
+post-quantum stores: confidentiality against a recording of the USB
+traffic plus a future quantum computer (CTAP's ECDH PIN protocol, "Threat
+model"); and, as for legacy stores, rollback of a blob to an older
+genuine version, or of the whole store (non-goal).
 
 ## Code structure (proposal)
 
