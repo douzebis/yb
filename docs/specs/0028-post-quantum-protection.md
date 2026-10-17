@@ -77,7 +77,7 @@ attack, not the confidentiality of blobs already copied.
 - Durability beyond the YubiKey: backups are the user's responsibility
   and are mandatory (see "Losing the store").
 
-## Decisions so far
+## Decisions
 
 ### D1. Two kinds of store, chosen at format time
 
@@ -116,8 +116,9 @@ blob.  Checked against ANSSI's texts: see "ANSSI assessment".
 
 `yb format` creates one FIDO2 credential, with `hmac-secret` and
 `credProtect` level 3 (unusable without the PIN), **not resident**
-(nothing stored in the YubiKey's credential slots).  Its credential ID and
-its public key are kept in the store's readable PIV objects.
+(nothing stored in the YubiKey's credential slots).  Its credential ID is
+kept in the store's readable PIV objects (D13); its public key is not
+needed (D5).
 
 Rationale:
 
@@ -133,37 +134,32 @@ Rationale:
 - Cost: the ID must be stored in PIV.  A PIV reset loses the ID, a FIDO2
   reset loses the key; either loses the store.  Backups cover both.
 
-### D5. No signature: a checksum for the PIN-less checks (revised 2026-10-16)
+### D5. No signature: a checksum for the PIN-less checks
 
-*Revised, confirmed 2026-10-17.*  An earlier version of this decision signed each
-blob with the FIDO2 assertion (ES256 over `authData ‖ clientDataHash`).
-Drafting the formats showed two problems:
+Post-quantum blobs carry **no signature**.  `yb ls` and plain `yb fsck`
+check a **SHA-256 checksum** of the blob (metadata and stored bytes),
+kept in its trailer: it detects corruption without PIN or touch (G8).  It
+is not authoritative against the attacker of the threat model; **the
+seal is** (D6).  Commands say "checksum OK", never "authentic".
+
+Rationale (revised 2026-10-16, confirmed 2026-10-17; the first version
+signed each blob with the FIDO2 assertion, ES256 over `authData ‖
+clientDataHash`):
 
 - **The signed `authData` contains K2, encrypted.**  The `hmac-secret`
-  output is an authenticator extension output, so it is part of
-  `authData`, encrypted under the CTAP session key (ECDH P-256).  To check
-  the signature later, yb would have to store that ciphertext with every
-  blob.  It would protect the blob's key only by classical ECDH, against
-  an attacker who would also need that session's public keys (not
-  stored): probably harmless, but it puts the very secret we protect in
-  the store, under classical cryptography.
-- **It buys little.**  The signature is not post-quantum, so it was
-  already demoted to a corruption check (G8); against classical
-  tampering it only helps against someone with the management key, who
-  is detected anyway at fetch (seal, D6) and by D11.  And it costs about
-  100 bytes per blob (`authData`, signature) plus the envelope encryption
-  that was needed only to sign the ciphertext (former D6).
+  output is an extension output inside `authData`, encrypted under the
+  CTAP session key (ECDH P-256).  Checking the signature later would mean
+  storing that ciphertext with every blob: the very secret we protect,
+  kept in the store under classical cryptography.
+- **It buys little.**  ECDSA is not post-quantum, so the signature was
+  only a corruption check (G8).  Against classical tampering it only
+  helps against someone with the management key, who is caught anyway at
+  fetch (D6) and by D11.  It cost about 100 bytes per blob, plus envelope
+  encryption (needed only to sign the ciphertext).
 
-So post-quantum blobs carry **no signature**.  `yb ls` and plain `yb
-fsck` check a **SHA-256 checksum** of the blob (metadata and stored
-bytes), kept in its trailer: it detects corruption without PIN or touch
-(G8).  Like the signature it replaces, it is not authoritative against
-the attacker of the threat model; **the seal is** (D6).  Commands say
-"checksum OK", never "authentic".
+Without signatures, the credential's public key is not needed (D13).
 
-The credential's public key is then not needed either (D13).
-
-### D6. The seal: post-quantum integrity (revised 2026-10-16)
+### D6. The seal: post-quantum integrity
 
 Every blob carries a **seal** that only the card's K2 can produce, so only
 someone with the YubiKey, the FIDO2 PIN and a touch.  HMAC-SHA256 and
@@ -201,18 +197,18 @@ key.  Other PIV uses of the YubiKey (ykman, SSH keys) keep working with
 the key the user knows.
 
 yb keeps a copy **wrapped by a second `hmac-secret` output** (a second,
-per-store salt), with its algorithm, in a readable object.  `hmac-secret`
-accepts **two salts per assertion**, so one PIN and one touch give the
-blob's K2 and the management key's K2.
+per-store salt), with its algorithm, in the store descriptor (D13).
+`hmac-secret` accepts **two salts per assertion**, so one PIN and one
+touch give the blob's K2 and the management key's K2.
 
 At format:
 
 1. yb reads the key's algorithm from the card (GET METADATA, firmware
    5.3+): 3DES, AES-128, AES-192 or AES-256;
-2. yb obtains the key: typed by the user (hex), or from standard input;
-   or, if ykman's convention is in use (key in PRINTED behind the PIV PIN),
-   read from PRINTED with the user's agreement (the only time a
-   post-quantum store asks for the PIV PIN);
+2. yb obtains the key: from `YB_MANAGEMENT_KEY`; else, if ykman's
+   convention is in use (key in PRINTED behind the PIV PIN), from PRINTED
+   with the user's agreement (the only time a post-quantum store asks for
+   the PIV PIN); else typed by the user (hex, hidden);
 3. yb **refuses the factory default** (`010203…0708`: 3DES before firmware
    5.7, AES-192 since);
 4. yb checks the key against the card (mutual authentication), then wraps
@@ -313,8 +309,8 @@ Consequences:
   (post-quantum); update yb" instead of "bad magic", and accept unknown
   signature trailers of any length as "newer version".  Neither is needed
   for safety.
-- The `file` magic database must learn the new magic (see "To be
-  specified").
+- The `file` magic database must learn the new magic (see "Format and
+  registration tasks").
 
 ### D13. The store descriptor in object `0x5F_0000`
 
@@ -324,22 +320,26 @@ the new magic and a type byte saying "descriptor"; its chunks follow from
 backups and object dumps), and older yb stops at the very first object it
 reads.
 
-Contents (about 400 bytes, no secrets, readable without the PIN):
+Contents (at most 356 bytes, no secrets, readable without the PIN;
+exact layout in "Specification (draft)"):
 
 | Field | Size |
 |---|---|
-| magic, type, format version | ~6 |
-| credential ID | up to 255 (241 with OpenSK; at most 128 on YubiKeys) |
-| credential public key | 65 |
+| magic, chunk count, type, format version | 7 |
+| management key algorithm | 1 |
+| credential ID, with its length | up to 256 (241 with OpenSK; at most 128 on YubiKeys) |
 | management key salt | 32 |
-| management key: algorithm, nonce, wrapped key, tag | ~60 |
+| management key: nonce, wrapped key, tag | 44–60 |
 
 - It changes only at format and with `yb management-key set`.
 - Losing it loses the store (like a FIDO2 reset): backups must include it.
   One copy (no redundant second object), backups cover it.
-- Format writes the credential first, then the descriptor, then the empty
-  chunks: an interrupted format leaves either no usable store or a
-  complete one.
+- Format creates the credential, wraps the management key, writes the
+  empty chunks, deletes any yb object beyond the last chunk, and writes
+  the descriptor **last**: a store exists once its descriptor is written.
+  An interrupted format leaves object 0 and the chunks with different
+  magics, which every yb version refuses to read (no writes), and which
+  a new format overwrites.
 
 Why not in the FIDO2 application: a credential cannot hold its own ID (yb
 must know the ID to read anything kept with it; resident credentials,
@@ -383,17 +383,17 @@ PIN**.
 Detailed analysis:
 
 - **Compromised OS** (root, malware, `usbmon`): it reads the PIN as it is
-  typed, and K2, the data key and the plaintext from memory.  No quantum
+  typed, and K2, the blob keys and the plaintext from memory.  No quantum
   computer needed; no design that types the PIN on the host can resist.
 - **Passive hardware tap** (rogue cable or hub) with a clean OS: CTAP2
   protects the PIN and the `hmac-secret` salts and outputs with the PIN
   protocol (1 or 2), based on **ECDH P-256**.  A recording made today can
   be decrypted by a future quantum computer: it yields a truncated hash of
-  the PIN (brute-forced easily) and the K2 of the blobs used while
-  recording.  This is the only place where classical cryptography remains
-  in a post-quantum store.  It affects resident and non-resident
-  credentials alike; CTAP has no post-quantum PIN protocol, up to CTAP 2.3
-  (2026-02).
+  the PIN (brute-forced easily), the K2 of the blobs used while recording,
+  and the management key's K2, hence the management key.  This is the only
+  place where classical cryptography remains in a post-quantum store.  It
+  affects resident and non-resident credentials alike; CTAP has no
+  post-quantum PIN protocol, up to CTAP 2.3 (2026-02).
 - **Active hardware tap:** CTAP's key agreement is not authenticated, so
   a device in the middle reads the PIN and K2 today, without a quantum
   computer.
@@ -478,8 +478,8 @@ legacy blobs (the trailer may spill into one more chunk).
 `STORED`:
 
 - unencrypted: the payload (compressed or not, C-bit as today);
-- encrypted: `0x03 ‖ NONCE (12) ‖ CIPHERTEXT ‖ TAG (16)`: 29 bytes of
-  overhead.
+- encrypted: `0x03 ‖ NONCE (12, random) ‖ CIPHERTEXT ‖ TAG (16)`: 29
+  bytes of overhead.
 
 Trailer:
 
@@ -514,7 +514,7 @@ v2: 159 encrypted (94 + 65), 65 unencrypted.
 
 ### Card operations
 
-Each line is one FIDO2 operation, so one touch:
+Each FIDO2 operation costs one touch:
 
 | Command | Operation | Salts |
 |---|---|---|
@@ -535,7 +535,7 @@ Card errors, as yb reports them:
 
 | Error | Meaning for the user |
 |---|---|
-| `UP_REQUIRED`, `UNSUPPORTED_OPTION` (no touch requested), `OPERATION_DENIED`, `USER_ACTION_TIMEOUT` | the YubiKey was not touched in time |
+| `OPERATION_DENIED`, `USER_ACTION_TIMEOUT` | the YubiKey was not touched in time |
 | `NO_CREDENTIALS` | the store's FIDO2 credential is gone (FIDO2 reset?); the store cannot be read; restore from backups |
 | `PIN_INVALID` | wrong FIDO2 PIN, N attempts left |
 | `PIN_AUTH_BLOCKED` | 3 wrong PINs in a row: unplug and replug the YubiKey |
@@ -577,8 +577,9 @@ For a post-quantum store it then:
    created, two touches, backups mandatory, and that a ykman copy of the
    management key left in PRINTED lets anyone with the PIV PIN delete
    blobs; asks for confirmation;
-5. creates the credential (touch), writes the descriptor, wraps the
-   management key (touch), writes the empty chunks.
+5. creates the credential (touch), wraps the management key (touch),
+   writes the empty chunks, deletes yb objects beyond them, and writes the
+   descriptor last (D13).
 
 Non-interactive: `yb format --post-quantum --yes`, with the management
 key in `YB_MANAGEMENT_KEY` and the FIDO2 PIN on standard input
@@ -646,69 +647,6 @@ one touch per blob.
   systemd or libfido2; on NixOS `services.udev.packages = [ pkgs.libfido2
   ]`, plus group `plugdev` for users without a local seat, e.g. over SSH).
 
-## Prerequisites
-
-1. **FIDO2 emulator** (research 2026-10-16, source code read, unit tests
-   run; nothing wired to libfido2 yet).
-
-   **Hook.**  libfido2 can replace its device I/O
-   (`fido_dev_set_io_functions`: 64-byte HID reports, libfido2 still does
-   the CTAPHID framing) or its transport (`fido_dev_set_transport_functions`:
-   whole CTAPHID messages).  Either lets an emulator answer inside the test
-   process: no `/dev/uhid`, no root, works in the Nix build sandbox.
-   libfido2's own mocks only replay recorded traffic, which cannot answer
-   PIN protocol 2 or `hmac-secret` (fresh random key exchange each time).
-
-   **Candidates**, against what the spec needs (two salts, output depending
-   on the PIN, refused without touch, `credProtect` 3, non-resident
-   credentials, 8 PIN attempts with a power-cycle block after 3, ES256,
-   controllable touch):
-
-   | Candidate | Fits | Notes |
-   |---|---|---|
-   | **OpenSK** (Google, `libraries/opensk`, `TestEnv`) | **all** | Apache-2.0, active (2026-10-15); in-process `process_hid_packet`; pure Rust; not on crates.io (git/vendored), pins nightly but builds on stable; `TestEnv` is a test utility, not a stable API |
-   | fido-authenticator (Trussed: Nitrokey 3, Solo 2 firmware) | all | Apache-2.0 OR MIT, shipping firmware; harness must be copied (~800 lines, poller thread), large dependency tree (littlefs2-sys, bindgen), reset window behind a feature |
-   | fidolizer | most, with ~50 lines of patches | **no license**; never compiled on Linux; one CredRandom; wrong error for `credProtect` 3; advertises built-in UV |
-   | swpasskey | no | MIT, well tested, but refuses `credProtect` and non-resident credentials by design |
-   | soft-fido2 | no | AGPL-3.0 license file; no `hmac-secret` on non-resident credentials, one CredRandom, no UP requirement |
-   | softfido | no | dead since 2022, no clientPIN or extensions |
-
-   **Choice: OpenSK in-process**, behind `fido_dev_set_io_functions`, in a
-   test-only crate that depends on OpenSK from git, pinned to a commit
-   (OpenSK is not on crates.io; only its old `sk-cbor` 0.1.2 is).
-   Fallback: fido-authenticator.  Real YubiKeys stay the reference
-   (hardware tests).
-
-   **Proof of concept (2026-10-16):** ~300 lines of Rust: hand-written
-   libfido2 FFI, OpenSK's `TestEnv` answering libfido2's custom I/O
-   callbacks, a scriptable touch, and a "power cycle" that rebuilds the
-   authenticator on the same storage (`std::mem::take` of the `TestEnv`).
-   Built on stable Rust 1.98.1 with libfido2 1.17.0.  Results, compared
-   with the hardware results below:
-
-   | Check | OpenSK through libfido2 | YubiKey 5.7.1 |
-   |---|---|---|
-   | makeCredential, `hmac-secret`, non-resident | OK, 1 touch | OK, touch |
-   | getAssertion, `up = false`, no extension | OK, no touch, UP clear | same |
-   | getAssertion, `up = false`, `hmac-secret` | refused, `UNSUPPORTED_OPTION` | refused, `UP_REQUIRED` |
-   | `hmac-secret`, same salt twice | same output, 1 touch each | same |
-   | with PIN vs without PIN | different outputs, UV set / clear | same |
-   | `credProtect` 3 without PIN | refused, `NO_CREDENTIALS`, **no touch** | refused, `NO_CREDENTIALS`, after a touch |
-   | `credProtect` 3 with PIN | OK | OK |
-   | two salts | 64 bytes, first half = single-salt output | not tested |
-   | touch refused | `OPERATION_DENIED` | not tested |
-   | output after a power cycle | unchanged | not tested |
-   | ES256 signature over yb's `clientDataHash` | verifies (`fido_assert_verify`) | not tested |
-   | PIN attempts | 8; 3rd wrong PIN in a row: `PIN_AUTH_BLOCKED` until power cycle; counter kept (5); correct PIN resets to 8 | 8, replug after 3 (documented) |
-   | credential ID size | 241 bytes | to measure (≤ 128 per metadata) |
-
-   Differences that matter for yb: none for the design.  yb must treat
-   both refusal codes for `up = false` alike, and must not assume a
-   credential ID size (241 bytes here).  makeCredential with `up = false`
-   cannot be expressed through libfido2, so it is not a concern.
-
-2. **Code structure** (proposal, 2026-10-16; see "Code structure" below).
-
 ## Code structure (proposal)
 
 ### Today
@@ -767,8 +705,9 @@ pub trait Protection {
 
 **2. One FIDO2 module, one implementation.**  `yb-core::fido2`: the
 hand-written libfido2 FFI (about 30 functions, as in the proof of
-concept) and a small safe wrapper (`Fido2Device`: open, make credential,
-assertion with salts and `clientDataHash`, retries, verify).  There is no
+concept) and a small safe wrapper (`Fido2Device`: open, read the serial
+with the vendor command, make credential, assertion with salts,
+retries).  There is no
 second backend: tests plug OpenSK **under** libfido2 through its I/O
 functions, so the real FFI is exercised in every test.  (PIV, by
 contrast, has `HardwarePiv` and `VirtualPiv`.)
@@ -782,9 +721,8 @@ For `yubiblob` this is an API change (0.2.0).
 - Unit and orchestrator tests: OpenSK in-process (test-only crate, OpenSK
   from git, pinned), next to `VirtualPiv`.
 - Command-line tests (`yb_cli_tests`, run the `yb` binary repeatedly with
-  `YB_FIXTURE`): the FIDO2 emulator state must survive between processes,
-  like the PIV fixture file.  To check: whether OpenSK's storage can be
-  saved and restored (its `BufferStorage` is a byte array).
+  `YB_FIXTURE`): the emulator's state is saved in a file between
+  processes, like the PIV fixture (see "Tests").
 - Hardware tests on YubiKeys, extended to post-quantum stores.
 
 **5. Order of work.**
@@ -794,6 +732,80 @@ For `yubiblob` this is an API change (0.2.0).
 3. Add `PostQuantumProtection`, the store descriptor, the formats, and
    the commands (`yb format`, `yb management-key set`, `yb fsck`).
 4. `yubiblob` 0.2.0 (touch callback, PIN kind), then KeePassXC.
+
+## Tests
+
+Three levels: unit and orchestrator tests against an in-process FIDO2
+emulator; command-line tests with the emulator's state kept in a file;
+hardware tests on YubiKeys (the reference).  The emulator was chosen on
+2026-10-16 after reading the candidates' source code and running their
+tests, then checked with a proof of concept.
+
+**Hook.**  libfido2 can replace its device I/O
+(`fido_dev_set_io_functions`: 64-byte HID reports, libfido2 still does
+the CTAPHID framing) or its transport (`fido_dev_set_transport_functions`:
+whole CTAPHID messages).  Either lets an emulator answer inside the test
+process: no `/dev/uhid`, no root, works in the Nix build sandbox.
+libfido2's own mocks only replay recorded traffic, which cannot answer
+PIN protocol 2 or `hmac-secret` (fresh random key exchange each time).
+
+**Candidates**, against what the spec needs (two salts, output depending
+on the PIN, refused without touch, `credProtect` 3, non-resident
+credentials, 8 PIN attempts with a power-cycle block after 3, ES256,
+controllable touch):
+
+| Candidate | Fits | Notes |
+|---|---|---|
+| **OpenSK** (Google, `libraries/opensk`, `TestEnv`) | **all** | Apache-2.0, active (2026-10-15); in-process `process_hid_packet`; pure Rust; not on crates.io (git/vendored), pins nightly but builds on stable; `TestEnv` is a test utility, not a stable API |
+| fido-authenticator (Trussed: Nitrokey 3, Solo 2 firmware) | all | Apache-2.0 OR MIT, shipping firmware; harness must be copied (~800 lines, poller thread), large dependency tree (littlefs2-sys, bindgen), reset window behind a feature |
+| fidolizer | most, with ~50 lines of patches | **no license**; never compiled on Linux; one CredRandom; wrong error for `credProtect` 3; advertises built-in UV |
+| swpasskey | no | MIT, well tested, but refuses `credProtect` and non-resident credentials by design |
+| soft-fido2 | no | AGPL-3.0 license file; no `hmac-secret` on non-resident credentials, one CredRandom, no UP requirement |
+| softfido | no | dead since 2022, no clientPIN or extensions |
+
+**Choice: OpenSK in-process**, behind `fido_dev_set_io_functions`, in a
+test-only crate that depends on OpenSK from git, pinned to a commit
+(OpenSK is not on crates.io; only its old `sk-cbor` 0.1.2 is).
+Fallback: fido-authenticator.  Real YubiKeys stay the reference
+(hardware tests).
+
+**Proof of concept (2026-10-16):** ~300 lines of Rust: hand-written
+libfido2 FFI, OpenSK's `TestEnv` answering libfido2's custom I/O
+callbacks, a scriptable touch, and a "power cycle" that rebuilds the
+authenticator on the same storage (`std::mem::take` of the `TestEnv`).
+Built on stable Rust 1.98.1 with libfido2 1.17.0.  Results, compared
+with the hardware results below:
+
+| Check | OpenSK through libfido2 | YubiKey 5.7.1 |
+|---|---|---|
+| makeCredential, `hmac-secret`, non-resident | OK, 1 touch | OK, touch |
+| getAssertion, `up = false`, no extension | OK, no touch, UP clear | same |
+| getAssertion, `up = false`, `hmac-secret` | refused, `UNSUPPORTED_OPTION` | refused, `UP_REQUIRED` |
+| `hmac-secret`, same salt twice | same output, 1 touch each | same |
+| with PIN vs without PIN | different outputs, UV set / clear | same |
+| `credProtect` 3 without PIN | refused, `NO_CREDENTIALS`, **no touch** | refused, `NO_CREDENTIALS`, after a touch |
+| `credProtect` 3 with PIN | OK | OK |
+| two salts | 64 bytes, first half = single-salt output | not tested |
+| touch refused | `OPERATION_DENIED` | not tested |
+| output after a power cycle | unchanged | not tested |
+| ES256 signature over yb's `clientDataHash` | verifies (`fido_assert_verify`) | not tested |
+| PIN attempts | 8; 3rd wrong PIN in a row: `PIN_AUTH_BLOCKED` until power cycle; counter kept (5); correct PIN resets to 8 | 8, replug after 3 (documented) |
+| credential ID size | 241 bytes | to measure (≤ 128 per metadata) |
+
+Differences that matter for yb: none.  yb always asks for a touch
+(`up = true`), so the different refusal codes for `up = false` do not
+arise; yb must not assume a credential ID size (241 bytes here).  (The
+ES256 row is kept for the record: yb no longer uses signatures, D5.)
+
+**State across processes.**  The command-line tests run the `yb` binary
+repeatedly, so the emulator's state must survive between processes, like
+the PIV fixture file.  **Checked** (2026-10-16, `attic/poc-opensk`):
+OpenSK's public `Persist` API (`iter`, `find`, `insert`) saves and
+restores it.  After a PIN, two credentials and some assertions the state is
+3 entries, 149 bytes; a brand-new authenticator restored from them gives
+the same `hmac-secret` output and the PIN attempts counter; a fresh
+authenticator without them does not know the credentials
+(`NO_CREDENTIALS`).  The fixture can store these entries in a file.
 
 ## Finding the FIDO2 side of the selected YubiKey
 
@@ -853,18 +865,6 @@ that yb 0.6 reports "newer version" (it would only buy nicer messages: it
 could still not fetch anything), nor a release that must reach every user
 first.  Older yb does not need to read post-quantum stores, only to leave
 them alone: a new magic (D12) makes it stop before any write.
-
-## Test emulator state across processes
-
-The command-line tests run the `yb` binary repeatedly, so the emulator's
-state must survive between processes, like the PIV fixture file.
-**Checked** (2026-10-16, `attic/poc-opensk`): OpenSK's public `Persist`
-API (`iter`, `find`, `insert`) saves and restores it.  After a PIN, two
-credentials and some assertions the state is 3 entries, 149 bytes; a
-brand-new authenticator restored from them gives the same `hmac-secret`
-output and the PIN attempts counter; a fresh authenticator without them
-does not know the credentials (`NO_CREDENTIALS`).  The fixture can store
-these entries in a file.
 
 ## ANSSI assessment
 
@@ -967,8 +967,9 @@ confidentiality rests only on symmetric cryptography?
    is covered by RecoPQMAC.
 
 **Wording for documentation:** "Post-quantum stores protect blobs with
-symmetric cryptography only (HMAC-SHA256 on the YubiKey, HKDF, AES-256-
-GCM), which ANSSI considers quantum-resistant; no hybrid scheme is needed.
+symmetric cryptography only (HMAC-SHA256 on the YubiKey, HKDF,
+AES-256-GCM), which ANSSI considers quantum-resistant; no hybrid scheme is
+needed.
 One classical element remains: the YubiKey protects the exchange with the
 computer over USB with ECDH P-256 (the FIDO2 PIN protocol), which a
 recording of that USB traffic and a future quantum computer could
@@ -1036,7 +1037,8 @@ refused request still asked for a touch first.
   key handles; FIPS 140-2 policy for firmware 5.4: "Wrapping Key — AES-256
   CCM", "Offline Key — HMAC SHA256 … HMAC-Secret").  No FIDO2 length is
   documented; metadata gives `maxCredentialIdLength` 128.  yb treats the ID
-  as opaque, at most 128 bytes; the actual size is to measure on hardware.
+  as opaque, up to 255 bytes (OpenSK's are 241); the YubiKey's actual size
+  is to measure on hardware.
 - **FIDO2 reset** regenerates the master key: earlier non-resident IDs and
   their `hmac-secret` outputs are gone (Yubico U2F page; FIPS policy
   §2.6.3).  Confirms D4 and "Losing the store".
