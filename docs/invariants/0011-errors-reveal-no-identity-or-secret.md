@@ -25,6 +25,11 @@ Errors are pasted into bug reports and chats.
 
 - The firmware version appears in the report for unexpected errors.
 
+## Post-quantum stores (spec 0028)
+
+Also no FIDO2 PIN, `hmac-secret` output, derived key or credential ID in
+messages; the touch prompt names no serial.
+
 ## Regression tests
 
 - `rust/yb/tests/cli_tests.rs`: `wrong_pin_then_blocked`, `wrong_explicit_management_key`, `storage_full_on_first_write`, `storage_full_midway_notes_partial_update`, `missing_certificate_explained`

@@ -29,6 +29,13 @@ possible.
 
 - No `mlock`, no core-dump suppression (spec 0034 non-goals).
 
+## Post-quantum stores (spec 0028)
+
+Also the FIDO2 PIN (`Context`, and the C string given to libfido2),
+every `hmac-secret` output, every key derived from them, and the
+unwrapped management key are held in zeroizing memory; libfido2 zeroes
+its own copies when an assertion is freed.
+
 ## Regression tests
 
 - `rust/yb/tests/cli_tests.rs`: `management_key_is_held_in_zeroizing_memory`

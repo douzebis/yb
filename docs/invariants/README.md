@@ -27,6 +27,10 @@ test named there exists.
 | [0011](0011-errors-reveal-no-identity-or-secret.md) | Errors Reveal No Identity or Secret |
 | [0012](0012-simulated-yubikey-only-in-test-builds.md) | A Simulated YubiKey Only in Test Builds |
 | [0013](0013-management-key-held-in-zeroizing-memory.md) | The Management Key Is Held in Zeroizing Memory |
+| [0014](0014-older-yb-never-writes-a-post-quantum-store.md) | Older yb Never Writes to a Post-Quantum Store |
+| [0015](0015-management-key-is-checked-before-every-write-and-fetch.md) | The Management Key Is Checked Before Every Write and Fetch |
+| [0016](0016-a-post-quantum-store-exists-once-its-descriptor-is-written.md) | A Post-Quantum Store Exists Only Once Its Descriptor Is Written |
+| [0017](0017-the-fido2-pin-is-not-tried-with-few-attempts-left.md) | The FIDO2 PIN Is Not Tried With Few Attempts Left |
 
 ## Not guaranteed
 
@@ -36,6 +40,14 @@ Stated here so that no document claims them:
   signed state cannot be detected by the YubiKey alone (spec 0033).
 - **Forward secrecy:** blobs stay decryptable by the store's slot key;
   rotating it is spec 0035 (pending).
+- **Post-quantum stores against a recording of the USB traffic:** CTAP
+  protects the FIDO2 PIN and the `hmac-secret` values on the USB link
+  with ECDH P-256, which a future quantum computer could break from a
+  recording (spec 0028, "Threat model").
+- **Rollback in post-quantum stores:** a blob replaced by an older
+  genuine version of itself, or a whole store restored to an older
+  state, is not detected (spec 0028 non-goal); writing either needs the
+  management key, or a PIV reset, which invariant 0015 detects.
 - **Secrets off command lines:** the deprecated `--pin` and `--key`
   options still accept them (spec 0034 non-goal), and `yb self-test`
   passes its own test PIN to its children as `YB_PIN`.

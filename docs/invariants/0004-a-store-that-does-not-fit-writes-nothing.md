@@ -35,7 +35,17 @@ An age that wrapped to 0 would make an object look empty.
   objects share it), so a store can still run out of memory while
   writing; invariant 0001 covers that case (spec 0038).
 
+## Post-quantum stores (spec 0028)
+
+The same check, with their overheads.  Also: a blob is protected (the
+FIDO2 PIN, a touch) before anything is written, so a refused protection
+(wrong PIN, no touch) writes nothing for that blob, not even cleanup;
+legacy stores too, for a refused signature.
+
 ## Regression tests
 
+- `rust/yb-core/tests/protection_tests.rs`: `refused_protection_writes_nothing`
+- `rust/yb-fido2-emulator/tests/post_quantum_protection_tests.rs`: `refusals_write_nothing`
+- `rust/yb-piv-harness/src/bin/yb_cli_tests.rs`: `pq_refused_touch`
 - `rust/yb/tests/cli_tests.rs`: `replace_without_room_for_both_copies_is_refused_cleanly`, `replace_with_room_for_both_copies_succeeds`, `multi_file_store_that_does_not_fit_stores_nothing`, `store_refused_when_ages_run_out`
 - `rust/yb/tests/exit_status_tests.rs`: `store_full_is_status_3_and_other_errors_1`

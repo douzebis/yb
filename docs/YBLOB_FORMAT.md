@@ -28,6 +28,12 @@ The format is self-describing: every chunk encodes the total object count, so
 any single object is sufficient to reconstruct the full store layout.  Each
 object's actual byte length is inferred from the `GET DATA` response.
 
+Two kinds of store exist.  Sections 2–10 describe **legacy stores**
+(magic `0xF2ED5F0B`), protected by the PIV application.  **Post-quantum
+stores** (magic `0xF2EDF0B2`, section 11) reuse the same chunks, with a
+descriptor in object `0x5F_0000` and keys from the YubiKey's FIDO2
+application.  A reader tells them apart by object `0x5F_0000`'s magic.
+
 ---
 
 ## 2. PIV Object Allocation
@@ -366,3 +372,91 @@ yubikey_object_dump.bin: yblob object store image data
      Concatenate; trim to BLOB_SIZE bytes.
      If BLOB_KEY_SLOT != 0: decrypt (section 5).
 ```
+
+---
+
+## 11. Post-Quantum Stores
+
+Spec 0028.  No asymmetric cryptography protects the blobs: every key
+comes from the YubiKey's FIDO2 `hmac-secret` extension, "K2(salt)",
+computed on the card with the FIDO2 PIN and a touch, for a non-resident
+credential (ES256, `credProtect` 3, RP ID `yb`).  `HKDF(K2, label)` is
+HKDF-SHA256 with `ikm = K2`, no salt, `info = label`, 32 bytes.  All
+integers are little-endian.
+
+### 11.1 Objects
+
+| Object | Content |
+|---|---|
+| `0x5F_0000` | store descriptor (11.2) |
+| `0x5F_0001` … `0x5F_0000 + N` | chunks 0 … N−1 (N = 1–32) |
+
+Chunk `i` is object `0x5F_0001 + i`; `NEXT_CHUNK` holds chunk indices.
+Every object starts with the magic `0xF2EDF0B2` ("Fred FOB 2"), so that
+readers of legacy stores refuse them.
+
+### 11.2 Store descriptor
+
+```
+Offset   Size  Field
+───────  ────  ───────────────────────────────────────────────────────
+0x00      4    MAGIC = 0xF2EDF0B2
+0x04      1    OBJECT_COUNT: number of chunks N (1–32)
+0x05      1    TYPE = 0x01 (descriptor)
+0x06      1    VERSION = 0x01
+0x07      1    MGMT_ALGO: PIV algorithm of the management key
+               (0x03 3DES, 0x08 AES-128, 0x0A AES-192, 0x0C AES-256)
+0x08      1    CRED_ID_LEN (1–255)
+0x09      L    CRED_ID: the FIDO2 credential ID (opaque; 64 bytes on a
+               YubiKey 5.7)
+0x09+L   32    MGMT_SALT
+0x29+L   12    MGMT_NONCE
+0x35+L    K    MGMT_WRAPPED: the PIV management key (K = its length)
+0x35+L+K 16    MGMT_TAG
+```
+
+`MGMT_WRAPPED ‖ MGMT_TAG = AES-256-GCM(HKDF(K2(MGMT_SALT), "yb-pq-v1
+management key"), MGMT_NONCE, management key, ad = bytes 0x00 …
+0x29+L−1)`.  The descriptor is written last when a store is formatted.
+
+### 11.3 Chunks
+
+As in section 3, except: `MAGIC` is `0xF2EDF0B2`; byte 0x05 is `0x00`
+(no store key slot); head byte 0x12 is `BLOB_FLAGS`, bit 0 = encrypted.
+
+### 11.4 Blob bytes and trailer
+
+The chain holds `STORED[0 .. BLOB_SIZE]`, then the trailer.
+
+- Unencrypted: `STORED` is the payload (compressed or not, C-bit).
+- Encrypted: `STORED = 0x03 ‖ NONCE (12) ‖ CIPHERTEXT ‖ TAG (16)`.
+
+```
+Offset  Size  Field
+──────  ────  ─────────────────────────────────────────────────────────
+0        1    TRAILER_VERSION = 0x03
+1       32    SALT: this blob's hmac-secret salt (random per write)
+33      32    CHECKSUM
+65      32    SEAL (unencrypted blobs only)
+```
+
+With `META = u8 BLOB_NAME_LEN ‖ BLOB_NAME ‖ u8 BLOB_FLAGS ‖ u8 C-bit ‖
+u32 BLOB_PLAIN_SIZE ‖ u32 BLOB_SIZE ‖ u32 BLOB_MTIME ‖ SALT`:
+
+- `CHECKSUM = SHA-256("yb-pq-v1 checksum\0" ‖ META ‖ STORED)`: detects
+  corruption without the PIN; anyone can compute it.
+- Encrypted: `CIPHERTEXT ‖ TAG = AES-256-GCM(HKDF(K2(SALT), "yb-pq-v1
+  blob encryption"), NONCE, payload, ad = "yb-pq-v1 blob\0" ‖ META)`.
+  The tag is the seal.
+- Unencrypted: `SEAL = HMAC-SHA256(HKDF(K2(SALT), "yb-pq-v1 blob seal"),
+  CHECKSUM)`.
+
+Reading a blob: check the checksum; then, with one assertion carrying
+the salts `SALT ‖ MGMT_SALT`, unwrap the management key and check that
+the card accepts it (a PIV reset is detected there), then check the seal
+or decrypt.
+
+### 11.5 File magic
+
+Not yet in the `file` database (to register, as for section 9).
+

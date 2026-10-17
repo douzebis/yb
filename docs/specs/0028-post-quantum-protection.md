@@ -690,8 +690,8 @@ The ABI is still 0 (spec 0039 G7: changes may break callers before
 
 ### Documentation, format and release tasks
 
-- `docs/YBLOB_FORMAT.md`: a section for post-quantum stores (this
-  specification).
+- `docs/YBLOB_FORMAT.md`: a section for post-quantum stores (done:
+  section 11).
 - **`file` magic database:** register the new magic, as the first one was
   (bug #666 at bugs.astron.com, merged June 2025, rule
   `0 lelong 0xF2ED5F0B yblob object store image data`), e.g.

@@ -29,6 +29,13 @@ yb, and the secrets it stores, to a file.
 - The NixOS VM test also runs the packaged `yb` with `YB_FIXTURE` set to
   a nonexistent file and expects success (`nixpkgs/nixos/tests/yb.nix`).
 
+## Post-quantum stores (spec 0028)
+
+The same for the FIDO2 emulator: only a `test-fixture` build has the
+module that reads `YB_FIDO2_SOCKET` (`yb_core::fido2::socket`), and
+`Device::open_with_io` exists only in test builds; any other build talks
+to real FIDO2 devices.
+
 ## Regression tests
 
 - `rust/yb-core/src/piv/mod.rs`: `fixture_path_follows_the_feature`
