@@ -7,6 +7,10 @@
 //! script passes: the raw line up to the cursor, and readline's current word
 //! (`$2`, which bash ends at `=`, `:` and other `COMP_WORDBREAKS`).
 
+// Bash completion: Unix only (no completion on Windows, spec 0043; and
+// Windows forbids ':' in the file names these tests use).
+#![cfg(unix)]
+
 use clap::CommandFactory;
 use clap_complete_rawline::complete_line;
 use tempfile::TempDir;
