@@ -85,11 +85,12 @@ tests on a desktop (2026-10-17, post-quantum store) showed it:
 
 ### S1. Instrumentation (first)
 
-**The logging category:** `keepassyb.yubikey`, off by default.  Turn it
-on with:
+**The logging category:** `keepassyb.yubikey`, off by default, at info
+level: KeePassXC's release builds leave out debug output
+(`QT_NO_DEBUG_OUTPUT`).  Turn it on with:
 
 ```shell
-QT_LOGGING_RULES="keepassyb.yubikey.debug=true" keepassyb
+QT_LOGGING_RULES="keepassyb.yubikey=true" keepassyb
 ```
 
 **What is logged**, one line each, to standard error with a timestamp:
