@@ -20,10 +20,17 @@ tests on a desktop (2026-10-17, post-quantum store) showed it:
 - **Exit after only opening and closing a vault:** the desktop showed
   "KeePassYB is not responding" (Force Quit / Wait), then KeePassYB
   closed.  Nothing was changed, yet something waited on the YubiKey.
-  The likely cause: KeePassYB counted the vault as modified, and saved it
-  at exit, waiting for a touch nobody was told about.  This is not
-  verified yet: there is no way to see what KeePassYB does with the
-  YubiKey.
+  The log of S1 (2026-10-17, post-quantum store) showed the cause.  It was
+  not a save: the vault was not modified.  It was **repeated YubiKey
+  queries on the GUI thread**:
+  - every libyubiblob call opens a session and reads the whole store,
+    about 1.3 s; asking the store's kind costs as much again;
+  - at opening, before the PIN, KeePassYB made 5 such queries: two
+    header reads without a key (which can only fail on a post-quantum
+    store, 2.6 s each), two listings for `<vault>.passwd`, and one for the
+    vault;
+  - at exit, the locked view reloaded and queried everything again,
+    about 9 to 12 s, which the desktop saw as a hang.
 - **Saving:** KeePassYB saves a few seconds after each change, and at
   lock and exit.  Every save is a YubiKey write: wear, seconds of
   waiting, and on a post-quantum store a touch.
@@ -119,27 +126,46 @@ QT_LOGGING_RULES="keepassyb.yubikey=true" keepassyb
 log, and record the finding here (S2 says what to do about each
 possible cause).
 
-### S2. Nothing written without a change
+### S2. Fewer, faster YubiKey queries (S1's finding)
 
-**Depending on what S1 finds:**
+S1's log found no spurious modification at exit.  The fixes, for the
+queries it did find:
 
-- **A non-data change** (e.g. a group expanded, the last selected entry):
-  these never cause a YubiKey write.  This is already the rule for
-  automatic saves (spec 0046), and it now also applies at lock and exit.
-- **A change made by KeePassXC while opening** (e.g. a format or
-  metadata upgrade): it is not counted as a user change.  The vault is
-  saved only if the user also changed something, or on an explicit Save.
-- **Anything else:** described here once found, with its fix.
+1. **One YubiKey query per user action.**  `DeviceStorage` keeps each
+   YubiKey's listing (its blobs, with their generation, size and
+   encryption) and its store kind:
+   - every question asked during one action uses it: is the vault
+     there, has it changed, is a `.passwd` there and usable;
+   - it is dropped after KeePassYB's own writes and removals on that
+     YubiKey;
+   - it expires after 3 seconds, so a change made elsewhere (another
+     computer) is seen at the next action.
+2. **One status question for the unlock dialog:** `passwordStatus()`
+   answers, from that one listing, whether a master password is stored,
+   whether it is used, why not, and whether one can be remembered.
+3. **Nothing at quit.**  Once KeePassYB is quitting, reads and status
+   questions do not reach the YubiKey; they answer at once ("KeePassYB is
+   quitting").  Writes still do, for a save asked at exit.
+4. **No header read that can only fail.**  Reading only a vault's
+   headers (no key, e.g. the locked view) answers from the listing alone
+   when the read would need the PIN.  It costs no store-kind query and no
+   session of its own.
+5. **Off the GUI thread.**  Every `DeviceStorage` operation called from
+   the GUI thread runs on a worker thread, while the GUI thread keeps
+   processing events.  The window never freezes, even for one slow query.
+   Operations are serialized (one at a time).
 
-**The unchanged-content check, whatever the cause:** a second chance not
-to write, kept permanently (decided 2026-10-17).
-
+**The unchanged-content check** (a second chance not to write, kept
+permanently, decided 2026-10-17):
 - At lock or exit, when the vault is marked modified, KeePassYB first
   serializes it and compares it with what it last read or saved.
 - It compares the decrypted XML content, leaving out the random padding
   KeePassXC adds on each save (`CustomData::RandomSlug`).
 - Identical content: no question, no write, and the log says so, so a
   wrong "modified" mark still shows up as a bug to fix.
+
+It is implemented with S3 (explicit saves), where the question at lock
+and exit is asked.
 
 ### S2b. Expected YubiKey interactions
 
@@ -254,10 +280,10 @@ keep their own handling: AppImage rewrites `Exec`, Flatpak exports it.
 ### Order of work
 
 1. **S1:** instrumentation; reproduce open and close on the
-   post-quantum store; record the cause in S2.
-2. **S2:** the fix for that cause, and the comparison guard.
-3. **S3 and S4:** explicit saves, the progress dialog, reads without
-   PIN for KDBX 4.
+   post-quantum store; record the cause in S2.  Done: repeated queries.
+2. **S2:** the five fixes; re-test with the log.
+3. **S3 and S4:** explicit saves with the unchanged-content check, the
+   progress dialog, reads without PIN for KDBX 4.
 4. **S5 and S6.**
 
 ## Tests
@@ -265,6 +291,13 @@ keep their own handling: AppImage rewrites `Exec`, Flatpak exports it.
 In `tests/TestDeviceStorage.cpp` (fake backend) and the GUI tests where
 they run:
 
+- `testOneListingPerAction`: the unlock dialog's questions and a header
+  read cost one listing and one store-kind query.
+- `testListingIsDroppedAfterAWrite`, `testListingExpires`.
+- `testNothingReachesTheYubiKeyWhenQuitting`: reads and status questions
+  answer at once; a write still works.
+- `testOperationsRunOffTheGuiThread`: the backend is called from a
+  worker thread.
 - `testNoWriteWhenUnchanged`: open, lock and close a vault; no write,
   no PIN prompt.
 - `testNonDataChangesAreNotSaved`: expand a group, then lock; no write.
