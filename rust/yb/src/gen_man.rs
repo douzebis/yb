@@ -501,22 +501,33 @@ Default output (no flags):
 .RS
 .nf
 YubiKey <serial> \(em firmware <version>
+
+PIV application \(em protects this store
   PIN              ok (3/3 tries left)
   PUK              ok (3/3 tries left)
-  Management key   3DES, kept on the YubiKey, unlocked by the PIN
-  Slot 0x82        EC P-256, generated on card, certificate CN=YBLOB ECCP256
+  Management key   3DES, kept on the YubiKey (PRINTED), unlocked by the PIV PIN
+  Store key        slot 0x82: EC P-256, generated on card, certificate CN=YBLOB ECCP256
   Key/certificate  not checked (use \-\-check\-key)
 
-Store: <n> objects, slot 0x<xx>, age <n>
-Blobs: <n> stored, <n> objects free (~<n> bytes used by store)
+FIDO2 application \(em not used by this store
+
+Store: legacy, <n> objects, age <n>
+  Blobs            <n> stored, <n> objects free (~<n> bytes used by the store)
 
   blob-name-1          VERIFIED
   blob-name-2          UNSIGNED
   old-blob             CORRUPTED
 
-Integrity: <n> verified, <n> unsigned, <n> corrupted
+Integrity: <n> verified, <n> unsigned, <n> corrupted (signatures need no PIN)
 .fi
 .RE
+.PP
+A post\-quantum store shows the PIV application as holding the store's
+objects, and the FIDO2 application as protecting it, with the FIDO2
+PIN's attempts left (read without using one).  Without \fB\-\-seals\fR,
+fsck asks for no PIN and no touch; \fB\-\-seals\fR checks, with the
+FIDO2 PIN, the store's credential, the management key and every blob's
+seal, under "Checked with the FIDO2 PIN".
 .PP
 Possible per-blob verdicts:
 .TP

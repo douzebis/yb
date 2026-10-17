@@ -146,6 +146,27 @@ pub fn open_yubikey(
     }
 }
 
+/// Open the FIDO2 device of the YubiKey with `serial` when the rules above
+/// identify it without a touch (by serial, or the only YubiKey on each
+/// side); `None` when a touch would be needed to choose.  For reports that
+/// must not ask anything (`yb fsck`, spec 0045).
+pub fn open_without_touch(serial: u32, piv_yubikeys: usize) -> Result<Option<Device>> {
+    #[cfg(all(unix, feature = "test-fixture"))]
+    if let Some(path) = super::socket::socket_path() {
+        return open_emulator(serial, &path).map(Some);
+    }
+    let candidates = yubikeys()?;
+    if candidates.is_empty() {
+        return Err(super::Fido2Error::NoDevice.into());
+    }
+    let probes: Vec<SerialProbe> = candidates.iter().map(probe_serial).collect();
+    match decide(serial, &probes, piv_yubikeys) {
+        Pairing::Device(i) => Device::open(&candidates[i].path).map(Some),
+        Pairing::NotFound => Err(super::Fido2Error::NoDevice.into()),
+        Pairing::Touch(_) => Ok(None),
+    }
+}
+
 /// The emulator of the command-line tests, checked by serial as a
 /// YubiKey is.
 #[cfg(all(unix, feature = "test-fixture"))]

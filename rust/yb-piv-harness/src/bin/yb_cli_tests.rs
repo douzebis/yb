@@ -820,17 +820,75 @@ fn pq_remove() {
     assert_eq!(out, "");
 }
 
+/// Spec 0045: fsck reports by application; by default it asks for no PIN
+/// and no touch (a wrong YB_PIN is never tried); `--seals` checks the
+/// credential, the management key and the seals.
 fn pq_fsck() {
     let f = PqFixture::new();
     let path = f.file("doc.txt", b"document");
     f.expect(0, &[], &["store", &path]);
-    let (out, _) = f.expect(0, &[], &["fsck"]);
-    assert!(out.contains("Store: post-quantum, 16 objects"), "{out}");
-    assert!(out.contains("CHECKSUM OK"), "{out}");
-    assert!(out.contains("the store's credential answers"), "{out}");
-    assert!(!out.contains("Slot 0x"), "{out}");
+    let touches = f.server.touches();
+    let (out, _) = f.expect(0, &[("YB_PIN", "000000")], &["fsck"]);
+    assert_eq!(f.server.touches(), touches, "fsck touched the YubiKey");
+    for line in [
+        "\nPIV application — holds the store's objects\n",
+        "— not used by this store",
+        "\nFIDO2 application — protects this store\n",
+        "  PIN              set, 8 tries left\n",
+        "-byte ID, not checked (needs the FIDO2 PIN)\n",
+        "Store: post-quantum, 16 objects",
+        "  Management key   a copy, wrapped by FIDO2 (3DES); not checked against the card\n",
+        "CHECKSUM OK",
+        "Not checked: the credential, the management key, the seals",
+    ] {
+        assert!(out.contains(line), "missing {line:?} in:\n{out}");
+    }
+    assert!(!out.contains("Store key"), "{out}");
+    assert!(!out.contains("Checked with the FIDO2 PIN"), "{out}");
+
     let (out, _) = f.expect(0, &[], &["fsck", "--seals"]);
-    assert!(out.contains("seal OK"), "{out}");
+    for line in [
+        "-byte ID, checked below",
+        "Checked with the FIDO2 PIN:\n",
+        "  Credential       answers\n",
+        "  Management key   matches the card\n",
+        "seal OK",
+    ] {
+        assert!(out.contains(line), "missing {line:?} in:\n{out}");
+    }
+    assert!(!out.contains("Not checked:"), "{out}");
+}
+
+/// Spec 0045: the FIDO2 PIN's state, read without using an attempt; with 3
+/// or fewer left it is a warning, and `--no-check` is suggested once it is
+/// blocked or the FIDO2 application reset.
+fn pq_fsck_fido2_pin_state() {
+    let f = PqFixture::new();
+    let path = f.file("doc.txt", b"document");
+    f.expect(0, &[], &["store", "-u", &path]);
+    for _ in 0..5 {
+        f.server.replug();
+        f.expect(1, &[("YB_PIN", "000000")], &["fetch", "-p", "doc.txt"]);
+    }
+    f.server.replug();
+    let (out, _) = f.expect(0, &[], &["fsck"]);
+    assert!(out.contains("warning: set, 3 tries left"), "{out}");
+    let (out, _) = f.expect(0, &[], &["fsck"]);
+    assert!(
+        out.contains("warning: set, 3 tries left"),
+        "an attempt was used:\n{out}"
+    );
+
+    // A FIDO2 reset: no PIN; the unencrypted blob stays readable.
+    let reset = yb_fido2_emulator::server::Server::start(
+        &f.fx.dir.path().join("reset.sock"),
+        Some(PQ_SERIAL),
+    )
+    .unwrap();
+    let socket = reset.path.to_str().unwrap().to_owned();
+    let (out, _) = f.expect(1, &[("YB_FIDO2_SOCKET", socket.as_str())], &["fsck"]);
+    assert!(out.contains("ERROR: not set (FIDO2 reset?)"), "{out}");
+    assert!(out.contains("yb fetch --no-check"), "{out}");
 }
 
 /// A corrupted blob: `ls` and `fetch` exit 4, before any touch.
@@ -1161,6 +1219,7 @@ fn main() {
         test!(pq_store_fetch_one_touch_per_blob),
         test!(pq_remove),
         test!(pq_fsck),
+        test!(pq_fsck_fido2_pin_state),
         test!(pq_corruption_exits_4),
         test!(pq_piv_reset_exits_4),
         test!(pq_refused_touch),

@@ -11,7 +11,7 @@ SPDX-License-Identifier: MIT
 ## Invariant
 
 Every `yb store`, `yb fetch` and `yb rm` of a post-quantum store, and
-`yb fsck`, unwraps the store's copy of the management key with the
+`yb fsck --seals`, unwraps the store's copy of the management key with the
 FIDO2 key (in the same touch as the blob's key) and authenticates to
 the card with it before anything else.  If the card rejects it, the
 command stops with exit status 4, returns nothing and writes nothing.

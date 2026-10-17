@@ -590,6 +590,36 @@ mod fsck_tests {
         fsck_run(&ctx, &args).unwrap();
     }
 
+    /// Spec 0045 S1: a legacy store's report, by application.
+    #[test]
+    fn fsck_legacy_report_by_application() {
+        use yb::cli::fsck::check as fsck_check;
+        let piv = with_key_piv();
+        let ctx = make_ctx(piv);
+        format_store(&ctx);
+        store_plain(&ctx, "a", b"data");
+        let args = FsckArgs {
+            verbose: false,
+            nvm: false,
+            seals: false,
+            check_key: false,
+        };
+        let mut out = Vec::new();
+        assert!(fsck_check(&ctx, &args, &mut out).unwrap());
+        let out = String::from_utf8(out).unwrap();
+        for line in [
+            "\n\nPIV application — protects this store\n",
+            "  Store key        slot 0x82: ",
+            "\nFIDO2 application — not used by this store\n",
+            "\nStore: legacy, 8 objects, age ",
+            "  Blobs            1 stored, 7 objects free (~",
+            "(signatures need no PIN)",
+        ] {
+            assert!(out.contains(line), "missing {line:?} in:\n{out}");
+        }
+        assert!(!out.contains("not used by this store\n  PIN"), "{out}");
+    }
+
     /// T9a: fsck verbose — run returns Ok on a store that has objects.
     #[test]
     fn fsck_verbose() {
@@ -2790,7 +2820,7 @@ mod guided_tests {
         assert!(text.contains("Store: unreadable ("), "{text}");
     }
 
-    /// The store part is what `yb fsck` printed before spec 0023.
+    /// The store part, as spec 0045 lays it out (before: spec 0023's).
     #[test]
     fn fsck_store_output_is_unchanged() {
         let (piv, setup) = formatted_card_with_piv();
@@ -2805,12 +2835,12 @@ mod guided_tests {
         assert_eq!(
             store_part,
             format!(
-                "Store: 8 objects, slot 0x82, age 1\n\
-                 Blobs: 1 stored, 7 objects free (~{size} bytes used by store)\n\
+                "Store: legacy, 8 objects, age 1\n\
+                 \x20 Blobs            1 stored, 7 objects free (~{size} bytes used by the store)\n\
                  \n\
                  \x20 blob                           VERIFIED\n\
                  \n\
-                 Integrity: 1 verified, 0 unsigned, 0 corrupted\n"
+                 Integrity: 1 verified, 0 unsigned, 0 corrupted (signatures need no PIN)\n"
             )
         );
     }
@@ -3086,7 +3116,11 @@ mod rotation_tests {
             ),
             "{text}"
         );
-        assert!(!text.contains("protect"), "no jargon: {text}");
+        // No jargon ("protected management key") about the key; the
+        // heading "PIV application — protects this store" is not about it.
+        let key_lines =
+            &text[text.find("  Management key").unwrap()..text.find("  Store key").unwrap()];
+        assert!(!key_lines.contains("protect"), "no jargon: {key_lines}");
     }
 }
 

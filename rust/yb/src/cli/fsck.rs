@@ -10,7 +10,7 @@ use yb_core::{
     errors::YbError,
     orchestrator::uses_legacy_encryption,
     parse_ec_public_key_from_cert_der,
-    report::{CardReport, Severity, StorePresence},
+    report::{CardReport, Fido2Report, ReportStore, Severity, StorePresence},
     scan_nvm,
     store::{
         constants::{DEFAULT_KEY_SLOT, OBJECT_ID_ZERO},
@@ -37,8 +37,9 @@ pub struct FsckArgs {
     #[arg(long = "check-key")]
     pub check_key: bool,
 
-    /// Post-quantum stores: also check every blob's seal (the FIDO2 PIN,
-    /// one touch per blob).
+    /// Post-quantum stores: also check, with the FIDO2 PIN, the store's
+    /// credential and the management key (one touch), then every blob's
+    /// seal (one touch per blob).  Without it, fsck asks for nothing.
     #[arg(long = "seals")]
     pub seals: bool,
 }
@@ -68,8 +69,26 @@ pub fn check(ctx: &Context, args: &FsckArgs, out: &mut dyn Write) -> Result<bool
         matches!(&presence, StorePresence::Present(store) if store.kind.is_post_quantum());
 
     let mut report = CardReport::build(ctx, slot);
-    // A post-quantum store has no store slot (spec 0028).
-    report.post_quantum = post_quantum;
+    // Each application's role (spec 0045); a post-quantum store has no
+    // store slot (spec 0028).
+    report.store = match &presence {
+        StorePresence::Present(_) if post_quantum => ReportStore::PostQuantum,
+        StorePresence::Present(_) => ReportStore::Legacy,
+        _ => ReportStore::None,
+    };
+    if let StorePresence::Present(store) = &presence {
+        if let Some(descriptor) = store.descriptor() {
+            report.fido2 = Some(Fido2Report {
+                state: yb_core::report::fido2_state(ctx),
+                credential_id_len: descriptor.credential_id.len(),
+                checked_below: args.seals,
+                unencrypted_blobs: store
+                    .objects
+                    .iter()
+                    .any(|o| o.is_head() && !o.is_encrypted()),
+            });
+        }
+    }
     // A certificate without a P-256 key is already reported as an error.
     if args.check_key && !post_quantum && !report.slot.certificate_unusable() {
         if ctx.require_pin()?.is_none() {
@@ -161,13 +180,13 @@ fn check_store(ctx: &Context, args: &FsckArgs, store: &Store, out: &mut dyn Writ
 
     writeln!(
         out,
-        "Store: {} objects, slot 0x{:02x}, age {}",
-        store.object_count, store.store_key_slot, store.store_age
+        "Store: legacy, {} objects, age {}",
+        store.object_count, store.store_age
     )?;
     writeln!(
         out,
-        "Blobs: {} stored, {} objects free (~{} bytes used by store)",
-        stored, free_count, store_bytes_used
+        "  {:<16} {} stored, {} objects free (~{} bytes used by the store)",
+        "Blobs", stored, free_count, store_bytes_used
     )?;
 
     // Ages are 24-bit; a store must be reformatted before they run out
@@ -229,7 +248,7 @@ fn check_store(ctx: &Context, args: &FsckArgs, store: &Store, out: &mut dyn Writ
         writeln!(out)?;
         writeln!(
             out,
-            "Integrity: {} verified, {} unsigned, {} corrupted",
+            "Integrity: {} verified, {} unsigned, {} corrupted (signatures need no PIN)",
             sig_verified, sig_unsigned, sig_corrupted
         )?;
         if sig_unverifiable > 0 {
@@ -314,7 +333,6 @@ fn check_post_quantum_store(
     store: &Store,
     out: &mut dyn Write,
 ) -> Result<bool> {
-    use yb_core::orchestrator::fetch_blob_with;
     use yb_core::orchestrator::post_quantum::quick_check;
     use yb_core::orchestrator::SigVerdict;
 
@@ -334,15 +352,21 @@ fn check_post_quantum_store(
         "Store: post-quantum, {} objects, age {}",
         store.object_count, store.store_age
     )?;
+    let not_checked = if args.seals {
+        ""
+    } else {
+        "; not checked against the card"
+    };
     writeln!(
         out,
-        "Credential: {}-byte ID; management key: {}",
-        descriptor.credential_id.len(),
+        "  {:<16} a copy, wrapped by FIDO2 ({}){not_checked}",
+        "Management key",
         descriptor.mgmt_algo.name()
     )?;
     writeln!(
         out,
-        "Blobs: {} stored, {} objects free",
+        "  {:<16} {} stored, {} objects free",
+        "Blobs",
         heads.len(),
         free_count
     )?;
@@ -369,43 +393,26 @@ fn check_post_quantum_store(
         writeln!(out)?;
         writeln!(
             out,
-            "Integrity: {} checksum OK, {corrupted} corrupted (checksums need no PIN; \
-             seals are checked by fetch, and by --seals)",
+            "Integrity: {} checksum OK, {corrupted} corrupted (checksums need no PIN)",
             heads.len() - corrupted
         )?;
         healthy &= corrupted == 0;
     }
 
-    // The credential and the management key (D11), then the seals.
-    match ctx.post_quantum_session() {
-        Err(e) => {
-            writeln!(out, "ERROR: FIDO2: {e:#}")?;
-            healthy = false;
-        }
-        Ok(session) => {
-            let protection = session.protection(ctx, descriptor);
-            match protection.management_key() {
-                Ok(_) => writeln!(
-                    out,
-                    "FIDO2: the store's credential answers; the management key matches"
-                )?,
-                Err(e) => {
-                    writeln!(out, "ERROR: {e:#}")?;
-                    healthy = false;
-                }
-            }
-            if args.seals && healthy {
-                for head in &heads {
-                    let name = quote_name(&head.blob_name);
-                    match fetch_blob_with(store, &protection, &head.blob_name) {
-                        Ok(_) => writeln!(out, "  {name:<30} seal OK")?,
-                        Err(e) => {
-                            writeln!(out, "  {name:<30} ERROR: {e:#}")?;
-                            healthy = false;
-                        }
-                    }
-                }
-            }
+    if !args.seals {
+        writeln!(
+            out,
+            "Not checked: the credential, the management key, the seals —\n  `yb fsck \
+             --seals` checks them (FIDO2 PIN, one touch, then one per blob)"
+        )?;
+    } else {
+        // Prompts go to standard error while the checks run; the section
+        // is printed whole once they are done (spec 0045 S3).
+        let mut lines = Vec::new();
+        healthy &= check_with_fido2(ctx, store, descriptor, &heads, &mut lines);
+        writeln!(out, "Checked with the FIDO2 PIN:")?;
+        for (label, text) in lines {
+            writeln!(out, "  {label:<16} {text}")?;
         }
     }
 
@@ -415,6 +422,67 @@ fn check_post_quantum_store(
         write_nvm(ctx, &store_ids, out)?;
     }
     Ok(healthy)
+}
+
+/// The checks that need the FIDO2 PIN (`fsck --seals`, spec 0045 S3): the
+/// credential and the management key (one touch), then each blob's seal
+/// (one touch each).  Fills `lines` with (label, result); returns whether
+/// all passed.
+#[cfg(not(windows))]
+fn check_with_fido2(
+    ctx: &Context,
+    store: &Store,
+    descriptor: &yb_core::store::Descriptor,
+    heads: &[&Object],
+    lines: &mut Vec<(String, String)>,
+) -> bool {
+    use yb_core::fido2::Fido2Error;
+    use yb_core::orchestrator::fetch_blob_with;
+    use yb_core::orchestrator::post_quantum::IntegrityError;
+    let error = |e: &anyhow::Error| format!("ERROR: {e:#}");
+    let session = match ctx.post_quantum_session() {
+        Ok(session) => session,
+        Err(e) => {
+            lines.push(("FIDO2".to_owned(), error(&e)));
+            return false;
+        }
+    };
+    let protection = session.protection(ctx, descriptor);
+    match protection.management_key() {
+        Ok(_) => {
+            lines.push(("Credential".to_owned(), "answers".to_owned()));
+            lines.push(("Management key".to_owned(), "matches the card".to_owned()));
+        }
+        Err(e) => {
+            let mismatch = e
+                .downcast_ref::<IntegrityError>()
+                .is_some_and(|i| *i == IntegrityError::ManagementKeyMismatch);
+            let no_credential = e
+                .downcast_ref::<Fido2Error>()
+                .is_some_and(|f| *f == Fido2Error::NoCredential);
+            if mismatch {
+                lines.push(("Credential".to_owned(), "answers".to_owned()));
+                lines.push(("Management key".to_owned(), error(&e)));
+            } else if no_credential {
+                lines.push(("Credential".to_owned(), error(&e)));
+            } else {
+                lines.push(("FIDO2".to_owned(), error(&e)));
+            }
+            return false;
+        }
+    }
+    let mut healthy = true;
+    for head in heads {
+        let name = quote_name(&head.blob_name);
+        match fetch_blob_with(store, &protection, &head.blob_name) {
+            Ok(_) => lines.push((name, "seal OK".to_owned())),
+            Err(e) => {
+                lines.push((name, error(&e)));
+                healthy = false;
+            }
+        }
+    }
+    healthy
 }
 
 #[cfg(windows)]

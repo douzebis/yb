@@ -6,9 +6,9 @@ SPDX-License-Identifier: MIT
 
 # 0045 — The YubiKey Report, by Application
 
-**Status:** draft
+**Status:** implemented
 **App:** yb, yb-core (`report.rs`, `fsck`)
-**Implemented in:** <!-- YYYY-MM-DD, fill after implementation -->
+**Implemented in:** 2026-10-17
 
 ## Problem
 
@@ -168,13 +168,23 @@ Checked with the FIDO2 PIN:
 
 ### S4. Other commands
 
-- `yb ls -l` and the other short summaries name the application in the
-  same words: "PIV PIN", "FIDO2 PIN", "management key (PIV)".
-- `CardReport` gains a FIDO2 section (`Fido2Report { pin:
-  Option<FidoPinState>, reachable: Result<(), String> }`) filled without
-  a PIN.
-- The renderer takes the store kind, so it can tell each application's
-  role.
+- **Prompts and summaries:** the prompts already say "PIV PIN" and
+  "FIDO2 PIN".  `yb ls -l` prints only "post-quantum store", so nothing
+  more to rename.
+- **`CardReport`:**
+  - `store: ReportStore` (None, Legacy, PostQuantum) replaces the
+    `post_quantum` flag; the renderer derives each application's role
+    from it;
+  - `fido2: Option<Fido2Report>` (state, credential ID length,
+    `checked_below`, `unencrypted_blobs`) is filled by `fsck` for a
+    post-quantum store.
+- **The FIDO2 state:** `report::fido2_state(ctx)` reads it without a PIN,
+  a touch, or an attempt used, through
+  `fido2::pairing::open_without_touch`.  That opens the device only when
+  it is identified without a touch; with several candidates it says so
+  instead of waiting for one.
+- **The legacy store slot** is shown as "Store key  slot 0x82: …" under
+  the PIV application.
 
 ## Invariants
 
@@ -184,10 +194,15 @@ with few attempts left) hold: the default `fsck` now uses no PIN at all.
 **Regression tests:**
 
 - the existing `fsck` CLI tests, updated;
-- `fsck_post_quantum_asks_nothing_by_default`: the scripted prompter
-  gets no question, and the emulator counts no touch;
-- `fsck_shows_fido2_pin_state`: normal, few, blocked;
-- `fsck_seals_checks_credential_and_key`.
+- `pq_fsck`: by default no touch, and a wrong `YB_PIN` is never tried;
+  both sections and the "Not checked" line are shown; with `--seals`, the
+  credential, the management key and the seals;
+- `pq_fsck_fido2_pin_state`:
+  - 3 attempts left, read twice with no attempt used;
+  - after a FIDO2 reset, "not set" with the `--no-check` hint;
+- `fsck_legacy_report_by_application` (legacy layout);
+- `report::tests::post_quantum_roles_and_fido2_pin` (roles, PIN states,
+  severity).
 
 ## Open questions
 

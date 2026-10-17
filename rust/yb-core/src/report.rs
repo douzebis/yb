@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: MIT
 
 //! Read-only report on the state of a YubiKey (spec 0023 §1), shared by
-//! `yb fsck` and the guided `yb format`.
+//! `yb fsck` and the guided `yb format`, by application: PIV, then FIDO2,
+//! each with its role for the store (spec 0045).
 //!
 //! Building a report sends read-only APDUs only and needs no PIN.  The
 //! key/certificate match check, which needs the PIN, is added by the
@@ -88,6 +89,68 @@ impl StorePresence {
     }
 }
 
+/// The store the report is about, which sets each application's role
+/// (spec 0045).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReportStore {
+    /// No store (yet): the guided format, or `fsck` on a bare YubiKey.
+    None,
+    /// A legacy store: the PIV application protects it.
+    Legacy,
+    /// A post-quantum store: the PIV application holds its objects, the
+    /// FIDO2 application protects it.
+    PostQuantum,
+}
+
+/// The FIDO2 PIN, as read without using an attempt (spec 0045).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Fido2State {
+    /// A PIN is set, with this many attempts left.
+    Pin { retries: u32 },
+    /// No PIN: the FIDO2 application was reset, or never set up.
+    PinNotSet,
+    /// The FIDO2 side could not be read: why.
+    Unreachable(String),
+}
+
+/// The FIDO2 application, for a post-quantum store (spec 0045).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Fido2Report {
+    pub state: Fido2State,
+    /// The length of the store's credential ID.
+    pub credential_id_len: usize,
+    /// The credential is checked further on (`fsck --seals`).
+    pub checked_below: bool,
+    /// The store has unencrypted blobs, readable with `--no-check` (spec
+    /// 0044) whatever the FIDO2 PIN's state.
+    pub unencrypted_blobs: bool,
+}
+
+/// The FIDO2 state of the YubiKey of `ctx`, without a PIN, a touch, or an
+/// attempt used: the device is used only when it is identified without a
+/// touch (spec 0045).
+#[cfg(not(windows))]
+pub fn fido2_state(ctx: &Context) -> Fido2State {
+    let piv_yubikeys = ctx.piv.list_devices().map(|d| d.len()).unwrap_or(1);
+    match crate::fido2::pairing::open_without_touch(ctx.serial, piv_yubikeys) {
+        Ok(Some(dev)) if !dev.has_pin() => Fido2State::PinNotSet,
+        Ok(Some(dev)) => match dev.pin_retries() {
+            Ok(retries) => Fido2State::Pin { retries },
+            Err(e) => Fido2State::Unreachable(format!("{e:#}")),
+        },
+        Ok(None) => Fido2State::Unreachable(
+            "several FIDO2 security keys are connected; yb tells them apart only with a touch"
+                .to_owned(),
+        ),
+        Err(e) => Fido2State::Unreachable(format!("{e:#}")),
+    }
+}
+
+#[cfg(windows)]
+pub fn fido2_state(_: &Context) -> Fido2State {
+    Fido2State::Unreachable("post-quantum stores are not supported on Windows".to_owned())
+}
+
 /// One line of the YubiKey section.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Item {
@@ -111,9 +174,13 @@ pub struct CardReport {
     pub slot: SlotReport,
     /// The key/certificate match check, when the caller ran it.
     pub key_check: Option<SlotKeyCheck>,
-    /// A post-quantum store (spec 0028): no store slot, so no slot and
-    /// key/certificate lines.
-    pub post_quantum: bool,
+    /// The store, which sets each application's role.  A post-quantum
+    /// store (spec 0028) has no store slot, so no slot and key/certificate
+    /// lines.
+    pub store: ReportStore,
+    /// The FIDO2 application, filled by the caller for a post-quantum
+    /// store.
+    pub fido2: Option<Fido2Report>,
 }
 
 impl CardReport {
@@ -135,7 +202,8 @@ impl CardReport {
                 certificate: read_slot_certificate(reader, piv, slot),
             },
             key_check: None,
-            post_quantum: false,
+            store: ReportStore::None,
+            fido2: None,
         }
     }
 
@@ -152,16 +220,20 @@ impl CardReport {
         self.puk.is_some_and(|m| m.retries_left == 0)
     }
 
-    /// The report lines, in display order.  `key_check_hint` is shown on
-    /// the Key/certificate line when the check did not run; `None` omits
-    /// the line.
+    /// The PIV application's lines, in display order.  `key_check_hint`
+    /// is shown on the Key/certificate line when the check did not run;
+    /// `None` omits the line.
     pub fn items(&self, key_check_hint: Option<&str>) -> Vec<Item> {
+        let mut pin = credential_item("PIN", self.pin);
+        if self.store == ReportStore::PostQuantum {
+            pin.text.push_str(" — not used by this store");
+        }
         let mut items = vec![
-            credential_item("PIN", self.pin),
+            pin,
             credential_item("PUK", self.puk),
             self.management_key_item(),
         ];
-        if self.post_quantum {
+        if self.store == ReportStore::PostQuantum {
             return items;
         }
         items.push(self.slot_item());
@@ -180,31 +252,106 @@ impl CardReport {
         items
     }
 
-    /// The most serious severity among the items.
+    /// The FIDO2 application's lines (post-quantum stores).
+    pub fn fido2_items(&self) -> Vec<Item> {
+        let Some(f) = &self.fido2 else {
+            return Vec::new();
+        };
+        let no_check = || {
+            vec![
+                "Its unencrypted blobs stay readable without the FIDO2 PIN:".to_owned(),
+                "yb fetch --no-check NAME (checksum only, spec 0044)".to_owned(),
+            ]
+        };
+        let mut pin = match &f.state {
+            Fido2State::Pin { retries: 0 } => {
+                let mut i = item(
+                    "PIN",
+                    "blocked (a FIDO2 reset clears it, and destroys this store's encrypted \
+                     blobs)"
+                        .to_owned(),
+                    Severity::Error,
+                );
+                if f.unencrypted_blobs {
+                    i.hint = no_check();
+                }
+                i
+            }
+            Fido2State::Pin { retries } if *retries <= 3 => {
+                let mut i = item(
+                    "PIN",
+                    format!("set, {retries} tries left"),
+                    Severity::Warning,
+                );
+                i.hint = vec![
+                    "yb does not try it with so few left: a FIDO2 PIN with no attempt".to_owned(),
+                    "left is blocked for good (--allow-low-pin-attempts overrides).".to_owned(),
+                ];
+                i
+            }
+            Fido2State::Pin { retries } => {
+                item("PIN", format!("set, {retries} tries left"), Severity::Ok)
+            }
+            Fido2State::PinNotSet => {
+                let mut i = item("PIN", "not set (FIDO2 reset?)".to_owned(), Severity::Error);
+                if f.unencrypted_blobs {
+                    i.hint = no_check();
+                }
+                i
+            }
+            Fido2State::Unreachable(why) => {
+                let mut i = item("PIN", format!("not reachable ({why})"), Severity::Error);
+                if f.unencrypted_blobs {
+                    i.hint = no_check();
+                }
+                i
+            }
+        };
+        if !pin.hint.is_empty() && pin.severity == Severity::Ok {
+            pin.hint.clear();
+        }
+        let checked = if f.checked_below {
+            "checked below"
+        } else {
+            "not checked (needs the FIDO2 PIN)"
+        };
+        vec![
+            pin,
+            item(
+                "Credential",
+                format!("the store's: {}-byte ID, {checked}", f.credential_id_len),
+                Severity::Ok,
+            ),
+        ]
+    }
+
+    /// The most serious severity among the items of both applications.
     pub fn severity(&self) -> Severity {
         self.items(None)
             .iter()
+            .chain(self.fido2_items().iter())
             .map(|i| i.severity)
             .max()
             .unwrap_or(Severity::Ok)
     }
 
-    /// The YubiKey section (spec 0023 §2), one line per item, followed by
-    /// the item's hint lines when `hints` is set.
+    /// The YubiKey section (spec 0023 §2), by application (spec 0045): one
+    /// line per item, followed by the item's hint lines when `hints` is set.
     pub fn render(&self, key_check_hint: Option<&str>, hints: bool) -> String {
         let mut out = format!("YubiKey {} — firmware {}\n", self.serial, self.firmware);
-        for i in self.items(key_check_hint) {
-            let text = match i.severity {
-                Severity::Ok => i.text,
-                Severity::Warning => format!("warning: {}", i.text),
-                Severity::Error => format!("ERROR: {}", i.text),
-            };
-            out.push_str(&format!("  {:<16} {text}\n", i.label));
-            if hints {
-                for line in &i.hint {
-                    out.push_str(&format!("  {:<16} {line}\n", ""));
-                }
-            }
+        let (piv_role, fido2_role) = match self.store {
+            ReportStore::None => ("", None),
+            ReportStore::Legacy => (" — protects this store", Some(" — not used by this store")),
+            ReportStore::PostQuantum => (
+                " — holds the store's objects",
+                Some(" — protects this store"),
+            ),
+        };
+        out.push_str(&format!("\nPIV application{piv_role}\n"));
+        render_items(&mut out, &self.items(key_check_hint), hints);
+        if let Some(role) = fido2_role {
+            out.push_str(&format!("\nFIDO2 application{role}\n"));
+            render_items(&mut out, &self.fido2_items(), hints);
         }
         out
     }
@@ -216,7 +363,10 @@ impl CardReport {
             None => "unknown algorithm (firmware < 5.3)".to_owned(),
         };
         let (protection, mut severity) = match self.protection {
-            ProtectionMode::Standard => ("kept on the YubiKey, unlocked by the PIN", Severity::Ok),
+            ProtectionMode::Standard => (
+                "kept on the YubiKey (PRINTED), unlocked by the PIV PIN",
+                Severity::Ok,
+            ),
             ProtectionMode::LegacyOrPukBlocked => (
                 "ADMIN DATA flag 0x01 (key kept on the YubiKey by yb ≤ 0.4.x, or blocked PUK)",
                 Severity::Warning,
@@ -275,7 +425,8 @@ impl CardReport {
     }
 
     fn slot_item(&self) -> Item {
-        let label = format!("Slot 0x{:02x}", self.slot.slot);
+        const LABEL: &str = "Store key";
+        let slot = format!("slot 0x{:02x}:", self.slot.slot);
         let mut parts = Vec::new();
         if let Some(key) = self.slot.key {
             parts.push(key_algorithm_name(key.algorithm));
@@ -306,7 +457,24 @@ impl CardReport {
         if self.slot.key.is_some_and(|k| k.algorithm != ALGO_ECCP256) {
             severity = Severity::Error;
         }
-        item(&label, parts.join(", "), severity)
+        item(LABEL, format!("{slot} {}", parts.join(", ")), severity)
+    }
+}
+
+/// Items as report lines, each followed by its hint when `hints` is set.
+fn render_items(out: &mut String, items: &[Item], hints: bool) {
+    for i in items {
+        let text = match i.severity {
+            Severity::Ok => i.text.clone(),
+            Severity::Warning => format!("warning: {}", i.text),
+            Severity::Error => format!("ERROR: {}", i.text),
+        };
+        out.push_str(&format!("  {:<16} {text}\n", i.label));
+        if hints {
+            for line in &i.hint {
+                out.push_str(&format!("  {:<16} {line}\n", ""));
+            }
+        }
     }
 }
 
@@ -383,10 +551,12 @@ mod tests {
         assert_eq!(
             text,
             "YubiKey 99999999 — firmware 5.4.3\n\
+             \n\
+             PIV application\n\
              \x20 PIN              warning: factory default (3/3 tries left)\n\
              \x20 PUK              warning: factory default (3/3 tries left)\n\
              \x20 Management key   warning: 3DES, factory default\n\
-             \x20 Slot 0x82        empty\n\
+             \x20 Store key        slot 0x82: empty\n\
              \x20 Key/certificate  not checked (use --check-key)\n"
         );
         assert_eq!(report.severity(), Severity::Warning);
@@ -405,9 +575,67 @@ mod tests {
         let slot = &report.items(None)[3];
         assert_eq!(
             slot.text,
-            "EC P-256, generated on card, certificate CN=YBLOB ECCP256"
+            "slot 0x82: EC P-256, generated on card, certificate CN=YBLOB ECCP256"
         );
         assert_eq!(report.severity(), Severity::Error);
+    }
+
+    /// Spec 0045: a post-quantum store shows both applications, with their
+    /// roles, and the FIDO2 PIN's state.
+    #[test]
+    fn post_quantum_roles_and_fido2_pin() {
+        let piv: Arc<dyn PivBackend> = Arc::new(VirtualPiv::new());
+        let ctx = Context::with_backend(piv, None, false).unwrap();
+        let mut report = CardReport::build(&ctx, 0x82);
+        report.store = ReportStore::PostQuantum;
+        let fido2 = |state| Fido2Report {
+            state,
+            credential_id_len: 64,
+            checked_below: false,
+            unencrypted_blobs: true,
+        };
+        report.fido2 = Some(fido2(Fido2State::Pin { retries: 8 }));
+        let text = report.render(None, true);
+        assert!(
+            text.contains("\nPIV application — holds the store's objects\n"),
+            "{text}"
+        );
+        assert!(text.contains("— not used by this store"), "{text}");
+        assert!(
+            text.contains("\nFIDO2 application — protects this store\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("  PIN              set, 8 tries left\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("  Credential       the store's: 64-byte ID, not checked"),
+            "{text}"
+        );
+        assert!(!text.contains("Store key"), "{text}");
+
+        report.fido2 = Some(fido2(Fido2State::Pin { retries: 2 }));
+        assert!(report
+            .render(None, true)
+            .contains("warning: set, 2 tries left"));
+        report.fido2 = Some(fido2(Fido2State::Pin { retries: 0 }));
+        let text = report.render(None, true);
+        assert!(text.contains("ERROR: blocked"), "{text}");
+        assert!(text.contains("yb fetch --no-check"), "{text}");
+        assert_eq!(report.severity(), Severity::Error);
+
+        report.store = ReportStore::Legacy;
+        report.fido2 = None;
+        let text = report.render(None, true);
+        assert!(
+            text.contains("\nPIV application — protects this store\n"),
+            "{text}"
+        );
+        assert!(
+            text.ends_with("\nFIDO2 application — not used by this store\n"),
+            "{text}"
+        );
     }
 
     #[test]
