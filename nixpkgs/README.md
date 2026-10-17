@@ -35,13 +35,25 @@ The other files (`pr-description.md`, `review-response.md`,
    `workspace.dependencies`; run `cargo update -w`.  Rename `[Unreleased]`
    in `CHANGELOG.md`.  Set the same `version` in
    `pkgs/by-name/yb/yb/package.nix` (the check above requires it).
-2. Commit, tag `vX.Y.Z`, push the tag.
-3. crates.io: `.github/workflows/publish.yaml` packages and tests the
-   crates (`scripts/check-crates`), then waits for approval in the
-   `crates-io` environment.
-   Inspect the `crates` artifact, approve; it publishes `yb-core`, then
-   `yb` (`scripts/publish-crates`).  If it fails halfway, re-run the
-   `publish` job: crates already published are skipped.
+2. Commit, push `main`, and wait for CI.  Tag `vX.Y.Z` (`git tag -s`),
+   push the tag.
+3. `.github/workflows/publish.yaml` builds and tests, then waits for two
+   approvals (spec 0043):
+   - **crates.io:** `verify` packages and tests the crates
+     (`scripts/check-crates`; artifact `crates`).  Approve the
+     `crates-io` deployment; it publishes `yb-core`, then `yb`
+     (`scripts/publish-crates`).
+   - **GitHub release, Windows files:** `windows` tests and builds yb
+     and libyubiblob on Windows (artifact `windows`: the two zips and
+     `SHA256SUMS`, with provenance).  Approve the `github-release`
+     deployment; it creates the release if missing (notes from
+     `scripts/release-notes`, so the `CHANGELOG.md` section must exist)
+     and adds the files.
+
+   Inspect the artifacts before approving.  If an upload fails halfway,
+   re-run its job: crates already published are skipped, and release
+   files are replaced.  A manual run of the workflow is a dry run: it
+   builds and tests, and publishes nothing.
 4. nixpkgs, in a checkout of `master`:
    - copy the two staged files;
    - `nix-update yb` (sets `version`, `hash` and `cargoHash`);
@@ -64,3 +76,8 @@ The other files (`pr-description.md`, `review-response.md`,
   `crates-io`; "trusted publishing only" on.
 
 Both are in place (2026-10-09).
+
+- GitHub, repository settings: an environment `github-release`, set like
+  `crates-io` (required reviewer, tags `v*` only), for the Windows files
+  (spec 0043 S6, which also gives the `gh api` commands).  Not yet in
+  place.

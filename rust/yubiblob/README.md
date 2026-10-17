@@ -41,6 +41,14 @@ also needs libfido2 (Debian/Ubuntu `libfido2-dev`, Fedora
 `libfido2-devel`, Homebrew `libfido2`); on Windows, post-quantum stores
 are not supported yet.
 
+For Windows, each yb release carries a prebuilt
+`libyubiblob-A.B.C-windows-x86_64.zip` (x86-64, MSVC: `bin/yubiblob.dll`,
+`lib/yubiblob.dll.lib`, the static `lib/yubiblob.lib`,
+`include/yubiblob.h`), on the
+[release page](https://github.com/douzebis/yb/releases).  It is a
+preview: built and tested by CI against a simulated YubiKey, not yet on a
+real one.
+
 ## Using
 
 ```c

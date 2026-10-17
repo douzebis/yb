@@ -358,15 +358,20 @@ legacy stores:
   their checksums and provenance.**
   - It goes in `docs/invariants/0018-release-files.md`.
   - Its regression check is `scripts/check-release-workflow`.  It reads
-    `publish.yaml` with `yq` (release shell) and fails unless:
-    - every upload job has an environment, `needs` its build jobs, and
-      runs on tags only;
+    `publish.yaml` with `yq` (yq-go, in the release shell) and fails
+    unless:
+    - every upload job has its environment, waits for its build jobs,
+      and runs on tags only;
     - only the upload jobs can publish: `contents: write`, or the
       `id-token` of trusted publishing.  The Windows build gets only
       what its attestations need (`id-token`, `attestations`);
-    - the Windows build runs the tests before building.
-  - It runs in CI (the `check` job) and is named in the invariant file
-    for `scripts/check-invariants`.
+    - the Windows build runs the tests before building;
+    - no step runs with `test-fixture`.
+  - CI runs it in the `packaging` job of `nix.yaml`, next to
+    `scripts/check-crates`.  The invariant file names it, so
+    `scripts/check-invariants` checks that it exists.  (The Nix test
+    build sees only `rust/`, so a Rust test could not read the
+    workflow.)
 - Existing invariants hold on Windows for legacy stores.  Invariant
   0012 (test fixtures out of shipped builds) applies to the Windows zips
   too: they are built without `test-fixture`, and

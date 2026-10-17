@@ -143,6 +143,24 @@ cargo build --release
 # Binary is at target/release/yb
 ```
 
+### Windows (preview)
+
+Each release from 0.7.0 on carries `yb-X.Y.Z-windows-x86_64.zip`
+(x86-64), built and tested by CI against a simulated YubiKey, not yet on a
+real one: please report problems.  **Legacy stores only:** post-quantum
+stores are not supported on Windows yet.
+
+1. Download the zip and `SHA256SUMS` from the
+   [release page](https://github.com/douzebis/yb/releases).
+2. Check it, in PowerShell: `Get-FileHash yb-X.Y.Z-windows-x86_64.zip`
+   must print the hash listed in `SHA256SUMS`.  Or check where it was
+   built: `gh attestation verify yb-X.Y.Z-windows-x86_64.zip --repo
+   douzebis/yb`.
+3. Unpack it, and put `yb.exe` in a folder on your `PATH`.
+
+yb uses Windows' Smart Card service, which runs by default.  No other
+software is needed.
+
 ---
 
 ## Shell Completions
@@ -358,6 +376,10 @@ pkg-config --cflags --libs yubiblob
 The interface, its rules (memory, strings, errors, threads) and its
 versioning: [spec 0039](docs/specs/0039-c-api.md).  Before 1.0, each
 minor version may change the interface.
+
+On Windows, each release carries `libyubiblob-A.B.C-windows-x86_64.zip`
+(DLL, import and static libraries, header), a preview like `yb.exe`, for
+legacy stores only.
 
 ---
 
