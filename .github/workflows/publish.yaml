@@ -2,25 +2,31 @@
 #
 # SPDX-License-Identifier: MIT
 
-# Publish the crates to crates.io (spec 0029 §9): clap-complete-rawline,
-# yb-core, yb and yubiblob, each at its own version (yb-core and yb at the
-# tag's), skipped if already published.
+# Publish a release: the crates to crates.io (spec 0029 §9), and the
+# Windows files to the tag's GitHub release (spec 0043).
 #
 # A pushed tag v* starts it.  `verify` checks the tag and builds and tests
-# the .crate files (artifact `crates`, to inspect before approving).
-# `publish` runs in the `crates-io` environment, which requires the
-# maintainer's approval and only accepts v* tags (repository settings), and
-# authenticates with crates.io trusted publishing: no stored secret.
+# the .crate files (artifact `crates`); `windows` tests and builds yb and
+# libyubiblob on Windows, and makes the zips, SHA256SUMS and their
+# provenance (artifact `windows`).  Inspect the artifacts, then approve the
+# uploads: each upload job runs in an environment (`crates-io`,
+# `github-release`) that requires the maintainer's approval and only
+# accepts v* tags (repository settings).  No secret is stored: crates.io
+# trusted publishing, and the workflow's own token for the release.
 #
-# The upload is resumable: a crate already published at this version is
-# skipped, so if it fails halfway, re-running the `publish` job finishes the
-# release.
+# The uploads are resumable: a crate already published at this version is
+# skipped, and the release's files are replaced, so if one fails halfway,
+# re-running its job finishes the release.
+#
+# Run by hand (workflow_dispatch), it is a dry run: `verify` (without the
+# tag check) and `windows` only; nothing is published.
 
-name: Publish to crates.io
+name: Publish
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -35,6 +41,7 @@ jobs:
         uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
 
       - name: Check the tag against the Cargo version
+        if: github.event_name == 'push'
         run: |
           version=$(nix-instantiate --eval --raw -E \
             '(builtins.fromTOML (builtins.readFile ./rust/Cargo.toml)).workspace.package.version')
@@ -51,8 +58,70 @@ jobs:
           name: crates
           path: rust/target/package/*.crate
 
+  # yb and libyubiblob for Windows, legacy stores only (spec 0043 S4): the
+  # same toolchain, static C runtime and tests as the `windows` CI job.
+  # Never with test-fixture (invariant 0012).
+  windows:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+      id-token: write # provenance
+      attestations: write # provenance
+    env:
+      RUSTFLAGS: -C target-feature=+crt-static
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: "1.98.1" # the Nix build's; bumped with it (spec 0043 S5)
+
+      - name: Test the published crates
+        run: >-
+          cargo test --locked --manifest-path rust/Cargo.toml
+          -p yb-core -p yb -p yubiblob -p clap-complete-rawline
+
+      - name: Install cargo-c
+        run: cargo install cargo-c --locked --version 0.10.22
+
+      - name: Build yb and libyubiblob
+        run: |
+          cargo build --locked --release --manifest-path rust/Cargo.toml -p yb
+          cargo cinstall --locked --release --manifest-path rust/Cargo.toml -p yubiblob --prefix stage/libyubiblob --libdir lib
+
+      - name: Make the zips and SHA256SUMS
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $meta = cargo metadata --format-version 1 --no-deps --manifest-path rust/Cargo.toml | ConvertFrom-Json
+          $yb = ($meta.packages | Where-Object name -eq 'yb').version
+          $lib = ($meta.packages | Where-Object name -eq 'yubiblob').version
+          New-Item -ItemType Directory -Force dist, stage/yb | Out-Null
+          Copy-Item rust/target/release/yb.exe, LICENSE, README.md stage/yb
+          Copy-Item LICENSE, rust/yubiblob/README.md stage/libyubiblob
+          Compress-Archive -Path stage/yb/* -DestinationPath "dist/yb-$yb-windows-x86_64.zip"
+          Compress-Archive -Path stage/libyubiblob/* -DestinationPath "dist/libyubiblob-$lib-windows-x86_64.zip"
+          $lines = Get-ChildItem dist/*.zip | Sort-Object Name | ForEach-Object {
+            '{0}  {1}' -f (Get-FileHash $_ -Algorithm SHA256).Hash.ToLower(), $_.Name
+          }
+          [IO.File]::WriteAllText("$PWD/dist/SHA256SUMS", ($lines -join "`n") + "`n")
+          Get-Content dist/SHA256SUMS
+          Get-ChildItem -Recurse stage | Select-Object FullName, Length | Format-Table -AutoSize
+
+      - name: Attest the zips' provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*.zip
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows
+          path: dist/*
+
   publish:
     needs: verify
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     environment: crates-io
     permissions:
@@ -74,3 +143,34 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         run: nix-shell default.nix -A release-shell --run scripts/publish-crates
+
+  # Waits for `verify` too: a release whose crates fail their checks is not
+  # published anywhere (spec 0043 S5).
+  publish-windows:
+    name: Publish the Windows files
+    needs: [verify, windows]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: github-release
+    permissions:
+      contents: write # the release and its files
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows
+          path: dist
+
+      # A release made by hand is kept, with its title and notes; the files
+      # are replaced, so a re-run finishes a half-done upload.
+      - name: Create the release if missing, and add the files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$GITHUB_REF_NAME
+          if ! gh release view "$tag" > /dev/null 2>&1; then
+            scripts/release-notes "${tag#v}" > notes.md
+            gh release create "$tag" --verify-tag --title "yb ${tag#v}" --notes-file notes.md
+          fi
+          gh release upload "$tag" dist/* --clobber

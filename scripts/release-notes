@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+#
+# SPDX-License-Identifier: MIT
+
+# Print the notes of the GitHub release of version VERSION (spec 0043 S5):
+# its CHANGELOG.md section, then the paragraph on the Windows files.
+# Fails if CHANGELOG.md has no section for VERSION, so that no release goes
+# out without its entry.
+#
+# Usage, from the repository root: scripts/release-notes VERSION
+# (e.g. 0.7.0, without the leading v).
+
+set -euo pipefail
+
+if [ $# -ne 1 ]; then
+    echo "usage: scripts/release-notes VERSION" >&2
+    exit 2
+fi
+version=$1
+
+# The lines after "## [VERSION]" up to the next "## [" heading.
+section=$(awk -v heading="## [$version]" '
+    index($0, heading) == 1 { found = 1; next }
+    found && /^## \[/ { exit }
+    found { print }
+' CHANGELOG.md)
+
+if [ -z "${section//[[:space:]]/}" ]; then
+    echo "release-notes: CHANGELOG.md has no section for $version" >&2
+    exit 1
+fi
+
+# Trim the blank lines around the section.
+printf '%s\n' "$section" | sed -e '/./,$!d' | tac | sed -e '/./,$!d' | tac
+
+cat <<EOF
+
+---
+
+**Windows (preview).**  \`yb-$version-windows-x86_64.zip\` and libyubiblob
+are built and tested by CI against a simulated YubiKey, not yet on a real
+one: please report problems.  Legacy stores only: post-quantum stores are
+not supported on Windows yet.  Check the download with \`SHA256SUMS\`, or
+\`gh attestation verify <zip> --repo douzebis/yb\`.
+EOF
