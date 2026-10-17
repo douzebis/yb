@@ -32,6 +32,7 @@ test named there exists.
 | [0016](0016-a-post-quantum-store-exists-once-its-descriptor-is-written.md) | A Post-Quantum Store Exists Only Once Its Descriptor Is Written |
 | [0017](0017-the-fido2-pin-is-not-tried-with-few-attempts-left.md) | The FIDO2 PIN Is Not Tried With Few Attempts Left |
 | [0018](0018-release-files-are-built-tested-and-approved.md) | Release Files Are Built, Tested and Approved |
+| [0019](0019-unencrypted-blobs-are-readable-without-any-pin.md) | Unencrypted Blobs Are Readable Without Any PIN |
 
 ## Not guaranteed
 

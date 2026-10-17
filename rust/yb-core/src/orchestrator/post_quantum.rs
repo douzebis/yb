@@ -367,6 +367,48 @@ pub fn quick_check(head: &Object, store: &Store) -> SigVerdict {
     }
 }
 
+/// Opens the unencrypted blobs of a post-quantum store with their checksum
+/// only (spec 0044): no FIDO2, so no PIN and no touch, and neither the seal
+/// nor the management key is checked.  It detects corruption, not forgery.
+/// Encrypted blobs are refused, and it never writes.
+pub struct ChecksumOnly;
+
+impl Protection for ChecksumOnly {
+    fn overhead(&self, encrypt: bool) -> (usize, usize) {
+        if encrypt {
+            (PQ_ENCRYPTION_OVERHEAD, PQ_TRAILER_LEN_ENCRYPTED)
+        } else {
+            (0, PQ_TRAILER_LEN_PLAIN)
+        }
+    }
+
+    fn protect(&self, name: &str, _: &[u8], _: bool, _: bool, _: u32, _: u32) -> Result<Protected> {
+        bail!("'{name}': a checksum-only read cannot write (spec 0044)")
+    }
+
+    fn open(&self, meta: &BlobMeta, stored: &[u8], trailer: &[u8]) -> Result<Vec<u8>> {
+        let name = &meta.name;
+        if meta.key_byte & FLAG_ENCRYPTED != 0 {
+            return Err(super::NoPinFetchError::Encrypted(name.clone()).into());
+        }
+        let Some(t) = parse_trailer(trailer, false) else {
+            return Err(IntegrityError::Corrupted(name.clone()).into());
+        };
+        if checksum(&meta_bytes(meta, &t.salt), stored)
+            .ct_eq(&t.checksum)
+            .unwrap_u8()
+            != 1
+        {
+            return Err(IntegrityError::Corrupted(name.clone()).into());
+        }
+        Ok(stored.to_vec())
+    }
+
+    fn quick_check(&self, head: &Object, store: &Store) -> SigVerdict {
+        quick_check(head, store)
+    }
+}
+
 /// Wrap a new management key into the store's descriptor (`yb
 /// management-key set`, spec 0028, D7): one assertion (one touch) for the
 /// management key's K2, a fresh nonce, the card's current algorithm; the

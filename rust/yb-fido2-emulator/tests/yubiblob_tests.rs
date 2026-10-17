@@ -174,6 +174,22 @@ impl Session {
         Ok(content)
     }
 
+    /// `yubiblob_fetch_unencrypted`: the content and the verdict.
+    fn fetch_unencrypted(&self, name: &str) -> Result<(Vec<u8>, SignatureVerdict), Status> {
+        let name = CString::new(name).unwrap();
+        let (mut data, mut len) = (ptr::null_mut(), 0usize);
+        let mut verdict = SignatureVerdict::MAX;
+        let status = unsafe {
+            yubiblob_fetch_unencrypted(self.0, name.as_ptr(), &mut data, &mut len, &mut verdict)
+        };
+        if status != YUBIBLOB_OK {
+            return Err(status);
+        }
+        let content = unsafe { std::slice::from_raw_parts(data, len) }.to_vec();
+        unsafe { yubiblob_buffer_free(data, len) };
+        Ok((content, verdict))
+    }
+
     fn remove(&self, name: &str, pin: &[u8]) -> Status {
         let name = CString::new(name).unwrap();
         unsafe { yubiblob_remove(self.0, name.as_ptr(), pin.as_ptr(), pin.len()) }
@@ -397,6 +413,45 @@ fn fido2_side_missing_or_reset() {
     assert_eq!(s.fetch("doc", FIDO2_PIN), Err(YUBIBLOB_ERR_NO_CREDENTIAL));
 }
 
+/// Spec 0044: unencrypted blobs read with no PIN and no touch, even with
+/// the FIDO2 PIN blocked; encrypted ones refused; corruption detected.
+#[test]
+fn fetch_unencrypted_without_fido2() {
+    let _lock = lock();
+    let card = Card::new();
+    card.put("public", b"plain");
+    let s = card.open(0);
+    assert_eq!(
+        s.store("secret", b"x", YUBIBLOB_STORE_ENCRYPT, FIDO2_PIN),
+        YUBIBLOB_OK
+    );
+    // 3 wrong PINs in a row: the FIDO2 side refuses until replugged.
+    for _ in 0..3 {
+        assert_ne!(s.fetch("public", PIV_PIN), Ok(b"plain".to_vec()));
+    }
+    assert_eq!(s.fetch("public", FIDO2_PIN), Err(YUBIBLOB_ERR_REPLUG));
+
+    let touches = card.server.touches();
+    assert_eq!(
+        s.fetch_unencrypted("public"),
+        Ok((b"plain".to_vec(), YUBIBLOB_SIGNATURE_CHECKSUM_OK))
+    );
+    assert_eq!(card.server.touches(), touches, "no touch");
+    assert_eq!(s.fetch_unencrypted("secret"), Err(YUBIBLOB_ERR_ENCRYPTED));
+    assert_eq!(s.fetch_unencrypted("nothing"), Err(YUBIBLOB_ERR_NOT_FOUND));
+    drop(s);
+
+    card.change(|piv, reader| {
+        let store = Store::from_device(reader, piv).unwrap();
+        let id = store.object_id(store.find_head("public").unwrap().index());
+        let mut raw = piv.read_object(reader, id).unwrap();
+        raw[40] ^= 0x01;
+        piv.write_object(reader, id, &raw, OWN_MGMT).unwrap();
+    });
+    let s = card.open(0);
+    assert_eq!(s.fetch_unencrypted("public"), Err(YUBIBLOB_ERR_CORRUPTED));
+}
+
 /// A legacy store still says its kind.
 #[test]
 fn legacy_kind() {
@@ -412,4 +467,9 @@ fn legacy_kind() {
     assert_eq!(unsafe { yubiblob_open(0, 0, &mut s) }, YUBIBLOB_OK);
     let s = Session(s);
     assert_eq!(s.info().kind, YUBIBLOB_KIND_LEGACY);
+    // Spec 0044 G5: an unencrypted legacy blob needs no PIN.
+    assert_eq!(s.store("doc", b"legacy", 0, PIV_PIN), YUBIBLOB_OK);
+    let (data, verdict) = s.fetch_unencrypted("doc").unwrap();
+    assert_eq!(data, b"legacy");
+    assert_ne!(verdict, YUBIBLOB_SIGNATURE_CORRUPTED);
 }

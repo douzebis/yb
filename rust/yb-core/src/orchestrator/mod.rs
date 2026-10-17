@@ -291,6 +291,59 @@ pub fn fetch_blob(
     fetch_blob_with(store, &protection, name)
 }
 
+/// Why a fetch without PIN refused a blob (spec 0044).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum NoPinFetchError {
+    /// Encrypted blobs need the PIN; nothing was returned.
+    #[error("'{0}' is encrypted: it cannot be read without the PIN")]
+    Encrypted(String),
+    /// A legacy blob whose signature does not verify.
+    #[error("'{0}' is corrupted or was tampered with: its signature does not verify")]
+    Corrupted(String),
+}
+
+/// Fetch an unencrypted blob without any PIN (spec 0044), with the check
+/// that needs none:
+/// - legacy stores: its signature, against the slot's certificate;
+/// - post-quantum stores: its checksum only, not its seal nor the
+///   management key, so corruption is detected, not forgery.
+///
+/// Encrypted blobs are refused ([`NoPinFetchError::Encrypted`]).  Returns
+/// the content and the verdict, or None if not found.  Writes nothing.
+pub fn fetch_unencrypted(
+    store: &Store,
+    piv: &dyn PivBackend,
+    reader: &str,
+    name: &str,
+) -> Result<Option<(Vec<u8>, SigVerdict)>> {
+    let Some(head) = store.find_head(name) else {
+        return Ok(None);
+    };
+    if head.is_encrypted() {
+        return Err(NoPinFetchError::Encrypted(name.to_owned()).into());
+    }
+    if store.kind.is_post_quantum() {
+        #[cfg(not(windows))]
+        {
+            let data = fetch_blob_with(store, &post_quantum::ChecksumOnly, name)?;
+            return Ok(data.map(|d| (d, SigVerdict::ChecksumOk)));
+        }
+        #[cfg(windows)]
+        bail!("post-quantum stores are not supported on Windows");
+    }
+    let verifying_key = piv
+        .read_certificate(reader, store.store_key_slot)
+        .ok()
+        .and_then(|der| crate::parse_ec_public_key_from_cert_der(&der).ok())
+        .map(|pk| p256::ecdsa::VerifyingKey::from(&pk));
+    let verdict = check_blob_signature(head, store, verifying_key.as_ref());
+    if verdict == SigVerdict::Corrupted {
+        return Err(NoPinFetchError::Corrupted(name.to_owned()).into());
+    }
+    let data = fetch_blob(store, piv, reader, name, None, false)?;
+    Ok(data.map(|d| (d, verdict)))
+}
+
 /// Fetch a blob by name, opened by `protection` (spec 0028).  Returns None
 /// if not found.
 pub fn fetch_blob_with(

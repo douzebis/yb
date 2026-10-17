@@ -26,7 +26,7 @@ use std::ptr;
 
 use p256::ecdsa::VerifyingKey;
 use yb_core::errors::{render, CardError, PcscCode, RenderEnv};
-use yb_core::orchestrator::{check_blob_signature, SigVerdict};
+use yb_core::orchestrator::{check_blob_signature, fetch_unencrypted, NoPinFetchError, SigVerdict};
 use yb_core::report::StorePresence;
 use yb_core::store::Store;
 use yb_core::{
@@ -90,6 +90,9 @@ pub const YUBIBLOB_ERR_NO_CREDENTIAL: Status = 18;
 /// The FIDO2 side of the YubiKey cannot be found or opened (FIDO
 /// application disabled, or no permission on the device).
 pub const YUBIBLOB_ERR_NO_FIDO2_ACCESS: Status = 19;
+/// `yubiblob_fetch_unencrypted`: the blob is encrypted, so it needs the
+/// PIN (`yubiblob_fetch`); nothing was returned (spec 0044).
+pub const YUBIBLOB_ERR_ENCRYPTED: Status = 20;
 
 /// A blob's signature, as checked with the store's certificate.
 pub type SignatureVerdict = i32;
@@ -214,6 +217,17 @@ fn from_error(e: anyhow::Error, default: Status) -> Failure {
         if cause.downcast_ref::<SeveralDevices>().is_some() {
             status = YUBIBLOB_ERR_SEVERAL_DEVICES;
             break;
+        }
+        match cause.downcast_ref::<NoPinFetchError>() {
+            Some(NoPinFetchError::Encrypted(_)) => {
+                status = YUBIBLOB_ERR_ENCRYPTED;
+                break;
+            }
+            Some(NoPinFetchError::Corrupted(_)) => {
+                status = YUBIBLOB_ERR_CORRUPTED;
+                break;
+            }
+            None => {}
         }
         #[cfg(not(windows))]
         if let Some(s) = post_quantum_status(cause) {
@@ -971,10 +985,53 @@ pub unsafe extern "C" fn yubiblob_fetch(
     })
 }
 
-/// Free (and overwrite) content from `yubiblob_fetch`.
+/// An unencrypted blob's content, without any PIN or touch (spec 0044):
+/// for a YubiKey whose PIN is blocked, or whose FIDO2 application was reset.
+/// - Legacy stores: the signature is checked, as by `yubiblob_fetch`.
+/// - Post-quantum stores: only the checksum is checked, not the seal nor
+///   the management key.  Corruption is detected, forgery is not: use it
+///   only for content with its own integrity check (e.g. a KDBX 4
+///   database), or with the user's consent.
+///
+/// `*verdict` tells which check passed (`YUBIBLOB_SIGNATURE_VERIFIED`,
+/// `..._UNSIGNED`, `..._UNVERIFIABLE` or `..._CHECKSUM_OK`).  An encrypted
+/// blob fails with `YUBIBLOB_ERR_ENCRYPTED`, returning nothing.  Free
+/// `*data` with `yubiblob_buffer_free`.
 ///
 /// # Safety
-/// `data` and `len` came from `yubiblob_fetch`, freed once.
+/// `session` came from `yubiblob_open`; `name` is a string; `data`, `len`
+/// and `verdict` point to writable storage.
+#[no_mangle]
+pub unsafe extern "C" fn yubiblob_fetch_unencrypted(
+    session: *mut Session,
+    name: *const c_char,
+    data: *mut *mut u8,
+    len: *mut usize,
+    verdict: *mut SignatureVerdict,
+) -> Status {
+    run(|| {
+        let ctx = &session_ref(session)?.ctx;
+        let name = text(name, "the name")?;
+        not_null(data, "data")?;
+        not_null(len, "len")?;
+        not_null(verdict, "verdict")?;
+        let store = load_store(ctx)?;
+        let (content, v) = fetch_unencrypted(&store, ctx.piv.as_ref(), &ctx.reader, name)
+            .map_err(|e| from_error(e, YUBIBLOB_ERR_INTERNAL))?
+            .ok_or_else(|| fail(YUBIBLOB_ERR_NOT_FOUND, format!("no blob named {name}")))?;
+        let content = content.into_boxed_slice();
+        *len = content.len();
+        *data = Box::into_raw(content).cast::<u8>();
+        *verdict = self::verdict(v);
+        Ok(())
+    })
+}
+
+/// Free (and overwrite) content from `yubiblob_fetch` or
+/// `yubiblob_fetch_unencrypted`.
+///
+/// # Safety
+/// `data` and `len` came from one of them, freed once.
 #[no_mangle]
 pub unsafe extern "C" fn yubiblob_buffer_free(data: *mut u8, len: usize) {
     if data.is_null() {

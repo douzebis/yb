@@ -51,8 +51,18 @@ any, and returns nothing if one fails (exit status 4).  The checksum,
 which `yb ls` and `yb fsck` check without PIN, detects corruption only:
 anyone can recompute it.
 
+## Reads without the PIN (spec 0044)
+
+On request only (`yb fetch --no-check`, `yubiblob_fetch_unencrypted`),
+an **unencrypted** blob of a post-quantum store is read with its checksum
+alone: corruption is still detected (exit status 4), forgery is not.  yb
+says so on standard error every time, even with `--quiet`.  Encrypted
+blobs never have this exception.  On legacy stores these reads still
+check the signature, which needs no PIN.
+
 ## Regression tests
 
 - `rust/yb-fido2-emulator/tests/post_quantum_protection_tests.rs`: `forged_blobs_pass_the_checksum_but_not_the_seal`, `corruption_is_detected_without_pin`
-- `rust/yb-piv-harness/src/bin/yb_cli_tests.rs`: `pq_corruption_exits_4`
+- `rust/yb-piv-harness/src/bin/yb_cli_tests.rs`: `pq_corruption_exits_4`, `pq_no_check`
+- `rust/yb-fido2-emulator/tests/yubiblob_tests.rs`: `fetch_unencrypted_without_fido2`
 - `rust/yb/tests/cli_tests.rs`: `renamed_blob_is_corrupted_and_not_fetched`, `tampered_blob_is_not_fetched`, `tampered_mtime_is_corrupted`, `one_tampered_blob_among_several_fetches_nothing`, `signing_failure_stores_nothing`, `newer_signature_version_is_not_corruption`

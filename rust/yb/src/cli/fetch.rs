@@ -33,6 +33,14 @@ pub struct FetchArgs {
     #[arg(short = 'O', long = "output-dir", add = ArgValueCompleter::new(PathCompleter::dir()))]
     pub output_dir: Option<PathBuf>,
 
+    /// Read unencrypted blobs without any PIN or touch (spec 0044).  On a
+    /// post-quantum store only their checksum is checked, not their seal
+    /// nor the YubiKey's management key: corruption is detected, forgery
+    /// is not.  For a locked YubiKey (blocked or reset FIDO2 PIN).
+    /// Encrypted blobs are refused.
+    #[arg(long = "no-check")]
+    pub no_check: bool,
+
     /// Deprecated: saving to files is now the default behavior.
     #[arg(short = 'x', long = "extract", hide = true)]
     pub extract: bool,
@@ -71,6 +79,13 @@ pub fn run(ctx: &Context, args: &FetchArgs) -> Result<()> {
             "--stdout / --output require exactly one matching blob, but {} matched",
             matched.len()
         );
+    }
+
+    if args.no_check {
+        refuse_encrypted(&store, &matched)?;
+        if store.kind.is_post_quantum() {
+            return fetch_checksum_only(ctx, args, &store, &matched);
+        }
     }
 
     if store.kind.is_post_quantum() {
@@ -165,13 +180,21 @@ fn fetch_post_quantum(
                 .context("nothing was fetched"));
         }
     }
-    let session = ctx.post_quantum_session()?;
+    let all_unencrypted = matched
+        .iter()
+        .all(|n| store.find_head(n).is_some_and(|h| !h.is_encrypted()));
+    let session = ctx
+        .post_quantum_session()
+        .map_err(|e| suggest_no_check(e, all_unencrypted, None))?;
     let descriptor = store.descriptor().expect("a post-quantum store");
     let protection = session.protection(ctx, descriptor);
     let mut fetched = Vec::with_capacity(matched.len());
     for name in matched {
         let data = orchestrator::fetch_blob_with(store, &protection, name)
-            .map_err(|e| e.context("nothing was fetched"))?
+            .map_err(|e| {
+                let retries = session.device.pin_retries().ok();
+                suggest_no_check(e.context("nothing was fetched"), all_unencrypted, retries)
+            })?
             .ok_or_else(|| {
                 StatusError::new(ExitStatus::NotFound, format!("blob '{name}' not found"))
             })?;
@@ -186,6 +209,88 @@ fn fetch_post_quantum(
 #[cfg(windows)]
 fn fetch_post_quantum(_: &Context, _: &FetchArgs, _: &Store, _: &[String]) -> Result<()> {
     bail!("post-quantum stores are not supported on Windows")
+}
+
+/// `--no-check` refuses encrypted blobs, before anything is fetched.
+fn refuse_encrypted(store: &Store, matched: &[String]) -> Result<()> {
+    if let Some(name) = matched
+        .iter()
+        .find(|n| store.find_head(n).is_some_and(|h| h.is_encrypted()))
+    {
+        return Err(
+            anyhow::Error::from(orchestrator::NoPinFetchError::Encrypted(name.clone()))
+                .context("--no-check reads unencrypted blobs only; nothing was fetched"),
+        );
+    }
+    Ok(())
+}
+
+/// `yb fetch --no-check` on a post-quantum store (spec 0044): every
+/// blob's checksum, no FIDO2; all are read before anything is written.
+fn fetch_checksum_only(
+    ctx: &Context,
+    args: &FetchArgs,
+    store: &Store,
+    matched: &[String],
+) -> Result<()> {
+    let mut fetched = Vec::with_capacity(matched.len());
+    for name in matched {
+        let (data, _) = orchestrator::fetch_unencrypted(store, ctx.piv.as_ref(), &ctx.reader, name)
+            .map_err(|e| e.context("nothing was fetched"))?
+            .ok_or_else(|| {
+                StatusError::new(ExitStatus::NotFound, format!("blob '{name}' not found"))
+            })?;
+        fetched.push((name, data));
+    }
+    // Always, even with --quiet: the weakening must not go unnoticed.
+    let names: Vec<String> = matched.iter().map(|n| format!("'{n}'")).collect();
+    eprintln!(
+        "warning: checksum only: {} checked against corruption, not against forgery (the \
+         seal and the YubiKey's management key were not checked).  Anyone holding the \
+         management key could have written {}.",
+        names.join(", "),
+        if names.len() == 1 { "it" } else { "them" }
+    );
+    for (name, data) in fetched {
+        write_output(ctx, args, name, &data)?;
+    }
+    Ok(())
+}
+
+/// Add the `--no-check` hint to a post-quantum fetch failure when the
+/// FIDO2 side is locked, reset or unreachable, and every blob asked for
+/// is unencrypted (spec 0044 S2).  `retries`: the FIDO2 PIN attempts
+/// left, for a wrong PIN.
+#[cfg(not(windows))]
+fn suggest_no_check(
+    err: anyhow::Error,
+    all_unencrypted: bool,
+    retries: Option<u32>,
+) -> anyhow::Error {
+    use yb_core::fido2::Fido2Error;
+    let locked = err.chain().any(|e| {
+        matches!(
+            e.downcast_ref::<Fido2Error>(),
+            Some(
+                Fido2Error::PinBlocked
+                    | Fido2Error::PinAuthBlocked
+                    | Fido2Error::FewAttempts(_)
+                    | Fido2Error::NoCredential
+                    | Fido2Error::PinNotSet
+                    | Fido2Error::NoDevice
+            )
+        ) || (matches!(e.downcast_ref::<Fido2Error>(), Some(Fido2Error::PinInvalid))
+            && retries.is_some_and(|n| n <= 3))
+    });
+    if !(locked && all_unencrypted) {
+        return err;
+    }
+    yb_core::errors::YbError::new(format!("{err:#}"))
+        .fix(
+            "the blobs asked for are unencrypted: `yb fetch --no-check …` reads them without \
+             the FIDO2 PIN, checking their checksum only (not their seal)",
+        )
+        .into()
 }
 
 /// Write one fetched blob where the arguments say.

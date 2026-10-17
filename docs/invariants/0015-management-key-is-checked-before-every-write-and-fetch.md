@@ -34,6 +34,10 @@ back.
 
 - A user who changes the key with another tool sees the same error
   until `yb management-key set`.
+- Reads without the PIN (`yb fetch --no-check`,
+  `yubiblob_fetch_unencrypted`, spec 0044) skip this check: they need no
+  FIDO2, write nothing, and return only unencrypted blobs, with a
+  warning (invariant 0006).
 
 ## Regression tests
 

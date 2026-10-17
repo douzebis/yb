@@ -924,6 +924,96 @@ fn pq_low_pin_attempts() {
     assert_eq!(out, "data");
 }
 
+/// Spec 0044: with 3 FIDO2 PIN attempts left, a fetch of unencrypted blobs
+/// suggests `--no-check` before any PIN is tried; `--no-check` reads them
+/// with no PIN and no touch, refuses encrypted blobs, and still detects
+/// corruption (exit 4).
+fn pq_no_check() {
+    let f = PqFixture::new();
+    let public = f.file("pub.txt", b"public");
+    let secret = f.file("sec.txt", b"secret");
+    f.expect(0, &[], &["store", "-u", &public]);
+    f.expect(0, &[], &["store", &secret]);
+    for _ in 0..5 {
+        f.server.replug();
+        f.expect(1, &[("YB_PIN", "000000")], &["fetch", "-p", "pub.txt"]);
+    }
+    f.server.replug();
+    let (_, err) = f.expect(1, &[], &["fetch", "-p", "pub.txt"]);
+    assert!(err.contains("only 3 FIDO2 PIN attempts left"), "{err}");
+    assert!(err.contains("yb fetch --no-check"), "no hint: {err}");
+    // No hint for an encrypted blob: --no-check cannot read it.
+    let (_, err) = f.expect(1, &[], &["fetch", "-p", "sec.txt"]);
+    assert!(!err.contains("--no-check"), "{err}");
+
+    let touches = f.server.touches();
+    let (out, err) = f.expect(0, &[], &["--quiet", "fetch", "--no-check", "-p", "pub.txt"]);
+    assert_eq!(out, "public");
+    assert!(err.contains("checksum only"), "no warning: {err}");
+    assert_eq!(
+        f.server.touches(),
+        touches,
+        "--no-check touched the YubiKey"
+    );
+    let (_, err) = f.expect(1, &[], &["fetch", "--no-check", "-p", "sec.txt"]);
+    assert!(err.contains("is encrypted"), "{err}");
+
+    // The attempts were not used: the right PIN still works.
+    let (out, _) = f.expect(
+        0,
+        &[],
+        &["--allow-low-pin-attempts", "fetch", "-p", "pub.txt"],
+    );
+    assert_eq!(out, "public");
+
+    f.corrupt_object(0x5F_0001, 60);
+    f.expect(4, &[], &["fetch", "--no-check", "-p", "pub.txt"]);
+}
+
+/// Spec 0044: after a FIDO2 reset (a fresh emulator: no PIN, no
+/// credential), unencrypted blobs are still read with `--no-check`.
+fn pq_no_check_after_fido2_reset() {
+    let f = PqFixture::new();
+    let public = f.file("pub.txt", b"public");
+    f.expect(0, &[], &["store", "-u", &public]);
+    // A new server powers the emulator on afresh: a FIDO2 reset.
+    let reset = yb_fido2_emulator::server::Server::start(
+        &f.fx.dir.path().join("reset.sock"),
+        Some(PQ_SERIAL),
+    )
+    .unwrap();
+    let socket = reset.path.to_str().unwrap().to_owned();
+    let env = [("YB_FIDO2_SOCKET", socket.as_str())];
+    let (_, err) = f.expect(1, &env, &["fetch", "-p", "pub.txt"]);
+    assert!(err.contains("yb fetch --no-check"), "no hint: {err}");
+    let (out, _) = f.expect(0, &env, &["fetch", "--no-check", "-p", "pub.txt"]);
+    assert_eq!(out, "public");
+}
+
+/// Spec 0044 G5: a legacy store reads unencrypted blobs without the PIN (a
+/// wrong one is never tried), and `--no-check` refuses encrypted blobs.
+fn legacy_unencrypted_fetch_needs_no_pin() {
+    let f = Fixture::new();
+    f.format();
+    f.store_file("pub.txt", b"public");
+    let wrong = [("YB_PIN", "000000")];
+    let (out, _) = f.ok(&wrong, &["fetch", "-p", "pub.txt"]);
+    assert_eq!(out, "public");
+    let (out, _) = f.ok(&wrong, &["fetch", "--no-check", "-p", "pub.txt"]);
+    assert_eq!(out, "public");
+    let (out, _) = f.ok(&[], &["fsck"]);
+    assert!(
+        out.contains("3/3 tries left"),
+        "a PIN attempt was used: {out}"
+    );
+
+    let secret = f.dir.path().join("sec.txt");
+    std::fs::write(&secret, b"secret").unwrap();
+    f.ok(&[], &["store", secret.to_str().unwrap()]);
+    let (_, err) = f.err(&[], &["fetch", "--no-check", "-p", "sec.txt"]);
+    assert!(err.contains("is encrypted"), "{err}");
+}
+
 fn pq_format_flags() {
     let f = PqFixture::bare();
     drop(f.set_fido2_pin());
@@ -1075,6 +1165,9 @@ fn main() {
         test!(pq_piv_reset_exits_4),
         test!(pq_refused_touch),
         test!(pq_low_pin_attempts),
+        test!(pq_no_check),
+        test!(pq_no_check_after_fido2_reset),
+        test!(legacy_unencrypted_fetch_needs_no_pin),
         test!(pq_format_flags),
         test!(pq_format_refusals),
         test!(pq_rotate_management_key_refused),

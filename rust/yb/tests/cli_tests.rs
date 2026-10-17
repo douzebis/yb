@@ -214,6 +214,7 @@ mod fetch_tests {
             output: None,
             output_dir: Some(out_dir.path().to_path_buf()),
             extract: false,
+            no_check: false,
         };
         fetch_run(&ctx, &args).unwrap();
 
@@ -236,6 +237,7 @@ mod fetch_tests {
             output: Some(out_file.clone()),
             output_dir: None,
             extract: false,
+            no_check: false,
         };
         fetch_run(&ctx, &args).unwrap();
         assert_eq!(std::fs::read(&out_file).unwrap(), b"secret");
@@ -259,6 +261,7 @@ mod fetch_tests {
             output: Some(out_file.clone()),
             output_dir: None,
             extract: false,
+            no_check: false,
         };
         fetch_run(&ctx, &args).unwrap();
         assert_eq!(std::fs::read(&out_file).unwrap(), payload);
@@ -280,6 +283,7 @@ mod fetch_tests {
             output: None,
             output_dir: Some(out_dir.path().to_path_buf()),
             extract: false,
+            no_check: false,
         };
         fetch_run(&ctx, &args).unwrap();
 
@@ -302,6 +306,7 @@ mod fetch_tests {
             output: None,
             output_dir: None,
             extract: false,
+            no_check: false,
         };
         assert!(fetch_run(&ctx, &args).is_err());
     }
@@ -318,6 +323,7 @@ mod fetch_tests {
             output: None,
             output_dir: None,
             extract: false,
+            no_check: false,
         };
         assert!(fetch_run(&ctx, &args).is_err());
     }
@@ -336,6 +342,7 @@ mod fetch_tests {
             output: Some(tmp.path().join("out")),
             output_dir: Some(tmp.path().to_path_buf()),
             extract: false,
+            no_check: false,
         };
         assert!(fetch_run(&ctx, &args).is_err());
     }
@@ -825,6 +832,7 @@ mod fsck_tests {
                 output: None,
                 output_dir: Some(out.path().to_owned()),
                 extract: false,
+                no_check: false,
             },
         )?;
         Ok(std::fs::read(out.path().join(name)).unwrap())
@@ -974,6 +982,7 @@ mod fsck_tests {
             output: None,
             output_dir: Some(out.path().to_owned()),
             extract: false,
+            no_check: false,
         };
         assert!(fetch_run(&ctx, &args).is_err());
         assert_eq!(std::fs::read_dir(out.path()).unwrap().count(), 0);
@@ -1938,6 +1947,7 @@ mod default_policy_tests {
             output: None,
             output_dir: Some(std::env::temp_dir()),
             extract: false,
+            no_check: false,
         }
     }
 
@@ -2139,6 +2149,7 @@ mod error_render_tests {
                 output: None,
                 output_dir: Some(std::env::temp_dir()),
                 extract: false,
+                no_check: false,
             },
         )
     }
@@ -3247,6 +3258,7 @@ mod invariant_tests {
                 output: None,
                 output_dir: Some(out.path().to_owned()),
                 extract: false,
+                no_check: false,
             },
         )
         .unwrap();
@@ -3399,6 +3411,7 @@ mod invariant_tests {
                 output: None,
                 output_dir: Some(out.path().to_owned()),
                 extract: false,
+                no_check: false,
             },
         )
         .unwrap();

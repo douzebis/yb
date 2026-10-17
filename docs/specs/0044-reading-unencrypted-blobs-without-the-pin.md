@@ -6,9 +6,9 @@ SPDX-License-Identifier: MIT
 
 # 0044 — Reading Unencrypted Blobs Without the PIN
 
-**Status:** draft
+**Status:** implemented
 **App:** yb, yb-core, yubiblob
-**Implemented in:** <!-- YYYY-MM-DD, fill after implementation -->
+**Implemented in:** 2026-10-17
 
 ## Problem
 
@@ -182,23 +182,22 @@ yubiblob_status_t yubiblob_fetch_unencrypted(yubiblob_session_t* session,
 - **0015 (the management key is checked before every write and fetch),
   amended:** except checksum-only reads, which write nothing and return
   only unencrypted blobs.
-- **New, in 0002 or its own file:** an unencrypted blob is readable
-  without any PIN in both kinds of store, and an encrypted one never is.
+- **New: 0019 (unencrypted blobs are readable without any PIN).**
 
 **Regression tests** (CLI tests with the emulator, and libyubiblob tests
 in `yb-fido2-emulator`):
 
-- `checksum_only_reads_unencrypted_without_fido2`: the emulator's FIDO2
-  PIN blocked, the blob is read, and the warning is printed.
-- `checksum_only_refuses_encrypted`.
-- `checksum_only_detects_corruption`: exit status 4.
-- `checksum_only_after_fido2_reset`: a fresh emulator, so the credential
-  is gone; the unencrypted blob is read.
-- `fetch_suggests_checksum_only`: few attempts left, unencrypted blob;
-  the hint is shown and no attempt is used.
-- `legacy_unencrypted_fetch_needs_no_pin`: the PIV PIN blocked.
-- libyubiblob: `fetch_unencrypted_reports_verdict`,
-  `fetch_unencrypted_refuses_encrypted`.
+- `pq_no_check`: few attempts left, so the hint is shown before any PIN
+  is tried and no attempt is used; `--no-check` reads with no touch and
+  warns even with `--quiet`; an encrypted blob is refused; a corrupted
+  blob exits 4.
+- `pq_no_check_after_fido2_reset`: a fresh emulator (no PIN, no
+  credential); the hint, then the read.
+- `legacy_unencrypted_fetch_needs_no_pin`: a wrong PIV PIN is never
+  tried; `--no-check` refuses encrypted blobs.
+- libyubiblob: `fetch_unencrypted_without_fido2` (FIDO2 side refusing,
+  no touch, encrypted refused, corruption detected), `legacy_kind`
+  (legacy, no PIN).
 
 ## Open questions
 

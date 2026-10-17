@@ -27,7 +27,7 @@ What remains is:
 
 Two needs push for it:
 
-1. **keepassxc-yb**, the planned KeePassXC fork, will be built for Windows,
+1. **KeePassYB**, the planned KeePassXC fork, will be built for Windows,
    on libyubiblob.  It needs post-quantum stores there too: the guided
    format recommends them, and a store made on Linux must open on Windows.
 2. **Users of the `yb` command on Windows** expect `winget install`, and
@@ -91,7 +91,7 @@ would make stores made elsewhere unreadable.
   ported.
 - Hardware tests in CI: Windows checks on a real YubiKey are manual.
 - An MSI installer for yb: a portable zip is enough for a command-line
-  tool.  An MSI for keepassxc-yb belongs to that project.
+  tool.  An MSI for KeePassYB belongs to that project.
 - Windows on Arm (aarch64): later, once x86-64 works (open question Q5).
 - Chocolatey, MSYS2.
 - Crash-dump hygiene (Windows Error Reporting may capture memory with
@@ -191,7 +191,7 @@ Windows' dialog asks for the PIN.  The consequences:
 - **yb:** `Context::on_touch` is still called, but yb's own "Touch your
   YubiKey…" message is not printed on Windows, because Windows' dialog
   says it.
-- **libyubiblob:** the callback is still called, so keepassxc-yb can show
+- **libyubiblob:** the callback is still called, so KeePassYB can show
   its own status, e.g. "Waiting for the YubiKey".
 - **The dialog's parent window:** libfido2's Windows Hello backend needs
   a parent window for the dialog.
@@ -285,7 +285,7 @@ same zips.
    - No release work beyond publishing to crates.io: the Windows CI job
      checks that the published crates build there.
 4. **libyubiblob** is distributed only as a zip.  Its consumer,
-   keepassxc-yb, bundles the DLL in its own installer.
+   KeePassYB, bundles the DLL in its own installer.
 
 Later, possibly:
 
@@ -355,8 +355,9 @@ Phase 1 (spec 0043) comes first.  Then:
   test fixtures, which stay out of shipped Windows builds).
 - New: **portable post-quantum stores (G2):** the same credential and
   salts give the same keys on every platform.  To be written as
-  `docs/invariants/0019-portable-post-quantum-stores.md`, with the
-  vector tests above.  (0018 is phase 1's release-files invariant.)
+  `docs/invariants/0020-portable-post-quantum-stores.md`, with the
+  vector tests above.  (0018 is phase 1's release-files invariant, 0019
+  spec 0044's.)
 
 ## Open questions
 

@@ -25,6 +25,12 @@ Since 0.2.0 it also reads and writes post-quantum stores (`yb format
 (FIDO2 or PIV), and `yubiblob_set_touch_callback()` tells when the YubiKey
 waits for a touch (one per blob).
 
+Since 0.3.0, `yubiblob_fetch_unencrypted()` reads an unencrypted blob
+without any PIN or touch, for a YubiKey whose PIN is blocked or whose
+FIDO2 application was reset: legacy stores check its signature as usual;
+post-quantum stores check its checksum only, which detects corruption
+but not forgery.
+
 ## Building
 
 With [cargo-c](https://github.com/lu-zero/cargo-c):
