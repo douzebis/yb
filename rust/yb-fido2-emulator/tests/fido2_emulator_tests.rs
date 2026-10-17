@@ -131,3 +131,19 @@ fn find_credential_without_touch() {
     assert_eq!(dev.find_credential(&[&stranger], PIN).unwrap(), None);
     assert_eq!(emulator::touches(), before, "no touch asked");
 }
+
+#[test]
+fn touch_selection() {
+    use std::time::Duration;
+    use yb_core::fido2::pairing::touch_select;
+
+    let _ = device_with_pin();
+    let devices = vec![Device::open_with_io(&IO).unwrap()];
+    assert_eq!(touch_select(&devices, Duration::from_secs(2)).unwrap(), 0);
+    assert_eq!(devices[0].pin_retries().unwrap(), 8, "no PIN involved");
+
+    emulator::set_touch(false);
+    let err = touch_select(&devices, Duration::from_secs(2)).unwrap_err();
+    assert_eq!(err.downcast::<Fido2Error>().unwrap(), Fido2Error::NoTouch);
+    emulator::set_touch(true);
+}

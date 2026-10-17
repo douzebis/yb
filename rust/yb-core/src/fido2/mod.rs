@@ -11,6 +11,7 @@
 
 pub mod ffi;
 pub mod hid;
+pub mod pairing;
 
 use anyhow::{bail, Result};
 use std::ffi::{c_int, CStr, CString};
@@ -184,6 +185,28 @@ impl Device {
             }
             Ok(Self { dev })
         }
+    }
+
+    /// Start waiting for a touch, without PIN (CTAP 2.1
+    /// `authenticatorSelection`): the key blinks.  See [`Self::touched`].
+    pub fn touch_begin(&self) -> Result<()> {
+        // SAFETY: `dev` is open.
+        check(unsafe { ffi::fido_dev_get_touch_begin(self.dev) })
+    }
+
+    /// Whether the key was touched since [`Self::touch_begin`], waiting at
+    /// most `ms` milliseconds.
+    pub fn touched(&self, ms: i32) -> Result<bool> {
+        let mut touched: c_int = 0;
+        // SAFETY: `dev` is open; `touched` is writable.
+        check(unsafe { ffi::fido_dev_get_touch_status(self.dev, &mut touched, ms) })?;
+        Ok(touched != 0)
+    }
+
+    /// Stop waiting for a touch (the key stops blinking).
+    pub fn cancel(&self) {
+        // SAFETY: `dev` is open.  A failure only means nothing to cancel.
+        unsafe { ffi::fido_dev_cancel(self.dev) };
     }
 
     /// Whether a FIDO2 PIN is set (from the device info: no attempt used).

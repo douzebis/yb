@@ -65,6 +65,9 @@ unsafe extern "C" {
     pub fn fido_dev_open(dev: *mut FidoDev, path: *const c_char) -> c_int;
     pub fn fido_dev_close(dev: *mut FidoDev) -> c_int;
     pub fn fido_dev_has_pin(dev: *const FidoDev) -> bool;
+    pub fn fido_dev_cancel(dev: *mut FidoDev) -> c_int;
+    pub fn fido_dev_get_touch_begin(dev: *mut FidoDev) -> c_int;
+    pub fn fido_dev_get_touch_status(dev: *mut FidoDev, touched: *mut c_int, ms: c_int) -> c_int;
     pub fn fido_dev_get_retry_count(dev: *mut FidoDev, retries: *mut c_int) -> c_int;
     pub fn fido_dev_set_pin(dev: *mut FidoDev, pin: *const c_char, oldpin: *const c_char) -> c_int;
 

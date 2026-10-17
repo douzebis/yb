@@ -92,3 +92,38 @@ fn find_credential_without_touch() {
     assert_eq!(none, None);
     assert_eq!(dev.pin_retries().unwrap(), 8);
 }
+
+/// No touch, no PIN: the FIDO2 side of the YubiKey whose serial is in
+/// `YB_SERIAL` (default: the first one found), by serial.
+#[test]
+#[ignore]
+fn pairing_by_serial() {
+    use yb_core::fido2::pairing::{open_yubikey, probe_serial, yubikeys, SerialProbe};
+    let serial = match std::env::var("YB_SERIAL") {
+        Ok(s) => s.parse().unwrap(),
+        Err(_) => match probe_serial(&yubikeys().unwrap()[0]) {
+            SerialProbe::Is(s) => s,
+            SerialProbe::Unknown => panic!("serial not readable"),
+        },
+    };
+    let dev = open_yubikey(serial, 1, &|| panic!("no touch expected")).unwrap();
+    println!("serial {serial}: paired; PIN set: {}", dev.has_pin());
+    assert!(open_yubikey(serial.wrapping_add(1), 1, &|| {}).is_err());
+}
+
+/// One touch: touch selection on every connected YubiKey.
+#[test]
+#[ignore]
+fn touch_selection() {
+    use yb_core::fido2::pairing::{touch_select, yubikeys};
+    let devices: Vec<Device> = yubikeys()
+        .unwrap()
+        .iter()
+        .map(|d| Device::open(&d.path).unwrap())
+        .collect();
+    eprintln!("TOUCH the YubiKey to select it");
+    let start = std::time::Instant::now();
+    let chosen = touch_select(&devices, std::time::Duration::from_secs(30)).unwrap();
+    println!("selected device {chosen} after {:?}", start.elapsed());
+    assert_eq!(devices[chosen].pin_retries().unwrap(), 8);
+}
