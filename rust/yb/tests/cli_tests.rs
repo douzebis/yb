@@ -241,6 +241,29 @@ mod fetch_tests {
         assert_eq!(std::fs::read(&out_file).unwrap(), b"secret");
     }
 
+    /// Bytes come back as stored: no line-ending translation, on Windows
+    /// too (spec 0043 S2).
+    #[test]
+    fn fetch_binary_round_trip() {
+        let piv = with_key_piv();
+        let ctx = make_ctx(piv);
+        format_store(&ctx);
+        let payload: Vec<u8> = (0..=255u8).chain(*b"a\r\nb\nc\r\x1a").collect();
+        store_plain(&ctx, "bin", &payload);
+
+        let out_dir = TempDir::new().unwrap();
+        let out_file = out_dir.path().join("bin.out");
+        let args = FetchArgs {
+            patterns: vec!["bin".to_owned()],
+            stdout: false,
+            output: Some(out_file.clone()),
+            output_dir: None,
+            extract: false,
+        };
+        fetch_run(&ctx, &args).unwrap();
+        assert_eq!(std::fs::read(&out_file).unwrap(), payload);
+    }
+
     #[test]
     fn fetch_glob_pattern() {
         let piv = with_key_piv();
@@ -2299,10 +2322,12 @@ mod guided_tests {
     }
 
     /// Run the guided flow, choosing a legacy store first (these tests
-    /// predate post-quantum stores, spec 0028); the script must be used up
-    /// exactly.
+    /// predate post-quantum stores, spec 0028; Windows asks no such
+    /// question, spec 0043); the script must be used up exactly.
     fn guided(ctx: &mut Context, answers: &[&str]) -> (anyhow::Result<()>, Script) {
-        let answers: Vec<&str> = std::iter::once("2")
+        let answers: Vec<&str> = cfg!(not(windows))
+            .then_some("2")
+            .into_iter()
             .chain(answers.iter().copied())
             .collect();
         let mut script = Script::new(&answers);
