@@ -147,9 +147,11 @@ queries it did find:
    questions do not reach the YubiKey; they answer at once ("KeePassYB is
    quitting").  Writes still do, for a save asked at exit.
 4. **No header read that can only fail.**  Reading only a vault's
-   headers (no key, e.g. the locked view) answers from the listing alone
-   when the read would need the PIN.  It costs no store-kind query and no
-   session of its own.
+   headers (no key, e.g. the locked view) answers from the listing and
+   the store kind when the read would need the PIN, with no read of its
+   own.  The store kind is kept for the whole run, since only a reformat
+   changes it, so after the first time this costs no store-kind query
+   either.
 5. **Off the GUI thread.**  Every `DeviceStorage` operation called from
    the GUI thread runs on a worker thread, while the GUI thread keeps
    processing events.  The window never freezes, even for one slow query.
