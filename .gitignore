@@ -21,3 +21,5 @@
 /pyrightconfig.json
 /ruff.toml
 
+/attic/poc-opensk/target/
+/attic/poc-opensk/Cargo.lock

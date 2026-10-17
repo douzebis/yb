@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: 2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+#
+# SPDX-License-Identifier: MIT
+
+[package]
+name = "poc-opensk"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+opensk = { git = "https://github.com/google/OpenSK", rev = "636d85b8ae492f30157cb38d9d84c3c40b9f1f0c", features = ["std"] }
