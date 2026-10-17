@@ -2,51 +2,22 @@
 //
 // SPDX-License-Identifier: MIT
 
-//! Compression and encryption pipeline for blob payloads.
+//! Compression of blob payloads (before encryption).
 
-use super::types::{BLOB_SIZE_C_BIT, BROTLI_MAGIC, XZ_MAGIC};
-use crate::crypto;
+use super::types::{Compression, BROTLI_MAGIC, XZ_MAGIC};
 use anyhow::{Context, Result};
 
-use super::types::{Compression, Encryption, StoreOptions};
-
-/// Compress and/or encrypt `payload` according to `options`.
-///
-/// Returns `(stored_bytes, blob_key_slot, is_compressed)` where:
-/// - `stored_bytes` is the data to be written across the chunk chain
-/// - `blob_key_slot` is the PIV slot used (0 = unencrypted)
-/// - `is_compressed` is true when the C-bit should be set in the header
-pub(super) fn compress_and_encrypt(
+/// Compress `payload` if `compression` asks for it and it helps; return
+/// the bytes to protect and whether the C-bit is set.
+pub(super) fn compress(
     name: &str,
     payload: &[u8],
-    options: &StoreOptions<'_>,
-    store_key_slot: u8,
-) -> Result<(Vec<u8>, u8, bool)> {
-    // Compress if requested.
-    let (candidate, is_compressed) = match options.compression {
-        Compression::None => (payload.to_vec(), false),
-        Compression::Auto => compress_payload(name, payload)?,
-    };
-
-    // Encrypt if requested.
-    let (data, blob_key_slot) = match options.encryption {
-        Encryption::Encrypted(pk) => {
-            let enc = crypto::hybrid_encrypt(&candidate, pk).context("encrypting blob")?;
-            (enc, store_key_slot)
-        }
-        Encryption::None => (candidate, 0u8),
-    };
-
-    // blob_size is a u24 field; bit 23 is the C flag and must not be set.
-    if data.len() & BLOB_SIZE_C_BIT != 0 {
-        anyhow::bail!(
-            "blob '{}': stored size too large ({} bytes, max 0x7FFFFF)",
-            name,
-            data.len()
-        );
+    compression: Compression,
+) -> Result<(Vec<u8>, bool)> {
+    match compression {
+        Compression::None => Ok((payload.to_vec(), false)),
+        Compression::Auto => compress_payload(name, payload),
     }
-
-    Ok((data, blob_key_slot, is_compressed))
 }
 
 /// Compress `payload` with both brotli and xz; return the better candidate

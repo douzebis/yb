@@ -4,46 +4,17 @@
 
 //! Blob integrity signature trailer (spec 0017) and chain assembly.
 
-use crate::piv::PivBackend;
+use super::protection::BlobMeta;
 use crate::store::{Object, ObjectParams, Store};
 use sha2::{Digest, Sha256};
 
 /// Length of the signature trailer appended after a blob's data (spec 0017).
 pub const SIG_TRAILER_LEN: usize = 65;
 
-/// Sign the blob just built with the store's slot key and append the
-/// 65-byte trailer `[0x02 || r (32 bytes) || s (32 bytes)]` (version 2,
-/// spec 0033) after its last payload byte, in a spill chunk if needed.
-///
-/// If signing fails, the store fails before anything is written: a blob is
-/// never stored unsigned (spec 0033).
-pub(super) fn append_signature_trailer(
-    store: &mut Store,
-    piv: &dyn PivBackend,
-    payload: &[u8],
-    pin: Option<&str>,
-) -> anyhow::Result<()> {
-    // The head just built: the one with the highest age.
-    let head = store
-        .objects
-        .iter()
-        .filter(|o| o.is_head())
-        .max_by_key(|o| o.age)
-        .expect("store_blob built a head");
-    let digest = signed_digest_v2(head, payload);
-
-    // A blob is never stored unsigned (spec 0033): signing fails the store,
-    // before anything is written.
-    let raw_sig = piv
-        .ecdsa_sign(&store.reader, store.store_key_slot, &digest, pin)
-        .map_err(|e| anyhow::anyhow!("signing the blob failed; nothing was stored: {e:#}"))?;
-
-    // Build the 65-byte trailer.
-    let mut trailer = [0u8; SIG_TRAILER_LEN];
-    trailer[0] = SIG_V2;
-    trailer[1..33].copy_from_slice(&raw_sig[0..32]); // r
-    trailer[33..65].copy_from_slice(&raw_sig[32..64]); // s
-
+/// Append `trailer` (spec 0017: a signature; spec 0028: a checksum and
+/// seal) after the last payload byte of the blob just built, in a spill
+/// chunk if needed.  `objects_needed` counts that chunk (spec 0031).
+pub(super) fn append_trailer(store: &mut Store, trailer: &[u8]) -> anyhow::Result<()> {
     // Find the last chunk in the chain by walking from the head we just built.
     // The head is the object with the highest age (just allocated).
     let last_idx = find_last_chunk_idx(store);
@@ -61,13 +32,13 @@ pub(super) fn append_signature_trailer(
         // Trailer fits in the last slot's padding region.
         store.objects[last_idx as usize]
             .payload
-            .extend_from_slice(&trailer);
+            .extend_from_slice(trailer);
         store.objects[last_idx as usize].dirty = true;
     } else {
         // Need a spill slot.  Check there is a free slot available.
         // objects_needed counts this chunk (spec 0031); a missing one is a bug.
         if store.free_count() == 0 {
-            anyhow::bail!("no room for the signature trailer; nothing was stored");
+            anyhow::bail!("no room for the blob's trailer; nothing was stored");
         }
         // Fill the remaining space in the last slot.
         store.objects[last_idx as usize]
@@ -160,7 +131,7 @@ pub fn collect_blob_chain(
 const SIG_V1: u8 = 0x01;
 /// Signature trailer of spec 0033: SHA-256 of the metadata and the stored
 /// bytes ([`signed_digest_v2`]).
-const SIG_V2: u8 = 0x02;
+pub(super) const SIG_V2: u8 = 0x02;
 /// Domain separation for version 2 signatures.
 const SIG_V2_TAG: &[u8] = b"yb-blob-sig-v2\0";
 
@@ -195,16 +166,16 @@ impl std::fmt::Display for SigVerdict {
 /// The digest a version 2 signature signs: the blob's metadata and its
 /// stored (possibly compressed, possibly encrypted) bytes, so that a blob
 /// cannot be renamed, or its metadata altered, without breaking it.
-fn signed_digest_v2(head: &Object, stored: &[u8]) -> [u8; 32] {
-    let name = head.blob_name.as_bytes();
+pub(super) fn signed_digest_v2(meta: &BlobMeta, stored: &[u8]) -> [u8; 32] {
+    let name = meta.name.as_bytes();
     let mut h = Sha256::new();
     h.update(SIG_V2_TAG);
     h.update([name.len() as u8]); // names are at most 255 bytes
     h.update(name);
-    h.update([head.blob_key_slot, u8::from(head.is_compressed)]);
-    h.update(head.blob_plain_size.to_le_bytes());
-    h.update(head.blob_size.to_le_bytes());
-    h.update(head.blob_mtime.to_le_bytes());
+    h.update([meta.key_byte, u8::from(meta.compressed)]);
+    h.update(meta.plain_size.to_le_bytes());
+    h.update(meta.stored_size.to_le_bytes());
+    h.update(meta.mtime.to_le_bytes());
     h.update(stored);
     h.finalize().into()
 }
@@ -235,7 +206,7 @@ pub fn check_blob_signature(
     }
     let digest: [u8; 32] = match trailing[0] {
         SIG_V1 => Sha256::digest(&payload).into(),
-        SIG_V2 => signed_digest_v2(head, &payload),
+        SIG_V2 => signed_digest_v2(&BlobMeta::from_head(head), &payload),
         _ => return SigVerdict::NewerVersion,
     };
     let Some(vk) = verifying_key else {

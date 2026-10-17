@@ -97,3 +97,7 @@ required-features = ["test-utils"]
 [[test]]
 name              = "rip_safety_tests"
 required-features = ["test-utils"]
+
+[[test]]
+name              = "protection_tests"
+required-features = ["test-utils"]

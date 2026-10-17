@@ -6,14 +6,17 @@
 //!
 //! Sub-modules:
 //! - [`types`]       — `Encryption`, `Compression`, `StoreOptions`, `BlobInfo`, constants
-//! - [`compression`] — compress/decompress/encrypt pipeline
-//! - [`signature`]   — signature trailer (spec 0017) and chain assembly
+//! - [`compression`] — compression before encryption
+//! - [`protection`]  — what a store kind does to protect blobs (spec 0028)
+//! - [`signature`]   — trailers (spec 0017), signatures and chain assembly
 //! - this module     — `store_blob`, `fetch_blob`, `remove_blob`, `list_blobs`
 
 mod compression;
+mod protection;
 mod signature;
 mod types;
 
+pub use protection::{BlobMeta, LegacyProtection, Protected, Protection};
 pub use signature::{check_blob_signature, collect_blob_chain, SigVerdict, SIG_TRAILER_LEN};
 pub(crate) use types::BLOB_SIZE_C_BIT;
 pub use types::{BlobInfo, Compression, Encryption, StoreOptions};
@@ -21,10 +24,10 @@ pub use types::{BlobInfo, Compression, Encryption, StoreOptions};
 use crate::crypto;
 use crate::piv::PivBackend;
 use crate::store::{constants::MAX_NAME_LEN, Object, ObjectParams, Store};
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 
-use compression::{compress_and_encrypt, decompress_payload};
-use signature::append_signature_trailer;
+use compression::{compress, decompress_payload};
+use signature::append_trailer;
 
 // ---------------------------------------------------------------------------
 // chunks_needed
@@ -53,7 +56,8 @@ pub fn objects_needed(data_len: usize, name_len: usize, object_size: usize) -> u
 // store_blob
 // ---------------------------------------------------------------------------
 
-/// Store a blob on the YubiKey.
+/// Store a blob on the YubiKey, in a legacy store (PIV encryption and
+/// signature, with `pin`).
 ///
 /// Returns `false` if the store is full.
 pub fn store_blob(
@@ -64,6 +68,48 @@ pub fn store_blob(
     options: StoreOptions<'_>,
     management_key: &str,
     pin: Option<&str>,
+) -> Result<bool> {
+    let (encrypt, encryption_key) = match options.encryption {
+        Encryption::None => (false, None),
+        Encryption::Encrypted(pk) => (true, Some(pk)),
+    };
+    let reader = store.reader.clone();
+    let protection = LegacyProtection {
+        piv,
+        reader: &reader,
+        slot: store.store_key_slot,
+        encryption_key,
+        verifying_key: None,
+        pin,
+        debug: false,
+    };
+    store_blob_with(
+        store,
+        piv,
+        &protection,
+        name,
+        payload,
+        encrypt,
+        options.compression,
+        management_key,
+    )
+}
+
+/// Store a blob on the YubiKey, protected by `protection` (spec 0028).
+///
+/// Returns `false` if the store is full, found before anything else.  The
+/// blob is compressed, then protected (which may ask for the PIN), and only
+/// then written: a failure before the writes stores nothing.
+#[allow(clippy::too_many_arguments)]
+pub fn store_blob_with(
+    store: &mut Store,
+    piv: &dyn PivBackend,
+    protection: &dyn Protection,
+    name: &str,
+    payload: &[u8],
+    encrypt: bool,
+    compression: Compression,
+    management_key: &str,
 ) -> Result<bool> {
     validate_name(name)?;
 
@@ -77,28 +123,39 @@ pub fn store_blob(
         );
     }
 
-    let (data, blob_key_slot, is_compressed) =
-        compress_and_encrypt(name, payload, &options, store.store_key_slot)?;
+    let (candidate, is_compressed) = compress(name, payload, compression)?;
+    let (encryption_overhead, trailer_len) = protection.overhead(encrypt);
+    let data_len = candidate.len() + encryption_overhead;
+    // blob_size is a u24 field; bit 23 is the C flag and must not be set.
+    if data_len & BLOB_SIZE_C_BIT != 0 {
+        anyhow::bail!("blob '{name}': stored size too large ({data_len} bytes, max 0x7FFFFF)");
+    }
 
-    let plain_size = payload.len() as u32;
-    let blob_size = data.len() as u32;
     let name_len = name.len();
 
-    // Calculate how many chunks we need.
-    let head_cap = Object::head_payload_capacity(store.object_size, name_len);
-    let cont_cap = Object::continuation_payload_capacity(store.object_size);
-
-    let chunks_needed = chunks_needed(data.len(), name_len, store.object_size);
-
     // The old copy, if any, stays occupied until the new one is written
-    // (spec 0031): the new copy, signature trailer included, goes into
-    // objects that are free now, so a YubiKey pulled out mid-write leaves
-    // the old copy intact.
-    let needed = objects_needed(data.len(), name_len, store.object_size);
+    // (spec 0031): the new copy, trailer included, goes into objects that
+    // are free now, so a YubiKey pulled out mid-write leaves the old copy
+    // intact.
+    let needed = chunks_needed(data_len + trailer_len, name_len, store.object_size);
     if store.free_count() < needed {
         return Ok(false);
     }
     store.ensure_age_room(needed)?;
+
+    // Protect before any write (spec 0028): signing or sealing may fail
+    // (PIN, touch), and then nothing is written, not even the cleanup.
+    let mtime = Store::now_unix();
+    let plain_size = payload.len() as u32;
+    let protected =
+        protection.protect(name, &candidate, encrypt, is_compressed, plain_size, mtime)?;
+    if protected.stored.len() != data_len || protected.trailer.len() != trailer_len {
+        bail!("blob '{name}': protected size differs from the announced overhead (bug)");
+    }
+    let data = protected.stored;
+    let blob_key_slot = protected.key_byte;
+    let blob_size = data.len() as u32;
+
     // Clean up first (spec 0038): the leftovers loading reset, and objects
     // a card out of memory deleted, are written before any new data, so
     // that the memory they held is free for it.
@@ -108,8 +165,13 @@ pub fn store_blob(
         .map(|head| store.chunk_chain(head.index))
         .unwrap_or_default();
 
+    // Calculate how many chunks we need.
+    let head_cap = Object::head_payload_capacity(store.object_size, name_len);
+    let cont_cap = Object::continuation_payload_capacity(store.object_size);
+
+    let chunks_needed = chunks_needed(data.len(), name_len, store.object_size);
+
     // Allocate chunks and fill them.
-    let mtime = Store::now_unix();
     let mut chunk_indices: Vec<u8> = Vec::with_capacity(chunks_needed);
     for _ in 0..chunks_needed {
         let idx = store.alloc_free().unwrap();
@@ -164,9 +226,9 @@ pub fn store_blob(
         offset = end;
     }
 
-    // Append the 65-byte signature trailer (specs 0017, 0033); a failure
-    // stores nothing.
-    append_signature_trailer(store, piv, &data, pin)?;
+    // Append the trailer (specs 0017, 0033: the signature), in a spill
+    // chunk if needed.
+    append_trailer(store, &protected.trailer)?;
 
     // Write the new copy: its continuation chunks (and signature spill
     // chunk) first, its head last, so that the head never reaches the card
@@ -194,7 +256,8 @@ pub fn uses_legacy_encryption(head: &Object) -> bool {
     head.is_encrypted() && crypto::is_legacy_ciphertext(head.payload())
 }
 
-/// Fetch a blob by name.  Returns None if not found.
+/// Fetch a blob by name from a legacy store (`pin` decrypts).  Returns
+/// None if not found.
 pub fn fetch_blob(
     store: &Store,
     piv: &dyn PivBackend,
@@ -203,37 +266,33 @@ pub fn fetch_blob(
     pin: Option<&str>,
     debug: bool,
 ) -> Result<Option<Vec<u8>>> {
-    let head = match store.find_head(name) {
-        None => return Ok(None),
-        Some(h) => h,
+    let protection = LegacyProtection {
+        piv,
+        reader,
+        slot: store.store_key_slot,
+        encryption_key: None,
+        verifying_key: None,
+        pin,
+        debug,
     };
+    fetch_blob_with(store, &protection, name)
+}
 
-    let is_encrypted = head.is_encrypted();
-    let is_compressed = head.is_compressed;
-    let key_slot = head.blob_key_slot;
-
-    // Concatenate all chunk payloads.
-    let chain = store.chunk_chain(head.index);
-    let mut data: Vec<u8> = Vec::new();
-    for idx in chain {
-        data.extend_from_slice(&store.objects[idx as usize].payload);
-    }
-    // Trim to blob_size (payload region may have trailing zeros).
-    data.truncate(head.blob_size as usize);
-
-    let payload = if is_encrypted {
-        if pin.is_none() {
-            bail!("blob '{name}' is encrypted but no PIN was provided");
-        }
-        crypto::hybrid_decrypt(piv, reader, key_slot, &data, pin, debug)
-            .with_context(|| format!("decrypting blob '{name}'"))?
-    } else {
-        data
+/// Fetch a blob by name, opened by `protection` (spec 0028).  Returns None
+/// if not found.
+pub fn fetch_blob_with(
+    store: &Store,
+    protection: &dyn Protection,
+    name: &str,
+) -> Result<Option<Vec<u8>>> {
+    let Some(head) = store.find_head(name) else {
+        return Ok(None);
     };
-
-    if is_compressed {
-        let plaintext = decompress_payload(name, &payload)?;
-        Ok(Some(plaintext))
+    let meta = BlobMeta::from_head(head);
+    let (stored, trailer, _) = collect_blob_chain(head, store);
+    let payload = protection.open(&meta, &stored, &trailer)?;
+    if meta.compressed {
+        Ok(Some(decompress_payload(name, &payload)?))
     } else {
         Ok(Some(payload))
     }
