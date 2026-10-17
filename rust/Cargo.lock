@@ -3365,7 +3365,9 @@ dependencies = [
  "anyhow",
  "opensk",
  "rand",
+ "tempfile",
  "yb-core",
+ "yubiblob",
 ]
 
 [[package]]
@@ -3389,7 +3391,7 @@ dependencies = [
 
 [[package]]
 name = "yubiblob"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "p256 0.13.2",

@@ -19,6 +19,12 @@ nothing, reading never writes, and tampering is detected before use.
 It assumes a YubiKey set up with `yb format` (management key kept on the
 YubiKey, unlocked by the PIN).
 
+Since 0.2.0 it also reads and writes post-quantum stores (`yb format
+--post-quantum`), protected by the YubiKey's FIDO2 application instead:
+`yubiblob_store_info()` tells the store's kind, hence which PIN to ask for
+(FIDO2 or PIV), and `yubiblob_set_touch_callback()` tells when the YubiKey
+waits for a touch (one per blob).
+
 ## Building
 
 With [cargo-c](https://github.com/lu-zero/cargo-c):
@@ -30,7 +36,10 @@ pkg-config --cflags --libs yubiblob
 
 This installs `libyubiblob` (shared and static), `yubiblob.h` and
 `yubiblob.pc`.  It builds on Linux, macOS and Windows (PC/SC comes from
-the system: pcsc-lite, PCSC.framework, WinSCard).
+the system: pcsc-lite, PCSC.framework, WinSCard).  On Linux and macOS it
+also needs libfido2 (Debian/Ubuntu `libfido2-dev`, Fedora
+`libfido2-devel`, Homebrew `libfido2`); on Windows, post-quantum stores
+are not supported yet.
 
 ## Using
 

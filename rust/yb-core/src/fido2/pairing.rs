@@ -18,7 +18,7 @@
 //! The PIN is never sent to several devices in turn.
 
 use super::{Device, DeviceInfo, YUBICO_VENDOR_ID};
-use anyhow::{bail, Result};
+use anyhow::Result;
 use std::time::{Duration, Instant};
 
 /// What a candidate FIDO2 device says about its serial.
@@ -128,15 +128,12 @@ pub fn open_yubikey(
     }
     let candidates = yubikeys()?;
     if candidates.is_empty() {
-        bail!(
-            "no YubiKey FIDO2 device found (is the FIDO application enabled, and \
-             /dev/hidraw accessible? see the documentation on udev rules)"
-        );
+        return Err(super::Fido2Error::NoDevice.into());
     }
     let probes: Vec<SerialProbe> = candidates.iter().map(probe_serial).collect();
     match decide(serial, &probes, piv_yubikeys) {
         Pairing::Device(i) => Device::open(&candidates[i].path),
-        Pairing::NotFound => bail!("the FIDO2 side of the selected YubiKey was not found"),
+        Pairing::NotFound => Err(super::Fido2Error::NoDevice.into()),
         Pairing::Touch(indices) => {
             let devices = indices
                 .iter()
@@ -155,7 +152,7 @@ pub fn open_yubikey(
 fn open_emulator(serial: u32, path: &str) -> Result<Device> {
     let mut ch = super::socket::SocketChannel::open(path)?;
     if super::hid::read_serial(&mut ch)? != Some(serial) {
-        bail!("the FIDO2 side of the selected YubiKey was not found");
+        return Err(super::Fido2Error::NoDevice.into());
     }
     drop(ch);
     Device::open_with_io_path(path, &super::socket::SOCKET_IO)

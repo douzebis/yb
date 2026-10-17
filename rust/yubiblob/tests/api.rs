@@ -226,8 +226,10 @@ fn store_list_fetch_remove() {
     let mut room = yubiblob::StoreInfo {
         object_count: 0,
         free_objects: 0,
+        kind: u32::MAX,
     };
     assert_eq!(unsafe { yubiblob_store_info(s, &mut room) }, YUBIBLOB_OK);
+    assert_eq!(room.kind, YUBIBLOB_KIND_LEGACY);
     assert_eq!(room.object_count, 16);
     assert!(room.free_objects < 16);
 

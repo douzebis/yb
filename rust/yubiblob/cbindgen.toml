@@ -19,3 +19,4 @@ no_includes = true
 "BlobInfo" = "yubiblob_blob_info_t"
 "StoreInfo" = "yubiblob_store_info_t"
 "Session" = "yubiblob_session_t"
+"TouchCallback" = "yubiblob_touch_callback_t"

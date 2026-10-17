@@ -52,6 +52,11 @@ pub enum Fido2Error {
          --allow-low-pin-attempts"
     )]
     FewAttempts(u32),
+    #[error(
+        "the FIDO2 side of the YubiKey was not found (is the FIDO application enabled, \
+         and /dev/hidraw accessible? see the documentation on udev rules)"
+    )]
+    NoDevice,
     #[error("FIDO2 error: {0}")]
     Other(String),
 }

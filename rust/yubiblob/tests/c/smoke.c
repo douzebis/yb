@@ -31,6 +31,11 @@
         }                                                                        \
     } while (0)
 
+static void count_touch(void* user)
+{
+    ++*(int*)user;
+}
+
 int main(int argc, char** argv)
 {
     const char* pin = argc > 1 ? argv[1] : "654321";
@@ -43,6 +48,13 @@ int main(int argc, char** argv)
 
     yubiblob_session_t* s = NULL;
     CHECK(yubiblob_open(0, 0, &s));
+
+    yubiblob_store_info_t room;
+    CHECK(yubiblob_store_info(s, &room));
+    EXPECT(room.kind == YUBIBLOB_KIND_LEGACY);
+    int touches = 0;
+    yubiblob_touch_callback_t callback = count_touch;
+    CHECK(yubiblob_set_touch_callback(s, callback, &touches));
 
     CHECK(yubiblob_store(s, "smoke-test", (const uint8_t*)content, sizeof content,
                          YUBIBLOB_STORE_ENCRYPT | YUBIBLOB_STORE_COMPRESS, p, pin_len));
@@ -76,6 +88,7 @@ int main(int argc, char** argv)
     yubiblob_buffer_free(data, len);
 
     CHECK(yubiblob_remove(s, "smoke-test", p, pin_len));
+    EXPECT(touches == 0); /* a legacy store asks for no touch */
     EXPECT(yubiblob_fetch(s, "smoke-test", p, pin_len, &data, &len) == YUBIBLOB_ERR_NOT_FOUND);
 
     yubiblob_close(s);
