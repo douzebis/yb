@@ -4,6 +4,7 @@
   fetchFromGitHub,
   installShellFiles,
   versionCheckHook,
+  libfido2,
   pcsclite,
   pkg-config,
   nix-update-script,
@@ -47,7 +48,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
     installShellFiles
   ];
 
-  buildInputs = lib.optionals stdenv.hostPlatform.isLinux [ pcsclite ];
+  buildInputs = [ libfido2 ] ++ lib.optionals stdenv.hostPlatform.isLinux [ pcsclite ];
 
   postInstall = lib.optionalString (stdenv.buildPlatform.canExecute stdenv.hostPlatform) ''
     installShellCompletion --cmd yb \
@@ -94,7 +95,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
         # littlefs2-sys (under piv-authenticator) runs bindgen.
         rustPlatform.bindgenHook
       ];
-      buildInputs = lib.optionals stdenv.hostPlatform.isLinux [ pcsclite ];
+      buildInputs = [ libfido2 ] ++ lib.optionals stdenv.hostPlatform.isLinux [ pcsclite ];
 
       postInstall = ''
         mkdir -p $out/libexec

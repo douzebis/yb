@@ -84,6 +84,9 @@ indicatif = "0.18"
 # Optional
 chrono = { version = "0.4", optional = true }
 
+[build-dependencies]
+pkg-config = "0.3"
+
 [dev-dependencies]
 yb-core = { path = ".", features = ["test-utils"] }  # enable test-utils for integration tests
 

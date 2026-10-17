@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: 2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+#
+# SPDX-License-Identifier: MIT
+
+[package]
+name        = "yb-fido2-emulator"
+version     = "0.1.0"
+edition     = "2021"
+license     = "MIT"
+publish     = false
+description = "A FIDO2 authenticator in memory (Google's OpenSK) behind libfido2's custom I/O functions, for yb's tests (spec 0028)"
+
+[dependencies]
+# Not on crates.io: pinned to a commit (spec 0028, "Tests").
+opensk = { git = "https://github.com/google/OpenSK", rev = "636d85b8ae492f30157cb38d9d84c3c40b9f1f0c", features = ["std"] }
+
+# The tests exercise yb-core's FIDO2 module through this emulator: they live
+# here, so that yb-core (published) does not depend on this crate.
+[dev-dependencies]
+yb-core = { path = "../yb-core", features = ["test-utils"] }
+anyhow  = "1"

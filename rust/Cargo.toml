@@ -4,7 +4,7 @@
 
 [workspace]
 resolver = "2"
-members = ["yb-core", "yb", "yb-piv-harness", "clap-complete-rawline", "yubiblob"]
+members = ["yb-core", "yb", "yb-piv-harness", "clap-complete-rawline", "yubiblob", "yb-fido2-emulator"]
 
 # The version of yb and yb-core, in one place (spec 0029 §6).  default.nix
 # reads it; bump both lines together (crates.io needs a version on the

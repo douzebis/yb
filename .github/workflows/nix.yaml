@@ -59,7 +59,7 @@ jobs:
 
   # Intel macOS, without Nix: nixpkgs dropped x86_64-darwin in 26.11, but
   # `cargo install yb` from crates.io still works there.  Plain cargo with a
-  # stable toolchain; PC/SC comes from macOS.  GitHub retires this runner in
+  # stable toolchain; PC/SC comes from macOS, libfido2 from Homebrew.  GitHub retires this runner in
   # August 2027.
   intel-macos:
     runs-on: macos-15-intel
@@ -68,6 +68,10 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      # libfido2, for post-quantum stores (spec 0028).
+      - name: Install libfido2
+        run: brew install libfido2 pkg-config
 
       - name: Run unit tests (tier-1)
         run: cargo test --locked --manifest-path rust/Cargo.toml -p yb-core -p yb --features yb/self-test
@@ -83,8 +87,8 @@ jobs:
       - name: Install Rust 1.86
         uses: dtolnay/rust-toolchain@1.86
 
-      - name: Install PC/SC
-        run: sudo apt-get install -y libpcsclite-dev
+      - name: Install PC/SC and libfido2
+        run: sudo apt-get install -y libpcsclite-dev libfido2-dev
 
       - name: Test the published crates
         run: >-
@@ -94,7 +98,8 @@ jobs:
   # libyubiblob, the C API (spec 0039), on Windows: plain cargo, against
   # the simulated YubiKey; PC/SC comes from Windows (WinSCard).  Keeps the
   # interface and the code free of Unix-only assumptions (yb itself is not
-  # shipped for Windows).
+  # shipped for Windows).  Without FIDO2 (no libfido2): legacy stores only
+  # (spec 0028).
   windows-libyubiblob:
     runs-on: windows-latest
     steps:

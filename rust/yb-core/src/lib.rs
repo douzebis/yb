@@ -39,6 +39,10 @@ pub mod crypto;
 
 pub mod context;
 pub mod errors;
+// Post-quantum stores need libfido2 (spec 0028, D9); not on Windows, where
+// yb is not shipped (only libyubiblob is checked there, on legacy stores).
+#[cfg(not(windows))]
+pub mod fido2;
 pub mod nvm;
 pub mod orchestrator;
 pub mod piv;

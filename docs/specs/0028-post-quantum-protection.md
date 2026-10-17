@@ -248,6 +248,14 @@ yb and libyubiblob always link libfido2 (through a small FFI layer).  The
 guided format recommends post-quantum stores, so a yb unable to open them
 would be confusing.
 
+Exception, for now: **Windows**, where yb is not shipped and only
+libyubiblob's portability is checked (CI): yb-core builds there without
+its FIDO2 module, so legacy stores only.  To lift later: a planned
+`keepassxc-yb` (KeePassXC with yb, legacy and post-quantum) will be built
+for Windows too.  That needs libfido2 on Windows (Yubico's builds or
+vcpkg) found at build time, and a Windows HID path for the serial
+(vendor command).
+
 ### D10. PINs: one per store kind, named everywhere
 
 | Store kind | PIN yb asks for | Retries | Unblocking |
@@ -694,6 +702,10 @@ The ABI is still 0 (spec 0039 G7: changes may break callers before
 - Documentation: access to `/dev/hidraw*` (udev `uaccess` rules from
   systemd or libfido2; on NixOS `services.udev.packages = [ pkgs.libfido2
   ]`, plus group `plugdev` for users without a local seat, e.g. over SSH).
+- **Install instructions** (READMEs, `contrib/keepassxc`): libfido2's
+  development files become a build requirement (Debian/Ubuntu
+  `libfido2-dev`, Fedora `libfido2-devel`, Homebrew `libfido2`), from the
+  release that brings post-quantum stores.
 - **READMEs** (GitHub, and crates.io for `yb`, `yb-core` and `yubiblob`):
   rework them with post-quantum stores; a poor README quickly shows in
   download counts.  Probably include a summary of the threat model (to be
@@ -912,9 +924,32 @@ yb selects a YubiKey by serial over PC/SC; FIDO2 devices are HID devices,
 and CTAP does not report a serial.  With several keys plugged in, yb must
 not ask the wrong one for the PIN (wrong attempts are not refundable).
 
-Decision: read the serial over FIDO HID as ykman does, and otherwise
-refuse unless exactly one FIDO2 device is present.  (Matching USB devices
-on Linux was rejected: likely to need privileges.)
+A YubiKey appears as two devices with nothing in common: a PIV reader
+(PC/SC) and a FIDO2 device (USB HID).  yb must pair the right two.
+Rules (revised 2026-10-17):
+
+| Situation | FIDO2 device | Its PIV store |
+|---|---|---|
+| `--serial` given | by serial (vendor command, below) | by serial |
+| one YubiKey connected | that one | that one |
+| several, no `--serial` | **touch selection** (no PIN) | by serial; where the serial cannot be read (Windows), by credential (below) |
+
+- **Touch selection:** CTAP 2.1 `authenticatorSelection` (libfido2
+  `fido_dev_get_touch_begin` / `fido_dev_get_touch_status`): every key
+  blinks, the one touched answers; no PIN, so no attempt is ever spent on
+  the wrong key.  One extra touch, only when several keys are connected
+  and no `--serial` is given (G3 holds otherwise).
+- **By credential:** read the descriptors of every candidate store (no
+  PIN), then one assertion on the chosen FIDO2 device, with the PIN,
+  **without a touch** (`up = false`) and without extension, listing all
+  their credential IDs: the key only recognizes the one it created, and
+  names it, which designates its store (`fido2::Device::find_credential`).
+  **Checked on hardware** (2026-10-17, YubiKey 5.7.1, `credProtect` 3):
+  answered in 0.2 s without a touch with the right ID among two; "no
+  credentials" for a stranger's ID only; no PIN attempt used.
+- Matching USB devices on Linux was rejected: likely to need privileges.
+- Never send the PIN to several FIDO2 devices in turn: a wrong PIN uses
+  one of a key's 8 attempts for good.
 
 - ykman (`yubikit/management.py`, `_ManagementCtapBackend`) sends Yubico's
   vendor CTAPHID command `READ_CONFIG` (`0x42`, `0xC2` on the wire) with

@@ -52,8 +52,9 @@ let
     nativeBuildInputs = [ pkgs.cargo pkgs.rustc pkgs.pkg-config ];
     # pcsclite is needed on Linux by all derivations that compile the crate.
     # On macOS, pcsc-sys links against PCSC.framework via the SDK sysroot
-    # automatically — no explicit buildInputs entry required.
-    buildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.pcsclite ];
+    # automatically — no explicit buildInputs entry required.  libfido2 on
+    # every platform (spec 0028, D9).
+    buildInputs = [ pkgs.libfido2 ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.pcsclite ];
   };
 
   # Shared dependency cache — rebuilt only when Cargo.lock or dep sources change.
@@ -113,7 +114,7 @@ let
   releaseShell = pkgs.mkShell {
     name = "yb-release";
     nativeBuildInputs = [ pkgs.cargo pkgs.rustc pkgs.pkg-config ];
-    buildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.pcsclite ];
+    buildInputs = [ pkgs.libfido2 ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.pcsclite ];
   };
 
   # ---------------------------------------------------------------------------
@@ -137,8 +138,8 @@ let
         version   = cargoVersion;
         src       = localSource;
         # From Cargo.lock: no hash to update when crates.io dependencies
-        # change.  Git dependencies (all under the harness's
-        # piv-authenticator) need one hash each; to refresh one, set it to
+        # change.  Git dependencies (under the harness's piv-authenticator,
+        # and OpenSK) need one hash each; to refresh one, set it to
         # pkgs.lib.fakeHash and copy the hash the build reports.
         cargoDeps = final.rustPlatform.importCargoLock {
           lockFile     = ./rust/Cargo.lock;
@@ -148,6 +149,8 @@ let
             "trussed-auth-backend-0.1.0" = "sha256-80XwpB+zU87wMoK+wX22QOGXeO1iXFknmtyzvlOhmns=";
             "trussed-rsa-alloc-0.3.0"    = "sha256-1AgAQb2Txfx+E7YI8XVBsgCmJaFZNXqGpXO/sjJB3pk=";
             "trussed-staging-0.3.2"      = "sha256-kMvVJ/f7S33wl14iJHantfWmoOGTpkSgYm72FenJewY=";
+            # The FIDO2 emulator of the tests (spec 0028).
+            "opensk-1.0.0"               = "sha256-qFDiF4IH+5FdLParw7TI854mdwZEI8Vzf2hwtUjyPps=";
           };
         };
       });
@@ -220,6 +223,8 @@ let
       bash-completion
       # Pinned bash to match clap CI (GitHub Actions runner = 5.2.21)
       bash521
+      # FIDO2, for post-quantum stores (spec 0028)
+      libfido2
     ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
       pcsclite
       ccid
