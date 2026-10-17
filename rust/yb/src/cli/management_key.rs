@@ -6,12 +6,9 @@
 //! YubiKey's management key (with ykman or another tool), store the new
 //! one, wrapped by FIDO2, in the post-quantum store's descriptor.
 
-use anyhow::{bail, Context as _, Result};
+use anyhow::{bail, Result};
 use clap::{Args, Subcommand};
-use yb_core::auxiliaries::DEFAULT_MANAGEMENT_KEY;
-use yb_core::errors::YbError;
-use yb_core::store::Store;
-use yb_core::{Context, Zeroizing};
+use yb_core::Context;
 
 #[derive(Args, Debug)]
 pub struct ManagementKeyArgs {
@@ -39,7 +36,12 @@ fn set(_: &Context) -> Result<()> {
 
 #[cfg(not(windows))]
 fn set(ctx: &Context) -> Result<()> {
+    use anyhow::Context as _;
+    use yb_core::auxiliaries::DEFAULT_MANAGEMENT_KEY;
+    use yb_core::errors::YbError;
     use yb_core::orchestrator::post_quantum::rewrap_management_key;
+    use yb_core::store::Store;
+    use yb_core::Zeroizing;
 
     let store = Store::from_device(&ctx.reader, ctx.piv.as_ref())?;
     let Some(descriptor) = store.descriptor() else {
