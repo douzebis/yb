@@ -152,10 +152,6 @@ Description:
 >     legacy.bin:     yblob object store image data
 >     random.bin:     data
 >
-> Without the patch, an empty chunk of a 16-object store shows as
-> GLS_BINARY_LSB_FIRST (Magdir/sgi, 4 belong 0x10000000); the new rule
-> is stronger (70 vs 40).
->
 > Format: https://github.com/douzebis/yb/blob/main/docs/YBLOB_FORMAT.md
 > (section 11).
 
