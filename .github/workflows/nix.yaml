@@ -29,6 +29,9 @@ jobs:
       - name: Check formatting (rustfmt)
         run: nix-build -A rust-fmt
 
+      - name: Check formatting (nixfmt)
+        run: nix-build -A nix-fmt
+
       - name: Check lints (clippy)
         run: nix-build -A rust-clippy
 

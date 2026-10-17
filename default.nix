@@ -232,6 +232,19 @@ let
     touch $out
   '';
 
+  # Every .nix file tracked by Git is formatted with nixfmt (the nixpkgs
+  # formatter, from the pinned nixpkgs), new files included.
+  nixFiles = pkgs.lib.fileset.toSource {
+    root = ./.;
+    fileset = pkgs.lib.fileset.intersection (pkgs.lib.fileset.gitTracked ./.) (
+      pkgs.lib.fileset.fileFilter (file: file.hasExt "nix") ./.
+    );
+  };
+  nixFmt = pkgs.runCommand "yb-nix-fmt" { nativeBuildInputs = [ pkgs.nixfmt ]; } ''
+    find ${nixFiles} -name '*.nix' -print0 | xargs -0 nixfmt --check
+    touch $out
+  '';
+
   # Built as nixpkgs's nixos/tests/all-tests.nix does.
   integrationTests = pkgsLocal.callPackage ./nixpkgs/nixos/tests/yb.nix {
     inherit (pkgsLocal.yb.passthru) ybPivHarnessTests;
@@ -362,6 +375,7 @@ in
   nixpkgs = pkgs; # the pinned nixpkgs, for builds against libyubiblob
   nixpkgs-staging-check = nixpkgsStagingCheck; # nixfmt + version of nixpkgs/
   invariants-check = invariantsCheck; # docs/invariants/ name existing tests
+  nix-fmt = nixFmt; # every tracked .nix file is nixfmt-formatted
   release-shell = releaseShell; # toolchain for scripts/check-crates
   integration-tests = integrationTests; # staged nixpkgs VM test (tier-2)
 }

@@ -1,0 +1,5 @@
+# Formatting-only commits, skipped by `git blame` (GitHub reads this file;
+# locally: git config blame.ignoreRevsFile .git-blame-ignore-revs).
+
+# nix: format default.nix and shell.nix with nixfmt
+afb9df281a5fda5b6c87fdee9bc16592af946817
