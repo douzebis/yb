@@ -12,6 +12,9 @@
 pub mod ffi;
 pub mod hid;
 pub mod pairing;
+// The emulator's socket, for the command-line tests (invariant 0012).
+#[cfg(all(unix, feature = "test-fixture"))]
+pub mod socket;
 
 use anyhow::{bail, Result};
 use std::ffi::{c_int, CStr, CString};
@@ -43,6 +46,12 @@ pub enum Fido2Error {
     PinNotSet,
     #[error("the FIDO2 credential is not on this YubiKey (FIDO2 reset?)")]
     NoCredential,
+    #[error(
+        "only {0} FIDO2 PIN attempts left; a blocked FIDO2 PIN cannot be unblocked, and \
+         would destroy post-quantum stores.  Make sure of your PIN, then retry with \
+         --allow-low-pin-attempts"
+    )]
+    FewAttempts(u32),
     #[error("FIDO2 error: {0}")]
     Other(String),
 }
@@ -160,6 +169,13 @@ impl Device {
     #[cfg(any(test, feature = "test-utils", feature = "test-fixture"))]
     pub fn open_with_io(io: &ffi::FidoDevIo) -> Result<Self> {
         Self::open_with("emulator", Some(io))
+    }
+
+    /// Open the device at `path` through custom I/O functions (the
+    /// emulator's socket).  Test builds only (invariant 0012).
+    #[cfg(feature = "test-fixture")]
+    pub fn open_with_io_path(path: &str, io: &ffi::FidoDevIo) -> Result<Self> {
+        Self::open_with(path, Some(io))
     }
 
     fn open_with(path: &str, io: Option<&ffi::FidoDevIo>) -> Result<Self> {

@@ -121,6 +121,37 @@ impl ResolvedKey {
     }
 }
 
+/// A post-quantum store's FIDO2 side for one command: the paired device
+/// and the FIDO2 PIN (spec 0028).
+#[cfg(not(windows))]
+pub struct PostQuantumSession {
+    pub device: crate::fido2::Device,
+    pin: Zeroizing<String>,
+}
+
+#[cfg(not(windows))]
+impl PostQuantumSession {
+    pub fn pin(&self) -> &str {
+        &self.pin
+    }
+
+    /// The protection of `descriptor`'s store, through this session.
+    pub fn protection<'a>(
+        &'a self,
+        ctx: &'a Context,
+        descriptor: &'a crate::store::Descriptor,
+    ) -> crate::orchestrator::post_quantum::PostQuantumProtection<'a> {
+        crate::orchestrator::post_quantum::PostQuantumProtection {
+            piv: ctx.piv.as_ref(),
+            reader: &ctx.reader,
+            descriptor,
+            fido2: &self.device,
+            pin: &self.pin,
+            on_touch: &*ctx.on_touch,
+        }
+    }
+}
+
 pub struct Context {
     pub reader: String,
     pub serial: u32,
@@ -141,6 +172,19 @@ pub struct Context {
     /// Called by `require_pin()` when `pin` is still `None`.
     /// Returns `Some(pin)` if it can supply one, `None` otherwise.
     pub pin_fn: Box<dyn Fn() -> Result<Option<String>>>,
+    /// The PIN from a non-interactive source (`--pin-stdin`, `YB_PIN`), as
+    /// given: it is the PIN of the store's kind (spec 0028, D10), never the
+    /// PIV factory PIN `pin` may start with.
+    explicit_pin: Option<Zeroizing<String>>,
+    /// The FIDO2 PIN of a post-quantum store, once resolved.
+    fido2_pin: RefCell<Option<Zeroizing<String>>>,
+    /// Asks for the FIDO2 PIN ("FIDO2 PIN:"), when none was given.
+    pub fido2_pin_fn: Box<dyn Fn() -> Result<Option<String>>>,
+    /// Called before each FIDO2 operation that waits for a touch.
+    pub on_touch: Box<dyn Fn()>,
+    /// `--allow-low-pin-attempts`: try the FIDO2 PIN even with 3 attempts
+    /// or fewer left (spec 0028, D10).
+    pub allow_low_pin_attempts: bool,
     pub piv: Arc<dyn PivBackend>,
     pub debug: bool,
     pub quiet: bool,
@@ -191,8 +235,13 @@ impl Context {
             management_key: opts.management_key,
             defaults,
             allow_defaults: opts.allow_defaults,
+            explicit_pin: opts.pin.clone().map(Zeroizing::new),
             pin: initial_pin(opts.pin, &defaults),
             pin_fn,
+            fido2_pin: RefCell::new(None),
+            fido2_pin_fn: Box::new(|| Ok(None)),
+            on_touch: Box::new(|| {}),
+            allow_low_pin_attempts: false,
             piv,
             debug,
             quiet,
@@ -233,8 +282,13 @@ impl Context {
             management_key: None,
             defaults,
             allow_defaults: false,
+            explicit_pin: pin.clone().map(Zeroizing::new),
             pin: initial_pin(pin, &defaults),
             pin_fn: Box::new(|| Ok(None)),
+            fido2_pin: RefCell::new(None),
+            fido2_pin_fn: Box::new(|| Ok(None)),
+            on_touch: Box::new(|| {}),
+            allow_low_pin_attempts: false,
             piv: backend,
             debug,
             quiet: false,
@@ -272,11 +326,58 @@ impl Context {
         *self.pin.borrow_mut() = Some(Zeroizing::new(pin.to_owned()));
     }
 
+    /// The FIDO2 PIN of a post-quantum store: the PIN given
+    /// non-interactively (`--pin-stdin`, `YB_PIN`), else the FIDO2 prompt.
+    /// Never the PIV factory PIN (spec 0028, D10).
+    pub fn require_fido2_pin(&self) -> Result<Option<Zeroizing<String>>> {
+        if let Some(pin) = self.fido2_pin.borrow().as_ref() {
+            return Ok(Some(pin.clone()));
+        }
+        let pin = match &self.explicit_pin {
+            Some(p) => Some(p.clone()),
+            None => (self.fido2_pin_fn)()?.map(Zeroizing::new),
+        };
+        self.fido2_pin.borrow_mut().clone_from(&pin);
+        Ok(pin)
+    }
+
+    /// Refuse to use the FIDO2 PIN of `device` when it is not set, blocked,
+    /// or down to 3 attempts or fewer without `--allow-low-pin-attempts`
+    /// (spec 0028, D10).  Uses no attempt.
+    #[cfg(not(windows))]
+    pub fn check_fido2_pin_attempts(&self, device: &crate::fido2::Device) -> Result<()> {
+        use crate::fido2::Fido2Error;
+        if !device.has_pin() {
+            return Err(Fido2Error::PinNotSet.into());
+        }
+        match device.pin_retries()? {
+            0 => Err(Fido2Error::PinBlocked.into()),
+            n if n <= 3 && !self.allow_low_pin_attempts => Err(Fido2Error::FewAttempts(n).into()),
+            _ => Ok(()),
+        }
+    }
+
+    /// What a command needs for a post-quantum store (spec 0028): the
+    /// FIDO2 device of the selected YubiKey (paired as in "Finding the
+    /// FIDO2 side"), its attempts checked, and the FIDO2 PIN.
+    #[cfg(not(windows))]
+    pub fn post_quantum_session(&self) -> Result<PostQuantumSession> {
+        let piv_yubikeys = self.piv.list_devices().map(|d| d.len()).unwrap_or(1);
+        let device =
+            crate::fido2::pairing::open_yubikey(self.serial, piv_yubikeys, &*self.on_touch)?;
+        self.check_fido2_pin_attempts(&device)?;
+        let Some(pin) = self.require_fido2_pin()? else {
+            bail!("the FIDO2 PIN is required (prompt, --pin-stdin or YB_PIN)");
+        };
+        Ok(PostQuantumSession { device, pin })
+    }
+
     /// Forget the PIN and the resolved management key, overwriting them in
     /// memory.  Library sessions hold secrets for one call only (spec 0039
     /// G5).
     pub fn clear_secrets(&self) {
         *self.pin.borrow_mut() = None;
+        *self.fido2_pin.borrow_mut() = None;
         *self.resolved.borrow_mut() = None;
     }
 

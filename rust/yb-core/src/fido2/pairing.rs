@@ -122,6 +122,10 @@ pub fn open_yubikey(
     piv_yubikeys: usize,
     on_touch_select: &dyn Fn(),
 ) -> Result<Device> {
+    #[cfg(all(unix, feature = "test-fixture"))]
+    if let Some(path) = super::socket::socket_path() {
+        return open_emulator(serial, &path);
+    }
     let candidates = yubikeys()?;
     if candidates.is_empty() {
         bail!(
@@ -143,6 +147,18 @@ pub fn open_yubikey(
             Ok(devices.into_iter().nth(chosen).expect("chosen among them"))
         }
     }
+}
+
+/// The emulator of the command-line tests, checked by serial as a
+/// YubiKey is.
+#[cfg(all(unix, feature = "test-fixture"))]
+fn open_emulator(serial: u32, path: &str) -> Result<Device> {
+    let mut ch = super::socket::SocketChannel::open(path)?;
+    if super::hid::read_serial(&mut ch)? != Some(serial) {
+        bail!("the FIDO2 side of the selected YubiKey was not found");
+    }
+    drop(ch);
+    Device::open_with_io_path(path, &super::socket::SOCKET_IO)
 }
 
 #[cfg(test)]

@@ -17,6 +17,6 @@ opensk = { git = "https://github.com/google/OpenSK", rev = "636d85b8ae492f30157c
 # The tests exercise yb-core's FIDO2 module through this emulator: they live
 # here, so that yb-core (published) does not depend on this crate.
 [dev-dependencies]
-yb-core = { path = "../yb-core", features = ["test-utils"] }
+yb-core = { path = "../yb-core", features = ["test-utils", "test-fixture"] }
 anyhow  = "1"
 rand    = "0.8"

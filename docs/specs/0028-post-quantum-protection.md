@@ -825,8 +825,12 @@ For `yubiblob` this is an API change (0.2.0).
 - Unit and orchestrator tests: OpenSK in-process (test-only crate, OpenSK
   from git, pinned), next to `VirtualPiv`.
 - Command-line tests (`yb_cli_tests`, run the `yb` binary repeatedly with
-  `YB_FIXTURE`): the emulator's state is saved in a file between
-  processes, like the PIV fixture (see "Tests").
+  `YB_FIXTURE`): the test runner serves the emulator on a Unix socket
+  (`yb_fido2_emulator::server`), named by `YB_FIDO2_SOCKET`; a `yb` built
+  with `test-fixture` talks to it (`yb_core::fido2::socket`), so the
+  emulator's state lasts for the whole run.  (Revised 2026-10-17 from a
+  state file: `yb` is published and cannot depend on the emulator, which
+  is not; the socket needs no dependency.)
 - Hardware tests on YubiKeys, extended to post-quantum stores.
 
 **5. Order of work.**

@@ -216,3 +216,80 @@ pub unsafe extern "C" fn io_read(
         None => -1,
     }
 }
+
+/// The emulator served on a Unix socket, for processes that are not the
+/// test (the `yb` binaries run by the command-line tests): one thread owns
+/// the emulator, so its state lasts for the whole run.  See
+/// `yb_core::fido2::socket` for the protocol.
+#[cfg(unix)]
+pub mod server {
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixListener;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+    use std::sync::Arc;
+
+    /// A running emulator server.
+    pub struct Server {
+        pub path: PathBuf,
+        touch: Arc<AtomicBool>,
+        touches: Arc<AtomicU32>,
+    }
+
+    impl Server {
+        /// Serve a brand-new emulator reporting `serial`, on a socket at
+        /// `path` (removed first if it exists).
+        pub fn start(path: &Path, serial: Option<u32>) -> std::io::Result<Self> {
+            let _ = std::fs::remove_file(path);
+            let listener = UnixListener::bind(path)?;
+            let touch = Arc::new(AtomicBool::new(true));
+            let touches = Arc::new(AtomicU32::new(0));
+            let (t, n) = (Arc::clone(&touch), Arc::clone(&touches));
+            std::thread::spawn(move || {
+                super::power_on(serial);
+                for stream in listener.incoming() {
+                    let Ok(mut stream) = stream else { continue };
+                    let mut buf = [0u8; super::REPORT_LEN + 1];
+                    while stream.read_exact(&mut buf).is_ok() {
+                        super::set_touch(t.load(Ordering::SeqCst));
+                        // SAFETY: `buf` holds REPORT_LEN + 1 bytes.
+                        unsafe {
+                            super::io_write(std::ptr::null_mut(), buf.as_ptr(), buf.len());
+                        }
+                        let mut report = [0u8; super::REPORT_LEN];
+                        // SAFETY: `report` holds REPORT_LEN writable bytes.
+                        while unsafe {
+                            super::io_read(
+                                std::ptr::null_mut(),
+                                report.as_mut_ptr(),
+                                report.len(),
+                                0,
+                            )
+                        } > 0
+                        {
+                            if stream.write_all(&report).is_err() {
+                                break;
+                            }
+                        }
+                        n.store(super::touches(), Ordering::SeqCst);
+                    }
+                }
+            });
+            Ok(Self {
+                path: path.to_owned(),
+                touch,
+                touches,
+            })
+        }
+
+        /// Whether the next touches are given (default) or refused.
+        pub fn set_touch(&self, given: bool) {
+            self.touch.store(given, Ordering::SeqCst);
+        }
+
+        /// The touches asked for so far.
+        pub fn touches(&self) -> u32 {
+            self.touches.load(Ordering::SeqCst)
+        }
+    }
+}
