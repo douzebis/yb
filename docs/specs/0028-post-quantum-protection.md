@@ -439,8 +439,9 @@ the FIDO2 PIN (UV) and a touch.  `HKDF(K2, label)` is HKDF-SHA256 with
 | `0x5F_0000` | store descriptor (D13) |
 | `0x5F_0001` … `0x5F_00NN` | chunks 1 … N (N = 1–32, default 32) |
 
-Chunk indices are 1 … N; `NEXT_CHUNK` refers to them; index 0 is never a
-chunk.
+Chunk `i` (0 … N−1) is object `0x5F_0001 + i`; `NEXT_CHUNK` holds chunk
+indices.  (Revised 2026-10-17 from "indices 1 … N": with a per-store
+first object ID, the legacy chunk code is reused unchanged.)
 
 ### Store descriptor (object `0x5F_0000`)
 

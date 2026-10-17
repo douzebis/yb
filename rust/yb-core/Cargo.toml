@@ -104,3 +104,7 @@ required-features = ["test-utils"]
 [[test]]
 name              = "protection_tests"
 required-features = ["test-utils"]
+
+[[test]]
+name              = "post_quantum_store_tests"
+required-features = ["test-utils"]

@@ -5,6 +5,9 @@
 //! Binary store: serialization / deserialization of PIV objects.
 
 pub mod constants;
+pub mod descriptor;
+
+pub use descriptor::Descriptor;
 
 use anyhow::{bail, Context, Result};
 use constants::*;
@@ -59,8 +62,14 @@ pub struct Object {
 }
 
 impl Object {
-    /// Deserialize a PIV object from raw bytes.
+    /// Deserialize an object of a legacy store from raw bytes.
     pub fn from_bytes(index: u8, data: &[u8]) -> Result<Self> {
+        Self::from_bytes_with_magic(index, data, YBLOB_MAGIC)
+    }
+
+    /// Deserialize an object whose magic must be `expected_magic`
+    /// (`YBLOB_MAGIC` or `PQ_MAGIC`).
+    pub fn from_bytes_with_magic(index: u8, data: &[u8], expected_magic: u32) -> Result<Self> {
         let object_size = data.len();
         if !(OBJECT_MIN_SIZE..=OBJECT_MAX_SIZE).contains(&object_size) {
             bail!(
@@ -70,8 +79,8 @@ impl Object {
         }
 
         let magic = read_u32_le(data, MAGIC_O)?;
-        if magic != YBLOB_MAGIC {
-            bail!("object {index}: bad magic 0x{magic:08x} (expected 0x{YBLOB_MAGIC:08x})");
+        if magic != expected_magic {
+            bail!("object {index}: bad magic 0x{magic:08x} (expected 0x{expected_magic:08x})");
         }
 
         let object_count = data[OBJECT_COUNT_O];
@@ -237,10 +246,11 @@ impl Object {
         let index = self.index;
         let object_count = self.object_count;
         let store_key_slot = self.store_key_slot;
+        let yblob_magic = self.yblob_magic;
         *self = Self {
             index,
             object_size: OBJECT_MIN_SIZE, // write compact 9-byte sentinel
-            yblob_magic: crate::store::constants::YBLOB_MAGIC,
+            yblob_magic,
             object_count,
             store_key_slot,
             age: 0,
@@ -351,8 +361,42 @@ pub struct ObjectParams {
 // Store
 // ---------------------------------------------------------------------------
 
+/// The kind of a store (spec 0028, D1): its protection, its magic, and
+/// where its chunks start.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StoreKind {
+    /// PIV encryption and signatures; chunks from `0x5F_0000`.
+    Legacy,
+    /// FIDO2 `hmac-secret`; descriptor in `0x5F_0000`, chunks from
+    /// `0x5F_0001`.
+    PostQuantum(Box<Descriptor>),
+}
+
+impl StoreKind {
+    /// The magic of the store's chunks.
+    pub fn magic(&self) -> u32 {
+        match self {
+            Self::Legacy => YBLOB_MAGIC,
+            Self::PostQuantum(_) => PQ_MAGIC,
+        }
+    }
+
+    /// The object ID of chunk 0.
+    pub fn first_object_id(&self) -> u32 {
+        match self {
+            Self::Legacy => OBJECT_ID_ZERO,
+            Self::PostQuantum(_) => PQ_FIRST_CHUNK_ID,
+        }
+    }
+
+    pub fn is_post_quantum(&self) -> bool {
+        matches!(self, Self::PostQuantum(_))
+    }
+}
+
 /// The full set of PIV objects that make up one yb store.
 pub struct Store {
+    pub kind: StoreKind,
     pub reader: String,
     pub object_size: usize,
     pub object_count: u8,
@@ -393,6 +437,9 @@ impl Store {
         let raw = piv
             .read_object(reader, first_id)
             .with_context(|| format!("reading object 0x{first_id:06x}"))?;
+        if raw.len() >= 4 && read_u32_le(&raw, MAGIC_O)? == PQ_MAGIC {
+            return Self::from_device_post_quantum(reader, piv, &raw);
+        }
 
         let first =
             Object::from_bytes(0, &raw).with_context(|| "parsing object 0 (store header)")?;
@@ -426,6 +473,7 @@ impl Store {
         let store_age = objects.iter().map(|o| o.age).max().unwrap_or(0);
 
         Ok(Self {
+            kind: StoreKind::Legacy,
             reader: reader.to_owned(),
             object_size,
             object_count,
@@ -434,6 +482,59 @@ impl Store {
             store_age,
             missing,
         })
+    }
+
+    /// Read a post-quantum store whose descriptor (object 0) is `raw0`.
+    fn from_device_post_quantum(reader: &str, piv: &dyn PivBackend, raw0: &[u8]) -> Result<Self> {
+        let descriptor = Descriptor::from_bytes(raw0).context("parsing the store descriptor")?;
+        let object_count = descriptor.object_count;
+        let mut store = Self {
+            kind: StoreKind::PostQuantum(Box::new(descriptor)),
+            reader: reader.to_owned(),
+            object_size: OBJECT_MIN_SIZE,
+            object_count,
+            store_key_slot: 0,
+            objects: Vec::with_capacity(object_count as usize),
+            store_age: 0,
+            missing: Vec::new(),
+        };
+        for i in 0..object_count {
+            let id = store.object_id(i);
+            let obj = match piv.read_object(reader, id) {
+                Ok(raw) => Object::from_bytes_with_magic(i, &raw, PQ_MAGIC)
+                    .with_context(|| format!("parsing object 0x{id:06x}"))?,
+                // A write the card refused for lack of memory deletes its
+                // object (spec 0038): read it as empty, to be rewritten.
+                Err(e) if is_absent(&e) => {
+                    let mut obj = store.make_object(ObjectParams {
+                        index: i,
+                        age: 0,
+                        chunk_pos: 0,
+                        next_chunk: 0,
+                    });
+                    obj.reset();
+                    store.missing.push(i);
+                    obj
+                }
+                Err(e) => return Err(e).with_context(|| format!("reading object 0x{id:06x}")),
+            };
+            store.objects.push(obj);
+        }
+        store.store_age = store.objects.iter().map(|o| o.age).max().unwrap_or(0);
+        Ok(store)
+    }
+
+    /// The PIV object ID of chunk `index`.
+    pub fn object_id(&self, index: u8) -> u32 {
+        self.kind.first_object_id() + u32::from(index)
+    }
+
+    /// The post-quantum descriptor, if this is a post-quantum store.
+    pub fn descriptor(&self) -> Option<&Descriptor> {
+        match &self.kind {
+            StoreKind::Legacy => None,
+            StoreKind::PostQuantum(d) => Some(d),
+        }
     }
 
     /// Write a fresh empty store to the device (yb format).
@@ -450,6 +551,7 @@ impl Store {
     ) -> Result<Self> {
         // Build a temporary store (no objects yet) so we can use make_object.
         let mut store = Self {
+            kind: StoreKind::Legacy,
             reader: reader.to_owned(),
             object_size: OBJECT_MIN_SIZE,
             object_count,
@@ -469,6 +571,56 @@ impl Store {
         }
         // A failed format has its own messages (spec 0022): no partial note.
         store.write_dirty(piv, management_key, false, &[])?;
+        Ok(store)
+    }
+
+    /// Write a fresh empty post-quantum store (spec 0028, D13): the empty
+    /// chunks, then the deletion of yb objects beyond them, then the
+    /// descriptor **last**, so that a store exists only once its
+    /// descriptor is written (invariant 0016).  The credential and the
+    /// wrapped management key in `descriptor` are made by the caller.
+    pub fn format_post_quantum(
+        reader: &str,
+        piv: &dyn PivBackend,
+        descriptor: Descriptor,
+        management_key: &str,
+    ) -> Result<Self> {
+        let object_count = descriptor.object_count;
+        let descriptor_bytes = descriptor.to_bytes();
+        let mut store = Self {
+            kind: StoreKind::PostQuantum(Box::new(descriptor)),
+            reader: reader.to_owned(),
+            object_size: OBJECT_MIN_SIZE,
+            object_count,
+            store_key_slot: 0,
+            objects: Vec::with_capacity(object_count as usize),
+            store_age: 0,
+            missing: Vec::new(),
+        };
+        for i in 0..object_count {
+            store.objects.push(store.make_object(ObjectParams {
+                index: i,
+                age: 0,
+                chunk_pos: 0,
+                next_chunk: 0,
+            }));
+        }
+        store.write_dirty(piv, management_key, false, &[])?;
+        // Objects of an earlier, larger store would stay behind, holding
+        // card memory: delete them, but only objects yb wrote (a yb magic).
+        for id in store.object_id(object_count)..=LAST_YB_OBJECT_ID {
+            if let Ok(raw) = piv.read_object(reader, id) {
+                let magic = (raw.len() >= 4)
+                    .then(|| read_u32_le(&raw, MAGIC_O).ok())
+                    .flatten();
+                if matches!(magic, Some(YBLOB_MAGIC | PQ_MAGIC)) {
+                    piv.write_object(reader, id, &[], management_key)
+                        .with_context(|| format!("deleting object 0x{id:06x}"))?;
+                }
+            }
+        }
+        piv.write_object(reader, OBJECT_ID_ZERO, &descriptor_bytes, management_key)
+            .context("writing the store descriptor")?;
         Ok(store)
     }
 
@@ -597,7 +749,7 @@ impl Store {
 
         for (written, idx) in dirty.iter().enumerate() {
             let obj = &mut self.objects[*idx as usize];
-            let id = OBJECT_ID_ZERO + obj.index as u32;
+            let id = self.kind.first_object_id() + obj.index as u32;
             let data = obj.to_bytes();
             let result = piv.write_object(&self.reader, id, &data, management_key);
             if note_partial && written > 0 {
@@ -696,7 +848,7 @@ impl Store {
         Object {
             index: p.index,
             object_size: self.object_size,
-            yblob_magic: crate::store::constants::YBLOB_MAGIC,
+            yblob_magic: self.kind.magic(),
             object_count: self.object_count,
             store_key_slot: self.store_key_slot,
             age: p.age,

@@ -31,6 +31,15 @@ pub const DEFAULT_OBJECT_COUNT: u8 = 32;
 /// First PIV object data-object ID (object index 0).
 pub const OBJECT_ID_ZERO: u32 = 0x5f_0000;
 
+/// Magic of every object of a post-quantum store, "Fred FOB 2" (spec 0028,
+/// D12): older yb, which expects `YBLOB_MAGIC`, stops before any write.
+pub const PQ_MAGIC: u32 = 0xF2ED_F0B2;
+/// A post-quantum store's first chunk; object 0 is its descriptor (D13).
+pub const PQ_FIRST_CHUNK_ID: u32 = OBJECT_ID_ZERO + 1;
+/// The last object ID any yb store uses: legacy objects 0x5F_0000-1F,
+/// post-quantum chunks up to 0x5F_0020.
+pub const LAST_YB_OBJECT_ID: u32 = OBJECT_ID_ZERO + 32;
+
 /// Default PIV slot used for the ECDH encryption key (slot 0x82).
 pub const DEFAULT_KEY_SLOT: u8 = 0x82;
 

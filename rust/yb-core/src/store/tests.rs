@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 use super::constants::*;
-use super::{write_u24_le, write_u32_le, Object, Store};
+use super::{write_u24_le, write_u32_le, Object, Store, StoreKind};
 
 // ---------------------------------------------------------------------------
 // Object helpers
@@ -167,6 +167,7 @@ fn make_store_in_memory(object_count: u8, object_size: usize) -> Store {
         })
         .collect();
     Store {
+        kind: StoreKind::Legacy,
         reader: "mock".to_owned(),
         object_size,
         object_count,
