@@ -138,6 +138,7 @@ let
       pkgs.cargo
       pkgs.rustc
       pkgs.pkg-config
+      pkgs.yq-go # scripts/check-release-workflow (invariant 0018)
     ];
     buildInputs = [
       pkgs.libfido2

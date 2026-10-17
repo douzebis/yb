@@ -152,6 +152,10 @@ jobs:
       - name: Package and test the crates.io crates
         run: nix-shell default.nix -A release-shell --run scripts/check-crates
 
+      # The release workflow's gates (invariant 0018, spec 0043).
+      - name: Check the release workflow
+        run: nix-shell default.nix -A release-shell --run scripts/check-release-workflow
+
   # Integration tests: NixOS VM with pcscd + vsmartcard + piv-authenticator,
   # the staged nixpkgs VM test against the locally built yb.
   # Linux only: requires KVM.

@@ -10,6 +10,9 @@
 //! YB_FIDO2_PIN=... cargo test ... -- --ignored --nocapture   # with touches
 //! ```
 
+// yb-core has no FIDO2 module on Windows (spec 0028 D9, spec 0043).
+#![cfg(not(windows))]
+
 use yb_core::fido2::{self, Device, Fido2Error, YUBICO_VENDOR_ID};
 
 fn yubikey_path() -> String {

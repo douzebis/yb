@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+#
+# SPDX-License-Identifier: MIT
+
+# Invariant 0018 (release files): check .github/workflows/publish.yaml.
+#
+# - Every upload job runs in an environment (the maintainer's approval, v*
+#   tags only), on tags only, after the build jobs it publishes.
+# - Only upload jobs can publish (contents: write, or the id-token of
+#   trusted publishing); the Windows build gets only what its provenance
+#   attestations need.
+# - The Windows build runs the tests before building.
+# - No build enables the test-fixture feature (invariant 0012).
+#
+# Run from the repository root, in the release shell (yq):
+#   nix-shell default.nix -A release-shell --run scripts/check-release-workflow
+
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+wf=.github/workflows/publish.yaml
+status=0
+fail() {
+    echo "check-release-workflow: $*" >&2
+    status=1
+}
+q() { yq -r "$1" "$wf"; }
+
+# The upload jobs and the build jobs each must wait for.
+declare -A uploads=(
+    [publish]="verify"
+    [publish-windows]="verify windows"
+)
+declare -A environments=(
+    [publish]="crates-io"
+    [publish-windows]="github-release"
+)
+
+[ "$(q '.permissions.contents')" = read ] || fail "the default token permission is not read"
+
+for job in $(q '.jobs | keys | .[]'); do
+    case "$(q ".jobs.\"$job\".environment | tag")" in
+        '!!map') env=$(q ".jobs.\"$job\".environment.name") ;;
+        '!!str') env=$(q ".jobs.\"$job\".environment") ;;
+        *) env= ;;
+    esac
+    if [ -n "${uploads[$job]:-}" ]; then
+        [ "$env" = "${environments[$job]}" ] ||
+            fail "$job: environment is '$env', not '${environments[$job]}'"
+        case "$(q ".jobs.\"$job\".if // \"\"")" in
+            *"startsWith(github.ref, 'refs/tags/v')"*) ;;
+            *) fail "$job: does not run on v* tags only" ;;
+        esac
+        needs=" $(q ".jobs.\"$job\".needs | [] + . | join(\" \")") "
+        for build in ${uploads[$job]}; do
+            [[ $needs == *" $build "* ]] || fail "$job: does not wait for $build"
+        done
+    else
+        [ -z "$env" ] || fail "$job: environment '$env' on a job that is not an upload"
+        [ "$(q ".jobs.\"$job\".permissions.contents // \"read\"")" = read ] ||
+            fail "$job: can write the repository"
+        idtoken=$(q ".jobs.\"$job\".permissions.\"id-token\" // \"none\"")
+        attest=$(q ".jobs.\"$job\".permissions.attestations // \"none\"")
+        if [ "$idtoken" = write ] && [ "$attest" != write ]; then
+            fail "$job: id-token without attestations (trusted publishing outside an upload job?)"
+        fi
+    fi
+done
+
+for job in "${!uploads[@]}"; do
+    [ "$(q ".jobs | has(\"$job\")")" = true ] || fail "no upload job $job"
+done
+
+# The Windows build: the tests before the build.
+names=$(q '.jobs.windows.steps[].name // ""')
+test_at=$(grep -n '^Test the published crates$' <<<"$names" | cut -d: -f1 || true)
+build_at=$(grep -n '^Build yb and libyubiblob$' <<<"$names" | cut -d: -f1 || true)
+if [ -z "$test_at" ] || [ -z "$build_at" ] || [ "$test_at" -gt "$build_at" ]; then
+    fail "windows: the tests do not run before the build"
+fi
+
+runs=$(q '.jobs[].steps[].run // ""')
+if grep -q 'test-fixture' <<<"$runs"; then
+    fail "a step runs with test-fixture (invariant 0012)"
+fi
+
+[ $status -eq 0 ] && echo "check-release-workflow: ok"
+exit $status
