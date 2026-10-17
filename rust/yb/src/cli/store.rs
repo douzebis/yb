@@ -44,7 +44,13 @@ pub struct StoreArgs {
 }
 
 pub fn run(ctx: &Context, args: &StoreArgs) -> Result<()> {
-    ctx.enforce_default_policy(SecretOp::Store)?;
+    let mut store = Store::from_device(&ctx.reader, ctx.piv.as_ref())?;
+    store.sanitize();
+    let post_quantum = store.kind.is_post_quantum();
+    // The PIV credentials protect legacy stores only (spec 0024, 0028).
+    if !post_quantum {
+        ctx.enforce_default_policy(SecretOp::Store)?;
+    }
     let encrypted = !args.unencrypted;
     let compression = match args.no_compress {
         true => Compression::None,
@@ -97,8 +103,10 @@ pub fn run(ctx: &Context, args: &StoreArgs) -> Result<()> {
         entries
     };
 
-    let mut store = Store::from_device(&ctx.reader, ctx.piv.as_ref())?;
-    store.sanitize();
+    if post_quantum {
+        check_capacity(&store, &entries, encrypted)?;
+        return store_post_quantum(ctx, &mut store, &entries, encrypted, compression);
+    }
 
     let peer_pk = if encrypted {
         Some(ctx.get_public_key(store.store_key_slot)?)
@@ -108,40 +116,7 @@ pub fn run(ctx: &Context, args: &StoreArgs) -> Result<()> {
 
     let mgmt_key = ctx.management_key_for_write()?;
 
-    // All-or-nothing capacity check (S2), replaying the stores in order: a
-    // blob's new copy, signature trailer included, must fit in the objects
-    // free at that point; an existing copy is freed only after its
-    // replacement is written (spec 0031), so it counts as occupied until
-    // then.  Compression only makes blobs smaller, so this never refuses a
-    // store that would fit.
-    let mut free = store.free_count();
-    for (name, payload) in &entries {
-        let needed = objects_for(&store, name, payload.len(), encrypted);
-        let old_copy = store
-            .find_head(name)
-            .map_or(0, |head| store.chunk_chain(head.index()).len());
-        if needed > free {
-            let replacing = if old_copy > 0 {
-                "; replacing a blob needs room for the new copy before the old one is \
-                 removed"
-            } else {
-                ""
-            };
-            let message = if entries.len() == 1 {
-                format!(
-                    "store is full — remove some blobs first (need {needed} object(s), \
-                     {free} free{replacing})"
-                )
-            } else {
-                format!(
-                    "store is full — not enough room for '{name}' (need {needed} \
-                     object(s), {free} free{replacing}); nothing was stored"
-                )
-            };
-            return Err(StatusError::new(ExitStatus::StoreFull, message).into());
-        }
-        free = free - needed + old_copy;
-    }
+    check_capacity(&store, &entries, encrypted)?;
 
     // Refuse to write blobs that the slot key could not decrypt or whose
     // signatures would not verify (spec 0022 §6).
@@ -178,30 +153,126 @@ pub fn run(ctx: &Context, args: &StoreArgs) -> Result<()> {
                 name
             );
         }
-        if !ctx.quiet {
-            eprintln!(
-                "Stored '{}' ({} bytes{})",
-                name,
-                payload.len(),
-                if encrypted { ", encrypted" } else { "" }
-            );
-        }
+        report_stored(ctx, name, payload.len(), encrypted);
     }
 
     ctx.complete_pending_repairs();
     Ok(())
 }
 
+/// Store into a post-quantum store (spec 0028): the FIDO2 PIN, one touch
+/// per blob; each blob is protected before anything is written.
+#[cfg(not(windows))]
+fn store_post_quantum(
+    ctx: &Context,
+    store: &mut Store,
+    entries: &[(String, Vec<u8>)],
+    encrypted: bool,
+    compression: Compression,
+) -> Result<()> {
+    let session = ctx.post_quantum_session()?;
+    let descriptor = store.descriptor().cloned().expect("a post-quantum store");
+    let protection = session.protection(ctx, &descriptor);
+    for (name, payload) in entries {
+        let ok = orchestrator::store_blob_with(
+            store,
+            ctx.piv.as_ref(),
+            &protection,
+            name,
+            payload,
+            encrypted,
+            compression,
+            None,
+        )?;
+        if !ok {
+            bail!("store is full while writing '{name}' — this should not happen");
+        }
+        report_stored(ctx, name, payload.len(), encrypted);
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn store_post_quantum(
+    _: &Context,
+    _: &mut Store,
+    _: &[(String, Vec<u8>)],
+    _: bool,
+    _: Compression,
+) -> Result<()> {
+    bail!("post-quantum stores are not supported on Windows")
+}
+
+fn report_stored(ctx: &Context, name: &str, len: usize, encrypted: bool) {
+    if !ctx.quiet {
+        eprintln!(
+            "Stored '{}' ({} bytes{})",
+            name,
+            len,
+            if encrypted { ", encrypted" } else { "" }
+        );
+    }
+}
+
+/// All-or-nothing capacity check (S2), replaying the stores in order: a
+/// blob's new copy, trailer included, must fit in the objects free at that
+/// point; an existing copy is freed only after its replacement is written
+/// (spec 0031), so it counts as occupied until then.  Compression only
+/// makes blobs smaller, so this never refuses a store that would fit.
+fn check_capacity(store: &Store, entries: &[(String, Vec<u8>)], encrypted: bool) -> Result<()> {
+    let mut free = store.free_count();
+    for (name, payload) in entries {
+        let needed = objects_for(store, name, payload.len(), encrypted);
+        let old_copy = store
+            .find_head(name)
+            .map_or(0, |head| store.chunk_chain(head.index()).len());
+        if needed > free {
+            let replacing = if old_copy > 0 {
+                "; replacing a blob needs room for the new copy before the old one is \
+                 removed"
+            } else {
+                ""
+            };
+            let message = if entries.len() == 1 {
+                format!(
+                    "store is full — remove some blobs first (need {needed} object(s), \
+                     {free} free{replacing})"
+                )
+            } else {
+                format!(
+                    "store is full — not enough room for '{name}' (need {needed} \
+                     object(s), {free} free{replacing}); nothing was stored"
+                )
+            };
+            return Err(StatusError::new(ExitStatus::StoreFull, message).into());
+        }
+        free = free - needed + old_copy;
+    }
+    Ok(())
+}
+
 /// Objects a blob needs, as the capacity check counts them: the payload
-/// before compression, encryption overhead and signature trailer included
-/// (an upper bound).  `yb self-test` uses it to check a "store full".
+/// before compression, encryption overhead and trailer included (an upper
+/// bound).  `yb self-test` uses it to check a "store full".
 pub fn objects_for(store: &Store, name: &str, payload_len: usize, encrypted: bool) -> usize {
+    let name_len = name.len().min(MAX_NAME_LEN);
+    #[cfg(not(windows))]
+    if store.kind.is_post_quantum() {
+        use yb_core::orchestrator::post_quantum::{
+            PQ_ENCRYPTION_OVERHEAD, PQ_TRAILER_LEN_ENCRYPTED, PQ_TRAILER_LEN_PLAIN,
+        };
+        let len = if encrypted {
+            payload_len + PQ_ENCRYPTION_OVERHEAD + PQ_TRAILER_LEN_ENCRYPTED
+        } else {
+            payload_len + PQ_TRAILER_LEN_PLAIN
+        };
+        return yb_core::orchestrator::chunks_needed(len, name_len, store.object_size);
+    }
     let enc_len = if encrypted {
         // Approximate: actual encrypted size = payload + GCM overhead.
         payload_len + yb_core::crypto::GCM_OVERHEAD
     } else {
         payload_len
     };
-    let name_len = name.len().min(MAX_NAME_LEN);
     yb_core::orchestrator::objects_needed(enc_len, name_len, store.object_size)
 }

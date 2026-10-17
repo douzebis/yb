@@ -111,6 +111,9 @@ pub struct CardReport {
     pub slot: SlotReport,
     /// The key/certificate match check, when the caller ran it.
     pub key_check: Option<SlotKeyCheck>,
+    /// A post-quantum store (spec 0028): no store slot, so no slot and
+    /// key/certificate lines.
+    pub post_quantum: bool,
 }
 
 impl CardReport {
@@ -132,6 +135,7 @@ impl CardReport {
                 certificate: read_slot_certificate(reader, piv, slot),
             },
             key_check: None,
+            post_quantum: false,
         }
     }
 
@@ -156,8 +160,11 @@ impl CardReport {
             credential_item("PIN", self.pin),
             credential_item("PUK", self.puk),
             self.management_key_item(),
-            self.slot_item(),
         ];
+        if self.post_quantum {
+            return items;
+        }
+        items.push(self.slot_item());
         let check = match self.key_check {
             Some(SlotKeyCheck::Match) => Some(("match".to_owned(), Severity::Ok)),
             Some(SlotKeyCheck::Mismatch) => Some((

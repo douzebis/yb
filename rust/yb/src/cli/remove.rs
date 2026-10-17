@@ -22,9 +22,13 @@ pub struct RemoveArgs {
 }
 
 pub fn run(ctx: &Context, args: &RemoveArgs) -> Result<()> {
-    ctx.enforce_default_policy(SecretOp::Remove)?;
     let mut store = Store::from_device(&ctx.reader, ctx.piv.as_ref())?;
     store.sanitize();
+    let post_quantum = store.kind.is_post_quantum();
+    // The PIV credentials protect legacy stores only (spec 0024, 0028).
+    if !post_quantum {
+        ctx.enforce_default_policy(SecretOp::Remove)?;
+    }
 
     let all_blob_names: Vec<String> = list_blobs(&store).into_iter().map(|b| b.name).collect();
 
@@ -36,9 +40,14 @@ pub fn run(ctx: &Context, args: &RemoveArgs) -> Result<()> {
     }
 
     // One write pass, heads first (spec 0031).
-    let mgmt_key = ctx.management_key_for_write()?;
-    remove_blobs(&mut store, ctx.piv.as_ref(), &to_remove, &mgmt_key)?;
-    ctx.complete_pending_repairs();
+    if post_quantum {
+        let mgmt_key = post_quantum_management_key(ctx, &store)?;
+        remove_blobs(&mut store, ctx.piv.as_ref(), &to_remove, &mgmt_key)?;
+    } else {
+        let mgmt_key = ctx.management_key_for_write()?;
+        remove_blobs(&mut store, ctx.piv.as_ref(), &to_remove, &mgmt_key)?;
+        ctx.complete_pending_repairs();
+    }
 
     if !ctx.quiet {
         for name in &to_remove {
@@ -47,4 +56,18 @@ pub fn run(ctx: &Context, args: &RemoveArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// The management key of a post-quantum store (spec 0028, D7, D11): the
+/// FIDO2 PIN and one touch, checked against the card.
+#[cfg(not(windows))]
+fn post_quantum_management_key(ctx: &Context, store: &Store) -> Result<yb_core::Zeroizing<String>> {
+    let session = ctx.post_quantum_session()?;
+    let descriptor = store.descriptor().expect("a post-quantum store");
+    session.protection(ctx, descriptor).management_key()
+}
+
+#[cfg(windows)]
+fn post_quantum_management_key(_: &Context, _: &Store) -> Result<yb_core::Zeroizing<String>> {
+    anyhow::bail!("post-quantum stores are not supported on Windows")
 }

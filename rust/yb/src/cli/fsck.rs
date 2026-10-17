@@ -36,6 +36,11 @@ pub struct FsckArgs {
     /// its certificate.
     #[arg(long = "check-key")]
     pub check_key: bool,
+
+    /// Post-quantum stores: also check every blob's seal (the FIDO2 PIN,
+    /// one touch per blob).
+    #[arg(long = "seals")]
+    pub seals: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -59,10 +64,14 @@ pub fn check(ctx: &Context, args: &FsckArgs, out: &mut dyn Write) -> Result<bool
         StorePresence::Present(ref store) => store.store_key_slot,
         _ => DEFAULT_KEY_SLOT,
     };
+    let post_quantum =
+        matches!(&presence, StorePresence::Present(store) if store.kind.is_post_quantum());
 
     let mut report = CardReport::build(ctx, slot);
+    // A post-quantum store has no store slot (spec 0028).
+    report.post_quantum = post_quantum;
     // A certificate without a P-256 key is already reported as an error.
-    if args.check_key && !report.slot.certificate_unusable() {
+    if args.check_key && !post_quantum && !report.slot.certificate_unusable() {
         if ctx.require_pin()?.is_none() {
             return Err(YbError::new("a PIN is needed for --check-key")
                 .fix("set YB_PIN, use --pin-stdin, or run yb in a terminal")
@@ -70,7 +79,8 @@ pub fn check(ctx: &Context, args: &FsckArgs, out: &mut dyn Write) -> Result<bool
         }
         report.key_check = Some(ctx.check_slot_key(slot)?);
     }
-    writeln!(out, "{}", report.render(Some("use --check-key"), true))?;
+    let hint = (!post_quantum).then_some("use --check-key");
+    writeln!(out, "{}", report.render(hint, true))?;
     let card_ok = report.severity() < Severity::Error;
 
     let store_ok = match presence {
@@ -84,6 +94,9 @@ pub fn check(ctx: &Context, args: &FsckArgs, out: &mut dyn Write) -> Result<bool
         StorePresence::Unreadable(reason) => {
             writeln!(out, "Store: unreadable ({reason})")?;
             false
+        }
+        StorePresence::Present(store) if post_quantum => {
+            check_post_quantum_store(ctx, args, &store, out)?
         }
         StorePresence::Present(store) => check_store(ctx, args, &store, out)?,
     };
@@ -290,6 +303,142 @@ fn check_store(ctx: &Context, args: &FsckArgs, store: &Store, out: &mut dyn Writ
 }
 
 /// The `--nvm` line.  `store_ids` are the objects counted as store.
+/// The store part of the report for a post-quantum store (spec 0028): the
+/// descriptor, each blob's checksum (no PIN), then the credential and the
+/// management key (FIDO2 PIN, one touch), and with `--seals` each blob's
+/// seal (one touch per blob).  Writes nothing to the card.
+#[cfg(not(windows))]
+fn check_post_quantum_store(
+    ctx: &Context,
+    args: &FsckArgs,
+    store: &Store,
+    out: &mut dyn Write,
+) -> Result<bool> {
+    use yb_core::orchestrator::fetch_blob_with;
+    use yb_core::orchestrator::post_quantum::quick_check;
+    use yb_core::orchestrator::SigVerdict;
+
+    let descriptor = store.descriptor().expect("a post-quantum store");
+    let heads: Vec<&Object> = store.objects.iter().filter(|o| o.is_head()).collect();
+    let reachable: HashSet<u8> = heads
+        .iter()
+        .flat_map(|h| store.chunk_chain(h.index()))
+        .collect();
+    let free_count = store
+        .objects
+        .iter()
+        .filter(|o| o.is_empty() || !reachable.contains(&o.index()))
+        .count();
+    writeln!(
+        out,
+        "Store: post-quantum, {} objects, age {}",
+        store.object_count, store.store_age
+    )?;
+    writeln!(
+        out,
+        "Credential: {}-byte ID; management key: {}",
+        descriptor.credential_id.len(),
+        algorithm_name(descriptor.mgmt_algo)
+    )?;
+    writeln!(
+        out,
+        "Blobs: {} stored, {} objects free",
+        heads.len(),
+        free_count
+    )?;
+    for &idx in &store.missing {
+        writeln!(
+            out,
+            "warning: object 0x{:06X} is absent from the card (a write ran out of card \
+             memory); the next write recreates it",
+            store.object_id(idx)
+        )?;
+    }
+
+    let mut healthy = true;
+    if !heads.is_empty() {
+        writeln!(out)?;
+        let mut corrupted = 0;
+        for head in &heads {
+            let verdict = quick_check(head, store);
+            if verdict == SigVerdict::Corrupted {
+                corrupted += 1;
+            }
+            writeln!(out, "  {:<30} {verdict}", quote_name(&head.blob_name))?;
+        }
+        writeln!(out)?;
+        writeln!(
+            out,
+            "Integrity: {} checksum OK, {corrupted} corrupted (checksums need no PIN; \
+             seals are checked by fetch, and by --seals)",
+            heads.len() - corrupted
+        )?;
+        healthy &= corrupted == 0;
+    }
+
+    // The credential and the management key (D11), then the seals.
+    match ctx.post_quantum_session() {
+        Err(e) => {
+            writeln!(out, "ERROR: FIDO2: {e:#}")?;
+            healthy = false;
+        }
+        Ok(session) => {
+            let protection = session.protection(ctx, descriptor);
+            match protection.management_key() {
+                Ok(_) => writeln!(
+                    out,
+                    "FIDO2: the store's credential answers; the management key matches"
+                )?,
+                Err(e) => {
+                    writeln!(out, "ERROR: {e:#}")?;
+                    healthy = false;
+                }
+            }
+            if args.seals && healthy {
+                for head in &heads {
+                    let name = quote_name(&head.blob_name);
+                    match fetch_blob_with(store, &protection, &head.blob_name) {
+                        Ok(_) => writeln!(out, "  {name:<30} seal OK")?,
+                        Err(e) => {
+                            writeln!(out, "  {name:<30} ERROR: {e:#}")?;
+                            healthy = false;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if args.nvm {
+        let mut store_ids: HashSet<u32> = reachable.iter().map(|&i| store.object_id(i)).collect();
+        store_ids.insert(OBJECT_ID_ZERO);
+        write_nvm(ctx, &store_ids, out)?;
+    }
+    Ok(healthy)
+}
+
+#[cfg(windows)]
+fn check_post_quantum_store(
+    _: &Context,
+    _: &FsckArgs,
+    _: &Store,
+    out: &mut dyn Write,
+) -> Result<bool> {
+    writeln!(out, "Store: post-quantum (not supported on Windows)")?;
+    Ok(false)
+}
+
+/// The name of a management key algorithm, as ykman shows it.
+#[cfg(not(windows))]
+fn algorithm_name(algo: yb_core::MgmtAlgo) -> &'static str {
+    match algo {
+        yb_core::MgmtAlgo::Tdes => "3DES",
+        yb_core::MgmtAlgo::Aes128 => "AES-128",
+        yb_core::MgmtAlgo::Aes192 => "AES-192",
+        yb_core::MgmtAlgo::Aes256 => "AES-256",
+    }
+}
+
 fn write_nvm(ctx: &Context, store_ids: &HashSet<u32>, out: &mut dyn Write) -> Result<()> {
     match scan_nvm(&ctx.reader, ctx.piv.as_ref(), store_ids) {
         Ok(usage) => writeln!(

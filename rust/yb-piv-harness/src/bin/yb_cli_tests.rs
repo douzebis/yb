@@ -676,6 +676,235 @@ fn list_readers_with_fixture() {
 // Runner (libtest-mimic: libtest's output and flags, spec 0029 §4)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Post-quantum stores (spec 0028)
+// ---------------------------------------------------------------------------
+
+/// The emulated YubiKey's serial (the fixture's) and the user's own
+/// management key (the factory one is refused for post-quantum stores).
+const PQ_SERIAL: u32 = 88_888_888;
+const OWN_MGMT: &str = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718";
+
+/// A simulated YubiKey with a post-quantum store, and the FIDO2 emulator
+/// served to the yb processes (`YB_FIDO2_SOCKET`).  The FIDO2 PIN is the
+/// fixture's PIN, given as `YB_PIN`.
+struct PqFixture {
+    fx: Fixture,
+    server: yb_fido2_emulator::server::Server,
+}
+
+impl PqFixture {
+    fn new() -> Self {
+        use yb_core::fido2::{pairing::open_yubikey, socket::SOCKET_ENV};
+        use yb_core::orchestrator::post_quantum::create_post_quantum_store;
+        use yb_core::piv::{MgmtAlgo, PivBackend, VirtualPiv};
+
+        let fx = Fixture::new();
+        let server = yb_fido2_emulator::server::Server::start(
+            &fx.dir.path().join("fido2.sock"),
+            Some(PQ_SERIAL),
+        )
+        .unwrap();
+        // The store is made here, through the same emulator.
+        std::env::set_var(SOCKET_ENV, &server.path);
+        let piv = VirtualPiv::from_fixture(&fx.path()).unwrap();
+        let reader = piv.reader_name();
+        piv.set_management_key(&reader, MGMT, OWN_MGMT, MgmtAlgo::Tdes)
+            .unwrap();
+        let dev = open_yubikey(PQ_SERIAL, 1, &|| {}).unwrap();
+        dev.set_pin(PIN).unwrap();
+        create_post_quantum_store(
+            &piv,
+            &reader,
+            &dev,
+            PIN,
+            OWN_MGMT,
+            MgmtAlgo::Tdes,
+            16,
+            &|| {},
+        )
+        .unwrap();
+        drop(dev);
+        piv.save_fixture(&fx.path()).unwrap();
+        Self { fx, server }
+    }
+
+    fn run(&self, extra_env: &[(&str, &str)], args: &[&str]) -> Output {
+        let socket = self.server.path.to_str().unwrap().to_owned();
+        let mut env = vec![("YB_FIDO2_SOCKET", socket.as_str())];
+        env.extend_from_slice(extra_env);
+        self.fx.run(&env, args)
+    }
+
+    /// Run, expect `code`; return (stdout, stderr).
+    fn expect(&self, code: i32, extra_env: &[(&str, &str)], args: &[&str]) -> (String, String) {
+        let out = self.run(extra_env, args);
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert_eq!(
+            out.status.code(),
+            Some(code),
+            "{args:?}\nstdout: {stdout}\nstderr: {stderr}"
+        );
+        (stdout, stderr)
+    }
+
+    fn file(&self, name: &str, content: &[u8]) -> String {
+        tmp_file(self.fx.dir.path(), name, content)
+            .to_str()
+            .unwrap()
+            .to_owned()
+    }
+
+    /// Change one byte of object `id` of the simulated card.
+    fn corrupt_object(&self, id: u32, offset: usize) {
+        use yb_core::piv::{PivBackend, VirtualPiv};
+        let piv = VirtualPiv::from_fixture(&self.fx.path()).unwrap();
+        let reader = piv.reader_name();
+        let mut raw = piv.read_object(&reader, id).unwrap();
+        raw[offset] ^= 0x01;
+        piv.write_object(&reader, id, &raw, OWN_MGMT).unwrap();
+        piv.save_fixture(&self.fx.path()).unwrap();
+    }
+}
+
+fn pq_store_fetch_one_touch_per_blob() {
+    let f = PqFixture::new();
+    let secret = f.file("secret.txt", &b"pq secret ".repeat(300));
+    let public = f.file("public.txt", b"public text");
+    let before = f.server.touches();
+    let (_, err) = f.expect(0, &[], &["store", &secret]);
+    assert!(err.contains("Touch your YubiKey"), "{err}");
+    f.expect(0, &[], &["store", "-u", &public]);
+    assert_eq!(f.server.touches() - before, 2, "one touch per stored blob");
+
+    let (out, _) = f.expect(0, &[], &["fetch", "-p", "secret.txt"]);
+    assert_eq!(out.as_bytes(), b"pq secret ".repeat(300));
+    let (out, _) = f.expect(0, &[], &["fetch", "-p", "public.txt"]);
+    assert_eq!(out, "public text");
+    assert_eq!(f.server.touches() - before, 4, "one touch per fetched blob");
+
+    let (out, _) = f.expect(0, &[], &["ls"]);
+    assert_eq!(out, "public.txt\nsecret.txt\n");
+    let (out, _) = f.expect(0, &[], &["ls", "-l"]);
+    assert!(out.starts_with("post-quantum store\n"), "{out}");
+}
+
+fn pq_remove() {
+    let f = PqFixture::new();
+    let path = f.file("gone.txt", b"bye");
+    f.expect(0, &[], &["store", "-u", &path]);
+    let before = f.server.touches();
+    f.expect(0, &[], &["rm", "gone.txt"]);
+    assert_eq!(f.server.touches() - before, 1, "one touch for rm");
+    let (out, _) = f.expect(0, &[], &["ls"]);
+    assert_eq!(out, "");
+}
+
+fn pq_fsck() {
+    let f = PqFixture::new();
+    let path = f.file("doc.txt", b"document");
+    f.expect(0, &[], &["store", &path]);
+    let (out, _) = f.expect(0, &[], &["fsck"]);
+    assert!(out.contains("Store: post-quantum, 16 objects"), "{out}");
+    assert!(out.contains("CHECKSUM OK"), "{out}");
+    assert!(out.contains("the store's credential answers"), "{out}");
+    assert!(!out.contains("Slot 0x"), "{out}");
+    let (out, _) = f.expect(0, &[], &["fsck", "--seals"]);
+    assert!(out.contains("seal OK"), "{out}");
+}
+
+/// A corrupted blob: `ls` and `fetch` exit 4, before any touch.
+fn pq_corruption_exits_4() {
+    let f = PqFixture::new();
+    let path = f.file("doc.txt", &[0x42; 500]);
+    f.expect(0, &[], &["store", "-u", &path]);
+    f.corrupt_object(0x5F_0001, 60);
+    let before = f.server.touches();
+    let (out, _) = f.expect(4, &[], &["ls"]);
+    assert!(out.contains("CORRUPTED"), "{out}");
+    let (_, err) = f.expect(4, &[], &["fetch", "-p", "doc.txt"]);
+    assert!(err.contains("corrupted"), "{err}");
+    assert_eq!(f.server.touches(), before, "no touch for a corrupted blob");
+}
+
+/// Invariant 0015: after a PIV reset (objects written back with the factory
+/// key), fetch and store exit 4 and nothing is written.
+fn pq_piv_reset_exits_4() {
+    use yb_core::piv::{PivBackend, VirtualPiv};
+    let f = PqFixture::new();
+    let path = f.file("doc.txt", b"kept");
+    f.expect(0, &[], &["store", &path]);
+
+    let piv = VirtualPiv::from_fixture(&f.fx.path()).unwrap();
+    let reader = piv.reader_name();
+    let saved: Vec<(u32, Vec<u8>)> = (0..=16u32)
+        .filter_map(|i| {
+            piv.read_object(&reader, 0x5F_0000 + i)
+                .ok()
+                .map(|r| (0x5F_0000 + i, r))
+        })
+        .collect();
+    piv.reset_piv(&reader).unwrap();
+    for (id, raw) in &saved {
+        piv.write_object(
+            &reader,
+            *id,
+            raw,
+            "010203040506070801020304050607080102030405060708",
+        )
+        .unwrap();
+    }
+    piv.save_fixture(&f.fx.path()).unwrap();
+    // The card's objects (the write counter is not saved in the fixture).
+    let objects = |piv: &VirtualPiv| -> Vec<Option<Vec<u8>>> {
+        (0..=32u32)
+            .map(|i| piv.read_object(&reader, 0x5F_0000 + i).ok())
+            .collect()
+    };
+    let before = objects(&piv);
+
+    let (_, err) = f.expect(4, &[], &["fetch", "-p", "doc.txt"]);
+    assert!(err.contains("management key does not match"), "{err}");
+    let new = f.file("new.txt", b"x");
+    f.expect(4, &[], &["store", &new]);
+    let piv = VirtualPiv::from_fixture(&f.fx.path()).unwrap();
+    assert!(objects(&piv) == before, "a store after a PIV reset wrote");
+}
+
+fn pq_refused_touch() {
+    let f = PqFixture::new();
+    let path = f.file("doc.txt", b"data");
+    f.server.set_touch(false);
+    let (_, err) = f.expect(1, &[], &["store", &path]);
+    assert!(err.contains("not touched"), "{err}");
+    f.server.set_touch(true);
+    let (out, _) = f.expect(0, &[], &["ls"]);
+    assert_eq!(out, "", "a refused touch stored something");
+}
+
+/// D10: with 3 FIDO2 PIN attempts or fewer left, yb refuses to try the PIN
+/// unless --allow-low-pin-attempts (invariant 0017).
+fn pq_low_pin_attempts() {
+    let f = PqFixture::new();
+    let path = f.file("doc.txt", b"data");
+    f.expect(0, &[], &["store", "-u", &path]);
+    for _ in 0..5 {
+        f.server.replug();
+        let (_, err) = f.expect(1, &[("YB_PIN", "000000")], &["fetch", "-p", "doc.txt"]);
+        assert!(err.contains("wrong FIDO2 PIN"), "{err}");
+    }
+    f.server.replug();
+    let (_, err) = f.expect(1, &[], &["fetch", "-p", "doc.txt"]);
+    assert!(err.contains("only 3 FIDO2 PIN attempts left"), "{err}");
+    let (out, _) = f.expect(
+        0,
+        &[],
+        &["--allow-low-pin-attempts", "fetch", "-p", "doc.txt"],
+    );
+    assert_eq!(out, "data");
+}
+
 fn main() {
     macro_rules! test {
         ($f:ident) => {
@@ -687,6 +916,13 @@ fn main() {
     }
     let tests = vec![
         test!(format_creates_store),
+        test!(pq_store_fetch_one_touch_per_blob),
+        test!(pq_remove),
+        test!(pq_fsck),
+        test!(pq_corruption_exits_4),
+        test!(pq_piv_reset_exits_4),
+        test!(pq_refused_touch),
+        test!(pq_low_pin_attempts),
         test!(store_and_list),
         test!(store_multiple_files_list),
         test!(store_name_override),

@@ -234,6 +234,7 @@ pub mod server {
         pub path: PathBuf,
         touch: Arc<AtomicBool>,
         touches: Arc<AtomicU32>,
+        replug: Arc<AtomicBool>,
     }
 
     impl Server {
@@ -244,11 +245,19 @@ pub mod server {
             let listener = UnixListener::bind(path)?;
             let touch = Arc::new(AtomicBool::new(true));
             let touches = Arc::new(AtomicU32::new(0));
-            let (t, n) = (Arc::clone(&touch), Arc::clone(&touches));
+            let replug = Arc::new(AtomicBool::new(false));
+            let (t, n, r) = (
+                Arc::clone(&touch),
+                Arc::clone(&touches),
+                Arc::clone(&replug),
+            );
             std::thread::spawn(move || {
                 super::power_on(serial);
                 for stream in listener.incoming() {
                     let Ok(mut stream) = stream else { continue };
+                    if r.swap(false, Ordering::SeqCst) {
+                        super::power_cycle();
+                    }
                     let mut buf = [0u8; super::REPORT_LEN + 1];
                     while stream.read_exact(&mut buf).is_ok() {
                         super::set_touch(t.load(Ordering::SeqCst));
@@ -279,7 +288,14 @@ pub mod server {
                 path: path.to_owned(),
                 touch,
                 touches,
+                replug,
             })
+        }
+
+        /// Unplug and replug the emulated key before the next connection
+        /// (lifts the block after 3 wrong PINs in a row).
+        pub fn replug(&self) {
+            self.replug.store(true, Ordering::SeqCst);
         }
 
         /// Whether the next touches are given (default) or refused.

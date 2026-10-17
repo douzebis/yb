@@ -3382,6 +3382,7 @@ dependencies = [
  "trussed",
  "vpicc",
  "yb-core",
+ "yb-fido2-emulator",
 ]
 
 [[package]]

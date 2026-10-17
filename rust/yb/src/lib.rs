@@ -44,6 +44,11 @@ pub struct Cli {
     #[arg(long = "allow-defaults")]
     pub allow_defaults: bool,
 
+    /// Try the FIDO2 PIN even with 3 attempts or fewer left (post-quantum
+    /// stores): a blocked FIDO2 PIN cannot be unblocked.
+    #[arg(long = "allow-low-pin-attempts")]
+    pub allow_low_pin_attempts: bool,
+
     /// YubiKey PIN [deprecated, removed in yb 0.7: use YB_PIN, --pin-stdin, or the prompt].
     #[arg(long = "pin", hide = true)]
     pub pin_deprecated: Option<String>,

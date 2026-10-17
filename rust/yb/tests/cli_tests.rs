@@ -554,6 +554,7 @@ mod fsck_tests {
         let args = FsckArgs {
             verbose: false,
             nvm: false,
+            seals: false,
             check_key: false,
         };
         fsck_run(&ctx, &args).unwrap();
@@ -570,6 +571,7 @@ mod fsck_tests {
         let args = FsckArgs {
             verbose: true,
             nvm: false,
+            seals: false,
             check_key: false,
         };
         fsck_run(&ctx, &args).unwrap();
@@ -1038,6 +1040,7 @@ mod fsck_tests {
         let args = FsckArgs {
             verbose: false,
             nvm: false,
+            seals: false,
             check_key: false,
         };
         fsck_check(&ctx, &args, &mut out).unwrap();
@@ -1052,6 +1055,7 @@ mod fsck_tests {
         let args = FsckArgs {
             verbose: false,
             nvm: false,
+            seals: false,
             check_key: false,
         };
         let healthy = fsck_check(ctx, &args, &mut out).unwrap();
@@ -1959,6 +1963,7 @@ mod default_policy_tests {
                 &FsckArgs {
                     verbose: false,
                     nvm: false,
+                    seals: false,
                     check_key: false,
                 },
             )
@@ -2688,6 +2693,7 @@ mod guided_tests {
             verbose: false,
             nvm: false,
             check_key,
+            seals: false,
         };
         let healthy = fsck_check(ctx, &args, &mut out).unwrap();
         (healthy, String::from_utf8(out).unwrap())
@@ -3013,6 +3019,7 @@ mod rotation_tests {
             let args = FsckArgs {
                 verbose: false,
                 nvm: false,
+                seals: false,
                 check_key: false,
             };
             let healthy = fsck_check(ctx, &args, &mut out).unwrap();
@@ -3173,6 +3180,7 @@ mod invariant_tests {
         FsckArgs {
             verbose: true,
             nvm: false,
+            seals: false,
             check_key: false,
         }
     }

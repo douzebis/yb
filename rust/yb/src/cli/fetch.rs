@@ -39,7 +39,11 @@ pub struct FetchArgs {
 }
 
 pub fn run(ctx: &Context, args: &FetchArgs) -> Result<()> {
-    ctx.enforce_default_policy(SecretOp::Fetch)?;
+    let store = Store::from_device(&ctx.reader, ctx.piv.as_ref())?;
+    // The PIV credentials protect legacy stores only (spec 0024, 0028).
+    if !store.kind.is_post_quantum() {
+        ctx.enforce_default_policy(SecretOp::Fetch)?;
+    }
     // Validate mutually exclusive output flags.
     if args.stdout && args.output.is_some() {
         bail!("--stdout and --output are mutually exclusive");
@@ -55,7 +59,6 @@ pub fn run(ctx: &Context, args: &FetchArgs) -> Result<()> {
         eprintln!("Warning: --extract is deprecated; saving to files is now the default behavior");
     }
 
-    let store = Store::from_device(&ctx.reader, ctx.piv.as_ref())?;
     let all_blobs = orchestrator::list_blobs(&store);
 
     // Resolve patterns to matched blob names.
@@ -68,6 +71,10 @@ pub fn run(ctx: &Context, args: &FetchArgs) -> Result<()> {
             "--stdout / --output require exactly one matching blob, but {} matched",
             matched.len()
         );
+    }
+
+    if store.kind.is_post_quantum() {
+        return fetch_post_quantum(ctx, args, &store, &matched);
     }
 
     // Signatures are checked against the slot's certificate (no PIN) before
@@ -132,37 +139,75 @@ pub fn run(ctx: &Context, args: &FetchArgs) -> Result<()> {
         .ok_or_else(|| {
             StatusError::new(ExitStatus::NotFound, format!("blob '{name}' not found"))
         })?;
-
-        if args.stdout {
-            std::io::stdout().write_all(&data)?;
-        } else if let Some(ref path) = args.output {
-            std::fs::write(path, &data)?;
-            if !ctx.quiet {
-                eprintln!(
-                    "Fetched '{}' → {} ({} bytes)",
-                    name,
-                    path.display(),
-                    data.len()
-                );
-            }
-        } else {
-            // Save to file: use output_dir / blob_name.
-            let dest = if let Some(ref dir) = args.output_dir {
-                dir.join(name)
-            } else {
-                PathBuf::from(name)
-            };
-            std::fs::write(&dest, &data)?;
-            if !ctx.quiet {
-                eprintln!(
-                    "Fetched '{}' → {} ({} bytes)",
-                    name,
-                    dest.display(),
-                    data.len()
-                );
-            }
-        }
+        write_output(ctx, args, name, &data)?;
     }
 
+    Ok(())
+}
+
+/// Fetch from a post-quantum store (spec 0028): every matched blob's
+/// checksum (no PIN), then its seal and the management key (FIDO2 PIN, one
+/// touch per blob), all before anything is written (invariant 0006).
+#[cfg(not(windows))]
+fn fetch_post_quantum(
+    ctx: &Context,
+    args: &FetchArgs,
+    store: &Store,
+    matched: &[String],
+) -> Result<()> {
+    use yb_core::orchestrator::post_quantum::{quick_check, IntegrityError};
+    for name in matched {
+        let head = store.find_head(name).ok_or_else(|| {
+            StatusError::new(ExitStatus::NotFound, format!("blob '{name}' not found"))
+        })?;
+        if quick_check(head, store) == SigVerdict::Corrupted {
+            return Err(anyhow::Error::from(IntegrityError::Corrupted(name.clone()))
+                .context("nothing was fetched"));
+        }
+    }
+    let session = ctx.post_quantum_session()?;
+    let descriptor = store.descriptor().expect("a post-quantum store");
+    let protection = session.protection(ctx, descriptor);
+    let mut fetched = Vec::with_capacity(matched.len());
+    for name in matched {
+        let data = orchestrator::fetch_blob_with(store, &protection, name)
+            .map_err(|e| e.context("nothing was fetched"))?
+            .ok_or_else(|| {
+                StatusError::new(ExitStatus::NotFound, format!("blob '{name}' not found"))
+            })?;
+        fetched.push((name, data));
+    }
+    for (name, data) in fetched {
+        write_output(ctx, args, name, &data)?;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn fetch_post_quantum(_: &Context, _: &FetchArgs, _: &Store, _: &[String]) -> Result<()> {
+    bail!("post-quantum stores are not supported on Windows")
+}
+
+/// Write one fetched blob where the arguments say.
+fn write_output(ctx: &Context, args: &FetchArgs, name: &str, data: &[u8]) -> Result<()> {
+    let dest = if args.stdout {
+        std::io::stdout().write_all(data)?;
+        return Ok(());
+    } else if let Some(ref path) = args.output {
+        path.clone()
+    } else if let Some(ref dir) = args.output_dir {
+        dir.join(name)
+    } else {
+        PathBuf::from(name)
+    };
+    std::fs::write(&dest, data)?;
+    if !ctx.quiet {
+        eprintln!(
+            "Fetched '{}' → {} ({} bytes)",
+            name,
+            dest.display(),
+            data.len()
+        );
+    }
     Ok(())
 }

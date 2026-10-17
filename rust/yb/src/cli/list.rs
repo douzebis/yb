@@ -64,9 +64,17 @@ pub fn run(ctx: &Context, args: &ListArgs) -> Result<()> {
     let heads: Vec<_> = store.objects.iter().filter(|o| o.is_head()).collect();
     let mut verdict_map: std::collections::HashMap<&str, SigVerdict> =
         std::collections::HashMap::new();
+    let post_quantum = store.kind.is_post_quantum();
     for head in &heads {
-        let v = check_blob_signature(head, &store, verifying_key.as_ref());
+        let v = if post_quantum {
+            quick_check(head, &store)
+        } else {
+            check_blob_signature(head, &store, verifying_key.as_ref())
+        };
         verdict_map.insert(head.blob_name.as_str(), v);
+    }
+    if post_quantum && args.long {
+        println!("post-quantum store");
     }
 
     let mut blobs = orchestrator::list_blobs(&store);
@@ -120,7 +128,8 @@ pub fn run(ctx: &Context, args: &ListArgs) -> Result<()> {
     }
 
     if any_corrupted {
-        std::process::exit(1);
+        // A post-quantum store's checksum (spec 0028): status 4.
+        std::process::exit(if post_quantum { 4 } else { 1 });
     }
 
     Ok(())
@@ -138,4 +147,15 @@ fn format_mtime(unix: u32) -> String {
     } else {
         dt.format("%b %e  %Y").to_string()
     }
+}
+
+/// The checksum check of a post-quantum blob (spec 0028, D5).
+#[cfg(not(windows))]
+fn quick_check(head: &yb_core::store::Object, store: &Store) -> SigVerdict {
+    yb_core::orchestrator::post_quantum::quick_check(head, store)
+}
+
+#[cfg(windows)]
+fn quick_check(_: &yb_core::store::Object, _: &Store) -> SigVerdict {
+    SigVerdict::Unverifiable
 }

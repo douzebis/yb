@@ -89,6 +89,22 @@ fn run(cli: Cli) -> Result<()> {
     let _ = FIRMWARE.set(ctx.firmware.clone());
 
     let mut ctx = ctx;
+    // Post-quantum stores (spec 0028): the FIDO2 PIN's own prompt, the
+    // touch message, the attempts flag.
+    ctx.fido2_pin_fn = Box::new(|| {
+        if atty::is(atty::Stream::Stderr) {
+            if let Ok(p) = rpassword::prompt_password("FIDO2 PIN: ") {
+                if !p.is_empty() {
+                    return Ok(Some(p));
+                }
+            }
+        }
+        Ok(None)
+    });
+    if !cli.quiet {
+        ctx.on_touch = Box::new(|| eprintln!("Touch your YubiKey…"));
+    }
+    ctx.allow_low_pin_attempts = cli.allow_low_pin_attempts;
     let result = match cli.command {
         // Bare `yb format` from a terminal is guided (spec 0023 §3).
         Commands::Format(args)
@@ -179,7 +195,7 @@ fn make_pin_resolver(
         None,
         Box::new(|| {
             if atty::is(atty::Stream::Stderr) {
-                match rpassword::prompt_password("Enter YubiKey PIN: ") {
+                match rpassword::prompt_password("PIV PIN: ") {
                     Ok(p) if !p.is_empty() => return Ok(Some(p)),
                     Ok(_) => {}
                     Err(_) => {}

@@ -20,6 +20,9 @@ pub enum ExitStatus {
     NotFound = 2,
     /// The store has no room; checked before writing (`store`).
     StoreFull = 3,
+    /// An integrity check failed on a post-quantum store (spec 0028):
+    /// checksum, seal or management key; nothing was returned or written.
+    Integrity = 4,
 }
 
 /// An error that ends yb with a specific [`ExitStatus`].
@@ -46,11 +49,20 @@ impl StatusError {
     }
 }
 
-/// The exit status for `err`: its [`StatusError`]'s, or 1.
+/// The exit status for `err`: its [`StatusError`]'s, 4 for a failed
+/// integrity check of a post-quantum store, or 1.
 pub fn exit_status(err: &anyhow::Error) -> i32 {
-    err.chain()
-        .find_map(|e| e.downcast_ref::<StatusError>())
-        .map_or(1, |e| e.status as i32)
+    if let Some(e) = err.chain().find_map(|e| e.downcast_ref::<StatusError>()) {
+        return e.status as i32;
+    }
+    #[cfg(not(windows))]
+    if err.chain().any(|e| {
+        e.downcast_ref::<yb_core::orchestrator::post_quantum::IntegrityError>()
+            .is_some()
+    }) {
+        return ExitStatus::Integrity as i32;
+    }
+    1
 }
 
 // ---------------------------------------------------------------------------
