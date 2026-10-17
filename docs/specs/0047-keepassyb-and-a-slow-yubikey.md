@@ -161,8 +161,15 @@ queries it did find:
 permanently, decided 2026-10-17):
 - At lock or exit, when the vault is marked modified, KeePassYB first
   serializes it and compares it with what it last read or saved.
-- It compares the decrypted XML content, leaving out the random padding
-  KeePassXC adds on each save (`CustomData::RandomSlug`).
+- It compares a hash of the normalized XML content, taken when the vault
+  is read and after each successful save, with the current one.  The
+  normalization leaves out what changes without a data change:
+  - the random padding KeePassXC adds on each save
+    (`CustomData::RandomSlug`) and custom data's last-modified stamp;
+  - view state: selected and top visible groups, expanded groups;
+  - access times and usage counts;
+  - modification times: expanding a group stamps it as modified.  A real
+    change still differs, since it changes the data itself.
 - Identical content: no question, no write, and the log says so, so a
   wrong "modified" mark still shows up as a bug to fix.
 
@@ -316,6 +323,21 @@ they run:
   wait, touch wait, YubiKey time).
 - `testInteractionsTable`: each row of S2b, counting PIN prompts,
   touches, reads and writes.
+
+## Further optimizations (not in this spec)
+
+Ideas kept for a later spec (user, 2026-10-17):
+
+- **Automatic saves driven by the normalized content.**  With a reliable
+  normalization, explicit saves are no longer needed: save automatically
+  each time the normalized content changes, after a short delay so that
+  a burst of changes makes a single write.  View changes, which leave
+  the normalized content as it is, never write.
+- **No greedy read of the whole store.**  Each libyubiblob call opens a
+  session and reads the whole store (about 1.3 s), even to list blobs or
+  learn the store kind.  Reading only what an operation needs would
+  speed up every operation, if yb's sanitization (which checks the whole
+  store before trusting any of it) allows it; it may not.
 
 ## Open questions
 
