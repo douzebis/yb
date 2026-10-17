@@ -711,6 +711,13 @@ The ABI is still 0 (spec 0039 G7: changes may break callers before
   rework them with post-quantum stores; a poor README quickly shows in
   download counts.  Probably include a summary of the threat model (to be
   confirmed).
+- **The serial on macOS:** pairing reads the FIDO2 device's serial with
+  Yubico's vendor command over hidraw, on Linux only.  On macOS every
+  candidate is "serial unknown", so several YubiKeys plugged in need a
+  selection touch where Linux pairs silently.  Send the same command
+  through IOKit (`IOHIDDeviceSetReport` / input report callback) as a
+  `ReportChannel`, and use it in `pairing::probe_serial`; check it on a
+  Mac with the test YubiKey.
 
 ## Invariants
 

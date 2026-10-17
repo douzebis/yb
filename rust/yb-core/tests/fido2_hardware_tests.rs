@@ -10,7 +10,7 @@
 //! YB_FIDO2_PIN=... cargo test ... -- --ignored --nocapture   # with touches
 //! ```
 
-use yb_core::fido2::{self, hid, Device, Fido2Error, YUBICO_VENDOR_ID};
+use yb_core::fido2::{self, Device, Fido2Error, YUBICO_VENDOR_ID};
 
 fn yubikey_path() -> String {
     fido2::list_devices()
@@ -28,8 +28,8 @@ fn identity() {
     let path = yubikey_path();
     #[cfg(target_os = "linux")]
     {
-        let mut ch = hid::Hidraw::open(&path).unwrap();
-        let serial = hid::read_serial(&mut ch).unwrap();
+        let mut ch = fido2::hid::Hidraw::open(&path).unwrap();
+        let serial = fido2::hid::read_serial(&mut ch).unwrap();
         println!("{path}: serial {serial:?}");
         assert!(serial.is_some());
     }
