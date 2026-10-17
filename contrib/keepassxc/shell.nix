@@ -30,6 +30,9 @@ pkgs.mkShell {
     qt.wrapQtAppsHook
     # The yb command, to set up the YubiKey and manage its store.
     ybPackages.yb
+    # clang-format and git-clang-format, to format changed lines only
+    # (KeePassXC's .clang-format).
+    clang-tools
   ];
   buildInputs = with pkgs; [
     qt.qtbase
