@@ -54,7 +54,7 @@ pub use context::{
     parse_ec_public_key_from_cert_der, Context, ContextOptions, DevicePicker, KeySource,
     OutputOptions, PrintedRepair, Repairs, SlotKeyCheck,
 };
-pub use nvm::{scan_nvm, NvmUsage};
+pub use nvm::{scan_nvm, scan_store_memory, NvmUsage};
 pub use orchestrator::{
     chunks_needed, collect_blob_chain, fetch_blob, list_blobs, objects_needed, remove_blob,
     remove_blobs, remove_blobs_checked, store_blob, store_blob_checked, store_blob_with_checked,

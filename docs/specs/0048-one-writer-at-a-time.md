@@ -288,6 +288,9 @@ The implementation's commit message and the release notes say plainly:
 - The lock is `PivBackend::exclusive` (re-entrant); `HardwarePiv` keeps
   the held connection per thread and refuses a second connection from a
   thread holding the card (it would wait for itself).
+- `yb fsck --nvm`'s memory scan (about 290 object sizes) holds the lock
+  too, with the store's objects read under it: its figures describe one
+  state of the card (added 2026-10-18, `the_memory_scan_sees_one_state`).
 - The CLI prints "yb: waiting for another program using the YubiKey…"
   after a second's wait (`piv::set_wait_notice`), unless `--quiet`.
 - The fuzzer (S4): `rust/yb-core/tests/concurrency_tests.rs`; the long

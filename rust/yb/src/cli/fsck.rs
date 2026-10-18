@@ -11,7 +11,7 @@ use yb_core::{
     orchestrator::uses_legacy_encryption,
     parse_ec_public_key_from_cert_der,
     report::{CardReport, Fido2Report, ReportStore, Severity, StorePresence},
-    scan_nvm,
+    scan_store_memory,
     store::{
         constants::{DEFAULT_KEY_SLOT, OBJECT_ID_ZERO},
         Object, Store, MAX_AGE,
@@ -107,7 +107,7 @@ pub fn check(ctx: &Context, args: &FsckArgs, out: &mut dyn Write) -> Result<bool
         StorePresence::None => {
             writeln!(out, "Store: none — run `yb format` to create one")?;
             if args.nvm {
-                write_nvm(ctx, &HashSet::new(), out)?;
+                write_nvm(ctx, out)?;
             }
             true
         }
@@ -276,12 +276,7 @@ fn check_store(ctx: &Context, args: &FsckArgs, store: &Store, out: &mut dyn Writ
 
     // NVM breakdown — only when --nvm is requested.
     if args.nvm {
-        // Only count reachable slots as store NVM — orphans are treated as free.
-        let store_ids: HashSet<u32> = reachable
-            .iter()
-            .map(|&i| OBJECT_ID_ZERO + i as u32)
-            .collect();
-        write_nvm(ctx, &store_ids, out)?;
+        write_nvm(ctx, out)?;
     }
 
     // Structural anomalies — verbose only.
@@ -322,7 +317,6 @@ fn check_store(ctx: &Context, args: &FsckArgs, store: &Store, out: &mut dyn Writ
     Ok(sig_corrupted == 0 && foreign.is_empty() && !has_anomalies)
 }
 
-/// The `--nvm` line.  `store_ids` are the objects counted as store.
 /// The store part of the report for a post-quantum store (spec 0028): the
 /// descriptor, each blob's checksum (no PIN), then the credential and the
 /// management key (FIDO2 PIN, one touch), and with `--seals` each blob's
@@ -412,9 +406,7 @@ fn check_post_quantum_store(
     }
 
     if args.nvm {
-        let mut store_ids: HashSet<u32> = reachable.iter().map(|&i| store.object_id(i)).collect();
-        store_ids.insert(OBJECT_ID_ZERO);
-        write_nvm(ctx, &store_ids, out)?;
+        write_nvm(ctx, out)?;
     }
     Ok(healthy)
 }
@@ -526,8 +518,11 @@ fn check_post_quantum_store(
     Ok(false)
 }
 
-fn write_nvm(ctx: &Context, store_ids: &HashSet<u32>, out: &mut dyn Write) -> Result<()> {
-    match scan_nvm(&ctx.reader, ctx.piv.as_ref(), store_ids) {
+/// The `--nvm` line: the store and the scan read under one card lock, at
+/// the end, after any touch (spec 0048: nothing waits for the user under
+/// it).
+fn write_nvm(ctx: &Context, out: &mut dyn Write) -> Result<()> {
+    match scan_store_memory(&ctx.reader, ctx.piv.as_ref()) {
         Ok(usage) => writeln!(
             out,
             "\nYubiKey memory: ~{} bytes used by the store, ~{} bytes by other data, ~{} bytes \

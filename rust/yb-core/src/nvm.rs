@@ -7,7 +7,9 @@
 //! This module contains two functions with very different risk profiles:
 //!
 //! - [`scan_nvm`] — **read-only**: reads every occupied PIV object once and
-//!   tallies store / other / free bytes.  Safe to call at any time.
+//!   tallies store / other / free bytes, under the card lock (spec 0048).
+//!   Safe to call at any time.  [`scan_store_memory`] does it with the
+//!   store's objects read under the same lock.
 //!
 //! - [`measure_free_nvm`] — **destructive probe**: fills every empty PIV slot
 //!   to its maximum capacity via binary search, sums the totals, then restores
@@ -201,11 +203,43 @@ const KNOWN_PIV_OBJECTS: &[u32] = &[
 /// store range — i.e. orphaned chunks — is silently skipped so its bytes
 /// fall into the free estimate rather than polluting the "other" bucket.
 /// Occupied slots outside the store range go into the "other" bucket.
+/// [`scan_nvm`], counting as the store's the objects of its complete blobs
+/// (and a post-quantum store's descriptor), read under the same card lock
+/// as the scan: the figures describe one state of the YubiKey.  Leftovers
+/// count as free.  No store: nothing counts as the store's.
+pub fn scan_store_memory(reader: &str, piv: &dyn PivBackend) -> Result<NvmUsage> {
+    let _lock = piv.exclusive(reader)?;
+    let ids = match crate::store::Store::from_device(reader, piv) {
+        Ok(store) => store_object_ids(&store),
+        Err(_) => std::collections::HashSet::new(),
+    };
+    scan_nvm(reader, piv, &ids)
+}
+
+/// The objects of a sanitized store's complete blobs, and a post-quantum
+/// store's descriptor.
+fn store_object_ids(store: &crate::store::Store) -> std::collections::HashSet<u32> {
+    let mut ids: std::collections::HashSet<u32> = store
+        .objects
+        .iter()
+        .filter(|o| o.is_head())
+        .flat_map(|h| store.chunk_chain(h.index()))
+        .map(|i| store.object_id(i))
+        .collect();
+    if store.kind.is_post_quantum() {
+        ids.insert(OBJECT_ID_ZERO);
+    }
+    ids
+}
+
 pub fn scan_nvm(
     reader: &str,
     piv: &dyn PivBackend,
     store_object_ids: &std::collections::HashSet<u32>,
 ) -> Result<NvmUsage> {
+    // One state of the card: no write between two of the reads (spec
+    // 0048), and one connection for them all.
+    let _lock = piv.exclusive(reader)?;
     let mut store_bytes = 0usize;
     let mut other_bytes = 0usize;
 

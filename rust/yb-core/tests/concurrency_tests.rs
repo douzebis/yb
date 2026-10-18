@@ -949,3 +949,73 @@ fn a_store_filled_since_the_snapshot() {
     assert_eq!(piv.write_count(), writes, "nothing was written");
     assert_eq!(content(&piv, &reader, "big").unwrap(), vec![0x0B; 7000]);
 }
+
+// ---------------------------------------------------------------------------
+// The memory scan (`yb fsck --nvm`) sees one state of the card
+// ---------------------------------------------------------------------------
+
+/// The memory scan's figures, as a tuple.
+fn memory(piv: &VirtualPiv, reader: &str) -> (usize, usize, usize) {
+    let usage = yb_core::scan_store_memory(reader, piv).unwrap();
+    (usage.store_bytes, usage.other_bytes, usage.free_bytes)
+}
+
+/// Scans while another client stores and removes a blob: under the lock,
+/// each scan gives the figures of a quiet card, with or without the blob
+/// (spec 0048, invariant 0020).  Returns whether every seed did.
+fn scans_see_one_state(locking: bool) -> bool {
+    let blob = vec![0x5A_u8; 5000];
+    // The two quiet states.
+    let quiet = {
+        let piv = new_piv();
+        let reader = piv.reader_name();
+        let mut store = Store::format(&reader, &piv, 8, 0x82, MGMT).unwrap();
+        let without = memory(&piv, &reader);
+        assert!(store_blob(&mut store, &piv, "vault", &blob, plain(), MGMT, None).unwrap());
+        [without, memory(&piv, &reader)]
+    };
+    (0..60).all(|seed| {
+        let piv = new_piv();
+        let reader = piv.reader_name();
+        Store::format(&reader, &piv, 8, 0x82, MGMT).unwrap();
+        let sched = Scheduler::new(seed, 2, 0.0, locking);
+        piv.set_scheduler(sched.clone());
+        let scans = std::thread::scope(|scope| {
+            let (piv, sched, reader) = (&piv, &*sched, reader.as_str());
+            let blob = &blob;
+            let writer = scope.spawn(move || {
+                sched.run_client(0, || {
+                    for _ in 0..8 {
+                        let mut s = Store::from_device(reader, piv).unwrap();
+                        assert!(
+                            store_blob(&mut s, piv, "vault", blob, plain(), MGMT, None).unwrap()
+                        );
+                        let mut s = Store::from_device(reader, piv).unwrap();
+                        remove_blobs(&mut s, piv, &["vault"], MGMT).unwrap();
+                    }
+                })
+            });
+            let scanner = scope.spawn(move || {
+                sched.run_client(1, || {
+                    (0..12).map(|_| memory(piv, reader)).collect::<Vec<_>>()
+                })
+            });
+            sched.release(2);
+            writer.join().unwrap();
+            scanner.join().unwrap()
+        });
+        scans.iter().all(|scan| quiet.contains(scan))
+    })
+}
+
+#[test]
+fn the_memory_scan_sees_one_state() {
+    assert!(
+        scans_see_one_state(true),
+        "a scan saw a card in the middle of a write"
+    );
+    assert!(
+        !scans_see_one_state(false),
+        "without the lock, no scan saw a write in the middle: the test cannot fail"
+    );
+}

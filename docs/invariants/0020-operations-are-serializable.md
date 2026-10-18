@@ -37,7 +37,9 @@ middle of a write.
   (`connect_reader_mode`); `PivBackend::exclusive` keeps one connection,
   and so the lock, across a sequence (`HardwarePiv`); the simulated
   backends do the same (`piv::lock::SimulatedLock`).
-- `Store::from_device_raw` reads under the lock; `store_blob_with_checked`
+- `Store::from_device_raw` reads under the lock, and so does the memory
+  scan (`scan_nvm`, `scan_store_memory`: the store's objects and their
+  sizes under one lock); `store_blob_with_checked`
   and `remove_blobs_checked` lock, read the whole store again
   (`reload_for_write`), and plan from that read; the formats, the
   descriptor rewrap, the management-key switch and its repairs run under
@@ -55,5 +57,5 @@ middle of a write.
 
 ## Regression tests
 
-- `rust/yb-core/tests/concurrency_tests.rs`: `concurrent_operations_are_serializable`, `a_reader_never_misses_a_blob_being_replaced`, `without_the_lock_the_fuzzer_finds_a_violation`
+- `rust/yb-core/tests/concurrency_tests.rs`: `concurrent_operations_are_serializable`, `a_reader_never_misses_a_blob_being_replaced`, `without_the_lock_the_fuzzer_finds_a_violation`, `the_memory_scan_sees_one_state`
 - `rust/yb-piv-harness/src/bin/hardware_piv_tests.rs`: `t2_exclusive_makes_others_wait`, `t2_exclusive_is_reentrant`, `t2_concurrent_connections`
