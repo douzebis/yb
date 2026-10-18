@@ -182,6 +182,9 @@ pub struct PostQuantumProtection<'a> {
     pub pin: &'a str,
     /// Called before each assertion (the "Touch your YubiKey" message).
     pub on_touch: &'a dyn Fn(),
+    /// Called when an assertion is over: the YubiKey was touched, or the
+    /// touch was refused or timed out (spec 0051 S5).
+    pub on_touched: &'a dyn Fn(),
 }
 
 impl PostQuantumProtection<'_> {
@@ -189,11 +192,13 @@ impl PostQuantumProtection<'_> {
     /// checked against the card (D11).
     fn assert(&self, salt: &[u8; SALT_LEN]) -> Result<(Zeroizing<[u8; 32]>, Zeroizing<String>)> {
         (self.on_touch)();
-        let mut outputs = self.fido2.hmac_secret(
+        let outputs = self.fido2.hmac_secret(
             &self.descriptor.credential_id,
             &[*salt, self.descriptor.mgmt_salt],
             self.pin,
-        )?;
+        );
+        (self.on_touched)();
+        let mut outputs = outputs?;
         let k2_mgmt = outputs.pop().expect("two outputs");
         let k2 = outputs.pop().expect("two outputs");
         let management_key = self.checked_management_key(k2_mgmt.as_ref())?;
@@ -218,8 +223,9 @@ impl PostQuantumProtection<'_> {
             &self.descriptor.credential_id,
             &[self.descriptor.mgmt_salt],
             self.pin,
-        )?;
-        self.checked_management_key(outputs[0].as_ref())
+        );
+        (self.on_touched)();
+        self.checked_management_key(outputs?[0].as_ref())
     }
 }
 

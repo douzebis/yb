@@ -938,6 +938,33 @@ pub unsafe extern "C" fn yubiblob_set_touch_callback(
     })
 }
 
+/// Be told when the YubiKey is no longer waiting for a touch: touched, or
+/// the touch refused or timed out (since 0.5.0, spec 0051 S5), e.g. to take
+/// "Touch your YubiKey" down at once.  Called after each touch the callback
+/// of `yubiblob_set_touch_callback` announced.  NULL removes the callback.
+///
+/// # Safety
+/// As `yubiblob_set_touch_callback`.
+#[no_mangle]
+pub unsafe extern "C" fn yubiblob_set_touched_callback(
+    session: *mut Session,
+    callback: TouchCallback,
+    user: *mut c_void,
+) -> Status {
+    run(|| {
+        let ctx = &mut session_mut(session)?.ctx;
+        ctx.on_touched = match callback {
+            Some(f) => {
+                let user = user as usize;
+                // SAFETY: the caller guarantees `f` may be called with `user`.
+                Box::new(move || unsafe { f(user as *mut c_void) })
+            }
+            None => Box::new(|| {}),
+        };
+        Ok(())
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Listing (no PIN; reads never write, invariant 0002)
 // ---------------------------------------------------------------------------

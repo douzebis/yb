@@ -835,9 +835,9 @@ fn pq_fsck() {
         "— not used by this store",
         "\nFIDO2 application — protects this store\n",
         "  PIN              set, 8/8 tries left\n",
-        "-byte ID, not checked (needs the FIDO2 PIN)\n",
+        "-byte ID, not checked\n",
         "Store: post-quantum, 16 objects",
-        "  Management key   a copy, wrapped by FIDO2 (3DES), not checked (needs the FIDO2 PIN)\n",
+        "  Management key   a copy, wrapped by FIDO2 (3DES), not checked\n",
         "CHECKSUM OK",
         "Not checked: credential, management key, seals — check with `yb fsck --seals` (needs the \
          FIDO2 PIN)\n",
@@ -847,7 +847,15 @@ fn pq_fsck() {
     assert!(!out.contains("Store key"), "{out}");
     assert!(!out.contains("Checked with the FIDO2 PIN"), "{out}");
 
-    let (out, _) = f.expect(0, &[], &["fsck", "--seals"]);
+    let (out, err) = f.expect(0, &[], &["fsck", "--seals"]);
+    // The touches announced before the PIN, then numbered (spec 0051 S4).
+    assert!(err.contains("Checking the seals: "), "{err}");
+    assert!(
+        err.contains("Touch your YubiKey (1/")
+            && err.contains(" to check the credential and the management key…"),
+        "{err}"
+    );
+    assert!(err.contains(" to check the seal of "), "{err}");
     for line in [
         "-byte ID, checked below",
         "Checked with the FIDO2 PIN:\n",

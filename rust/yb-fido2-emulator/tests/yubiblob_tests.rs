@@ -96,6 +96,7 @@ impl Card {
                 fido2: &dev,
                 pin: std::str::from_utf8(FIDO2_PIN).unwrap(),
                 on_touch: &|| {},
+                on_touched: &|| {},
             };
             let stored = store_blob_with(
                 &mut store,
@@ -228,6 +229,13 @@ impl Session {
         let status = unsafe { yubiblob_set_touch_callback(self.0, Some(count_touch), user) };
         assert_eq!(status, YUBIBLOB_OK);
     }
+
+    /// Count the "touch is over" notifications in `counter` (spec 0051 S5).
+    fn count_touched(&self, counter: &AtomicU32) {
+        let user = ptr::from_ref(counter).cast_mut().cast::<c_void>();
+        let status = unsafe { yubiblob_set_touched_callback(self.0, Some(count_touch), user) };
+        assert_eq!(status, YUBIBLOB_OK);
+    }
 }
 
 unsafe extern "C" fn count_touch(user: *mut c_void) {
@@ -255,6 +263,8 @@ fn round_trips_with_a_touch_per_blob() {
 
     let notified = AtomicU32::new(0);
     s.count_touches(&notified);
+    let over = AtomicU32::new(0);
+    s.count_touched(&over);
     let before = card.server.touches();
     let secret = b"post-quantum secret ".repeat(300);
     let flags = YUBIBLOB_STORE_ENCRYPT | YUBIBLOB_STORE_COMPRESS;
@@ -291,6 +301,8 @@ fn round_trips_with_a_touch_per_blob() {
         last_error()
     );
     assert_eq!(notified.load(Ordering::SeqCst), 5);
+    // Each announced touch is followed by its end.
+    assert_eq!(over.load(Ordering::SeqCst), 5);
     assert_eq!(s.list().len(), 1);
 
     // No callback: still works.
@@ -342,6 +354,9 @@ fn no_touch() {
     let card = Card::new();
     let s = card.open(0);
     assert_eq!(s.store("doc", b"data", 0, FIDO2_PIN), YUBIBLOB_OK);
+    let (announced, over) = (AtomicU32::new(0), AtomicU32::new(0));
+    s.count_touches(&announced);
+    s.count_touched(&over);
     card.server.set_touch(false);
     assert_eq!(
         s.store("new", b"x", YUBIBLOB_STORE_ENCRYPT, FIDO2_PIN),
@@ -349,6 +364,9 @@ fn no_touch() {
     );
     assert_eq!(s.fetch("doc", FIDO2_PIN), Err(YUBIBLOB_ERR_NO_TOUCH));
     assert_eq!(s.remove("doc", FIDO2_PIN), YUBIBLOB_ERR_NO_TOUCH);
+    // A refused touch ends too: a notice comes down (spec 0051 S5).
+    assert_eq!(announced.load(Ordering::SeqCst), 3);
+    assert_eq!(over.load(Ordering::SeqCst), 3);
     card.server.set_touch(true);
     assert_eq!(s.list().len(), 1);
     assert_eq!(s.info().free_objects, 15);

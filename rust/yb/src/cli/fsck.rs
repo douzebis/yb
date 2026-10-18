@@ -353,11 +353,7 @@ fn check_post_quantum_store(
         "Store: post-quantum, {} objects, age {}",
         store.object_count, store.store_age
     )?;
-    let not_checked = if args.seals {
-        ""
-    } else {
-        ", not checked (needs the FIDO2 PIN)"
-    };
+    let not_checked = if args.seals { "" } else { ", not checked" };
     writeln!(
         out,
         "  {:<16} a copy, wrapped by FIDO2 ({}){not_checked}",
@@ -428,6 +424,20 @@ fn check_post_quantum_store(
 /// (one touch each).  Fills `lines` with (label, result); returns whether
 /// all passed.
 #[cfg(not(windows))]
+/// What `--seals` will ask for: one touch for the credential and the
+/// management key, then one per blob, as each blob is sealed with a key of
+/// its own (one FIDO2 assertion each).
+fn seals_notice(blobs: usize) -> String {
+    match blobs {
+        0 => "Checking the seals: 1 touch, for the credential and the management key.".to_owned(),
+        n => format!(
+            "Checking the seals: {} touches, one for the credential and the management key, then \
+             one per blob (each is sealed with its own key).",
+            n + 1
+        ),
+    }
+}
+
 fn check_with_fido2(
     ctx: &Context,
     store: &Store,
@@ -439,6 +449,12 @@ fn check_with_fido2(
     use yb_core::orchestrator::fetch_blob_with;
     use yb_core::orchestrator::post_quantum::IntegrityError;
     let error = |e: &anyhow::Error| format!("ERROR: {e:#}");
+    // How many touches, and why, before the FIDO2 PIN is asked; then each
+    // touch numbered (spec 0051 S4).
+    let total = 1 + heads.len();
+    if !ctx.quiet {
+        eprintln!("{}", seals_notice(heads.len()));
+    }
     let session = match ctx.post_quantum_session() {
         Ok(session) => session,
         Err(e) => {
@@ -446,7 +462,21 @@ fn check_with_fido2(
             return false;
         }
     };
-    let protection = session.protection(ctx, descriptor);
+    // Each touch says what it checks.
+    let touches = std::cell::Cell::new(0);
+    let purpose = std::cell::RefCell::new(String::from("the credential and the management key"));
+    let numbered = || {
+        touches.set(touches.get() + 1);
+        if !ctx.quiet {
+            eprintln!(
+                "Touch your YubiKey ({}/{total}) to check {}…",
+                touches.get(),
+                purpose.borrow()
+            );
+        }
+    };
+    let mut protection = session.protection(ctx, descriptor);
+    protection.on_touch = &numbered;
     match protection.management_key() {
         Ok(_) => {
             lines.push(("Credential".to_owned(), "answers".to_owned()));
@@ -473,6 +503,7 @@ fn check_with_fido2(
     let mut healthy = true;
     for head in heads {
         let name = quote_name(&head.blob_name);
+        *purpose.borrow_mut() = format!("the seal of {name}");
         match fetch_blob_with(store, &protection, &head.blob_name) {
             Ok(_) => lines.push((name, "seal OK".to_owned())),
             Err(e) => {

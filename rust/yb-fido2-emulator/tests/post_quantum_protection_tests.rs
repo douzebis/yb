@@ -79,6 +79,7 @@ impl Setup {
             fido2: &self.dev,
             pin: PIN,
             on_touch: &no_message,
+            on_touched: &|| {},
         }
     }
 

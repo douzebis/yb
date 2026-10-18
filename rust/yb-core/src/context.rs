@@ -148,6 +148,7 @@ impl PostQuantumSession {
             fido2: &self.device,
             pin: &self.pin,
             on_touch: &*ctx.on_touch,
+            on_touched: &*ctx.on_touched,
         }
     }
 }
@@ -182,6 +183,8 @@ pub struct Context {
     pub fido2_pin_fn: Box<dyn Fn() -> Result<Option<String>>>,
     /// Called before each FIDO2 operation that waits for a touch.
     pub on_touch: Box<dyn Fn()>,
+    /// Called when that operation is over: touched, refused or timed out.
+    pub on_touched: Box<dyn Fn()>,
     /// `--allow-low-pin-attempts`: try the FIDO2 PIN even with 3 attempts
     /// or fewer left (spec 0028, D10).
     pub allow_low_pin_attempts: bool,
@@ -241,6 +244,7 @@ impl Context {
             fido2_pin: RefCell::new(None),
             fido2_pin_fn: Box::new(|| Ok(None)),
             on_touch: Box::new(|| {}),
+            on_touched: Box::new(|| {}),
             allow_low_pin_attempts: false,
             piv,
             debug,
@@ -288,6 +292,7 @@ impl Context {
             fido2_pin: RefCell::new(None),
             fido2_pin_fn: Box::new(|| Ok(None)),
             on_touch: Box::new(|| {}),
+            on_touched: Box::new(|| {}),
             allow_low_pin_attempts: false,
             piv: backend,
             debug,

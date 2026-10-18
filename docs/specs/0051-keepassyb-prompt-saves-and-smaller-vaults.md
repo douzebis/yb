@@ -81,14 +81,36 @@ SPDX-License-Identifier: MIT
 - **The management key:** the state first: `set, AES-192, kept on the
   YubiKey (PRINTED), unlocked by the PIV PIN`, or `factory default,
   3DES`.
-- **The store's management key:** `a copy, wrapped by FIDO2 (AES-192),
-  not checked (needs the FIDO2 PIN)`.
+- **The FIDO2 credential and the store's management key:** `not checked`
+  (`a copy, wrapped by FIDO2 (AES-192), not checked`); the "Not checked"
+  line below says how to check both, and the seals, once.
 - **Integrity:** `2 checksums OK, 0 corrupted`, without "(checksums need
   no PIN)".
 - **Not checked:** one line, `credential, management key, seals — check
   with \`yb fsck --seals\` (needs the FIDO2 PIN)`, then a blank line.
 - **The memory line:** `YubiKey memory: ~3157 bytes used by the store,
   ~318 bytes by other data, ~47725 bytes free (estimated)`.
+- **`--seals`'s touches:** announced before the FIDO2 PIN is asked, with
+  why there are several (`Checking the seals: 3 touches, one for the
+  credential and the management key, then one per blob (each is sealed
+  with its own key).`), then each numbered, with what it checks (`Touch
+  your YubiKey (2/3) to check the seal of bar…`).  One FIDO2 assertion
+  derives at most two secrets, and a blob read uses its second one for
+  the management key's check (invariant 0015): one touch per blob.
+
+### S5. What a touch is for
+
+- **KeePassYB's progress dialog** (spec 0047 S4) says what the YubiKey
+  waits for: `Touch your YubiKey to save Passwords.kdbx.`, `… to read
+  Passwords.kdbx.`, `… to read the master password kept on it.`, `… to
+  keep the master password on it.`, `… to delete the master password kept
+  on it.`  It shows at once, not after 300 ms: the user has to act.
+- **It comes down when the touch is over** (touched, refused or timed
+  out): the dialog says again what the operation does, until it ends.
+- **libyubiblob 0.5.0:** `yubiblob_set_touched_callback`, called when the
+  YubiKey no longer waits for a touch, after each touch the callback of
+  `yubiblob_set_touch_callback` announced.  A new function: the interface
+  version stays 1.  KeePassYB requires libyubiblob 0.5.
 
 ## Tests
 
@@ -96,7 +118,11 @@ SPDX-License-Identifier: MIT
   and a save request; lock saves at once; no padding without KeeShare,
   padding kept with it; history 0 when first saved to a YubiKey, kept
   when already there.
-- yb: the report's tests follow the new wording.
+- yb: the report's tests follow the new wording; `--seals` announces
+  and numbers its touches; libyubiblob calls the touched callback after
+  each touch, refused ones included.
+- KeePassYB: the progress dialog's touch text, shown at once, then the
+  operation's text again.
 
 ## Implementation notes (2026-10-18)
 

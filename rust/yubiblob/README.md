@@ -40,6 +40,10 @@ reads the store once and answers questions from that snapshot until
 YubiKey since (`YUBIBLOB_ERR_CHANGED`, spec 0049).  `yubiblob_remove()`
 takes a `flags` argument: the interface version is now 1.
 
+Since 0.5.0, `yubiblob_set_touched_callback()` tells when the YubiKey no
+longer waits for a touch (touched, refused or timed out), so that a "Touch
+your YubiKey" notice can come down at once.
+
 ## Building
 
 With [cargo-c](https://github.com/lu-zero/cargo-c):

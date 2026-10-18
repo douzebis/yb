@@ -316,7 +316,9 @@ impl CardReport {
         let checked = if f.checked_below {
             "checked below"
         } else {
-            "not checked (needs the FIDO2 PIN)"
+            // `yb fsck`'s "Not checked" line says how, for the credential,
+            // the management key and the seals together (spec 0051 S4).
+            "not checked"
         };
         vec![
             pin,
