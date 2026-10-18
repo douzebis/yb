@@ -1491,7 +1491,7 @@ checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 [[package]]
 name = "opensk"
 version = "1.0.0"
-source = "git+https://github.com/google/OpenSK?rev=636d85b8ae492f30157cb38d9d84c3c40b9f1f0c#636d85b8ae492f30157cb38d9d84c3c40b9f1f0c"
+source = "git+https://github.com/douzebis/OpenSK?rev=059cdbe2268d9ea2aae476a3d495c0c0660d1a9b#059cdbe2268d9ea2aae476a3d495c0c0660d1a9b"
 dependencies = [
  "aes",
  "arrayref",
@@ -2263,7 +2263,7 @@ dependencies = [
 [[package]]
 name = "sk-cbor"
 version = "0.1.2"
-source = "git+https://github.com/google/OpenSK?rev=636d85b8ae492f30157cb38d9d84c3c40b9f1f0c#636d85b8ae492f30157cb38d9d84c3c40b9f1f0c"
+source = "git+https://github.com/douzebis/OpenSK?rev=059cdbe2268d9ea2aae476a3d495c0c0660d1a9b#059cdbe2268d9ea2aae476a3d495c0c0660d1a9b"
 
 [[package]]
 name = "smallvec"

@@ -181,8 +181,9 @@ let
               "trussed-auth-backend-0.1.0" = "sha256-80XwpB+zU87wMoK+wX22QOGXeO1iXFknmtyzvlOhmns=";
               "trussed-rsa-alloc-0.3.0" = "sha256-1AgAQb2Txfx+E7YI8XVBsgCmJaFZNXqGpXO/sjJB3pk=";
               "trussed-staging-0.3.2" = "sha256-kMvVJ/f7S33wl14iJHantfWmoOGTpkSgYm72FenJewY=";
-              # The FIDO2 emulator of the tests (spec 0028).
-              "opensk-1.0.0" = "sha256-qFDiF4IH+5FdLParw7TI854mdwZEI8Vzf2hwtUjyPps=";
+              # The FIDO2 emulator of the tests (spec 0028), from a fork
+              # without the wasefire submodule (yb-fido2-emulator/Cargo.toml).
+              "opensk-1.0.0" = "sha256-+8d17abG5XXQHaDAHh+i2PUaOgZPV9j8iFhek3Do63g=";
             };
           };
         }

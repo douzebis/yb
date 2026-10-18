@@ -12,7 +12,10 @@ description = "A FIDO2 authenticator in memory (Google's OpenSK) behind libfido2
 
 [dependencies]
 # Not on crates.io: pinned to a commit (spec 0028, "Tests").
-opensk = { git = "https://github.com/google/OpenSK", rev = "636d85b8ae492f30157cb38d9d84c3c40b9f1f0c", features = ["std"] }
+# Google's OpenSK at 636d85b, from a fork whose one extra commit drops the
+# wasefire submodule: Cargo checks out a git dependency's submodules, and
+# this one brings about 750 MB that libraries/opensk does not use.
+opensk = { git = "https://github.com/douzebis/OpenSK", rev = "059cdbe2268d9ea2aae476a3d495c0c0660d1a9b", features = ["std"] }
 
 # The tests exercise yb-core's FIDO2 module through this emulator: they live
 # here, so that yb-core (published) does not depend on this crate.
