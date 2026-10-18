@@ -189,3 +189,33 @@ fn removed_pin_option_is_refused() {
     assert!(stderr.contains("--pin was removed in yb 0.7"), "{stderr}");
     assert!(stderr.contains("--pin-stdin"), "{stderr}");
 }
+
+/// A YubiKey not set up for yb: `store`, `ls` and `fetch` say there is no
+/// store and to run `yb format`, as `yb fsck` does, rather than report an
+/// unexpected card error.
+#[test]
+fn no_store_says_run_format() {
+    let dir = TempDir::new().unwrap();
+    let piv = VirtualPiv::from_fixture_yaml(fixtures::WITH_KEY).unwrap();
+    let card = dir.path().join("card.yaml");
+    piv.save_fixture(&card).unwrap();
+    for args in [&["store", "-n", "a"][..], &["ls"], &["fetch", "-p", "a"]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_yb"))
+            .env("YB_FIXTURE", &card)
+            .env("YB_PIN", "654321")
+            .env_remove("YB_MANAGEMENT_KEY")
+            .arg("--allow-defaults")
+            .args(args)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{args:?}: {stderr}");
+        assert!(
+            stderr.contains("no store on this YubiKey"),
+            "{args:?}: {stderr}"
+        );
+        assert!(stderr.contains("run `yb format`"), "{args:?}: {stderr}");
+        assert!(!stderr.contains("unexpected"), "{args:?}: {stderr}");
+    }
+}

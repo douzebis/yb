@@ -476,3 +476,19 @@ fn newer_complete_copy_wins_and_old_chain_is_freed() {
     assert!(store.objects[3].is_head());
     assert!((0..3).all(|i| store.objects[i].is_empty()));
 }
+
+/// A YubiKey with no store: a "no store" error that says what to do, not
+/// an unexpected card error.
+#[test]
+fn no_store_says_run_format() {
+    let piv = crate::piv::VirtualPiv::new();
+    let reader = piv.reader_name();
+    let Err(err) = Store::from_device(&reader, &piv) else {
+        panic!("a store on a blank YubiKey");
+    };
+    let yb = err
+        .downcast_ref::<crate::errors::YbError>()
+        .expect("a YbError");
+    assert_eq!(yb.what, "no store on this YubiKey");
+    assert_eq!(yb.fix.as_deref(), Some("run `yb format` to create one"));
+}

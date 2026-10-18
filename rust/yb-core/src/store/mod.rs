@@ -438,9 +438,18 @@ impl Store {
         // writes, never in the middle of one (spec 0048).
         let _lock = piv.exclusive(reader)?;
         let first_id = OBJECT_ID_ZERO;
-        let raw = piv
-            .read_object(reader, first_id)
-            .with_context(|| format!("reading object 0x{first_id:06x}"))?;
+        let raw = match piv.read_object(reader, first_id) {
+            Ok(raw) => raw,
+            // No store header: a YubiKey not set up for yb (as `yb fsck`
+            // reports it), not an unexpected card error.
+            Err(e) if is_absent(&e) => {
+                return Err(crate::errors::YbError::new("no store on this YubiKey")
+                    .why("it is not set up for yb")
+                    .fix("run `yb format` to create one")
+                    .into())
+            }
+            Err(e) => return Err(e.context(format!("reading object 0x{first_id:06x}"))),
+        };
         if raw.len() >= 4 && read_u32_le(&raw, MAGIC_O)? == PQ_MAGIC {
             return Self::from_device_post_quantum(reader, piv, &raw);
         }
