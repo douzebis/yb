@@ -27,7 +27,8 @@ pub struct FsckArgs {
     #[arg(short = 'v', long = "verbose")]
     pub verbose: bool,
 
-    /// Scan all PIV objects to report NVM usage (store / other / free).
+    /// Scan all PIV objects to report the YubiKey's memory (used by the
+    /// store, by other data, free).
     /// Issues ~290 read-only APDUs; may take a few seconds on real hardware.
     #[arg(long = "nvm")]
     pub nvm: bool,
@@ -248,7 +249,7 @@ fn check_store(ctx: &Context, args: &FsckArgs, store: &Store, out: &mut dyn Writ
         writeln!(out)?;
         writeln!(
             out,
-            "Integrity: {} verified, {} unsigned, {} corrupted (signatures need no PIN)",
+            "Integrity: {} verified, {} unsigned, {} corrupted",
             sig_verified, sig_unsigned, sig_corrupted
         )?;
         if sig_unverifiable > 0 {
@@ -355,7 +356,7 @@ fn check_post_quantum_store(
     let not_checked = if args.seals {
         ""
     } else {
-        "; not checked against the card"
+        ", not checked (needs the FIDO2 PIN)"
     };
     writeln!(
         out,
@@ -391,19 +392,17 @@ fn check_post_quantum_store(
             writeln!(out, "  {:<30} {verdict}", quote_name(&head.blob_name))?;
         }
         writeln!(out)?;
-        writeln!(
-            out,
-            "Integrity: {} checksum OK, {corrupted} corrupted (checksums need no PIN)",
-            heads.len() - corrupted
-        )?;
+        let ok = heads.len() - corrupted;
+        let checksums = if ok == 1 { "checksum" } else { "checksums" };
+        writeln!(out, "Integrity: {ok} {checksums} OK, {corrupted} corrupted")?;
         healthy &= corrupted == 0;
     }
 
     if !args.seals {
         writeln!(
             out,
-            "Not checked: the credential, the management key, the seals —\n  `yb fsck \
-             --seals` checks them (FIDO2 PIN, one touch, then one per blob)"
+            "Not checked: credential, management key, seals — check with `yb fsck --seals` \
+             (needs the FIDO2 PIN)"
         )?;
     } else {
         // Prompts go to standard error while the checks run; the section
@@ -500,10 +499,11 @@ fn write_nvm(ctx: &Context, store_ids: &HashSet<u32>, out: &mut dyn Write) -> Re
     match scan_nvm(&ctx.reader, ctx.piv.as_ref(), store_ids) {
         Ok(usage) => writeln!(
             out,
-            "NVM: ~{} bytes store  |  ~{} bytes other  |  ~{} bytes free (estimated)",
+            "\nYubiKey memory: ~{} bytes used by the store, ~{} bytes by other data, ~{} bytes \
+             free (estimated)",
             usage.store_bytes, usage.other_bytes, usage.free_bytes
         )?,
-        Err(e) => eprintln!("yb: warning: NVM scan failed: {e}"),
+        Err(e) => eprintln!("yb: warning: the YubiKey memory scan failed: {e}"),
     }
     Ok(())
 }

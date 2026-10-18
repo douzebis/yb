@@ -834,12 +834,13 @@ fn pq_fsck() {
         "\nPIV application — holds the store's objects\n",
         "— not used by this store",
         "\nFIDO2 application — protects this store\n",
-        "  PIN              set, 8 tries left\n",
+        "  PIN              set, 8/8 tries left\n",
         "-byte ID, not checked (needs the FIDO2 PIN)\n",
         "Store: post-quantum, 16 objects",
-        "  Management key   a copy, wrapped by FIDO2 (3DES); not checked against the card\n",
+        "  Management key   a copy, wrapped by FIDO2 (3DES), not checked (needs the FIDO2 PIN)\n",
         "CHECKSUM OK",
-        "Not checked: the credential, the management key, the seals",
+        "Not checked: credential, management key, seals — check with `yb fsck --seals` (needs the \
+         FIDO2 PIN)\n",
     ] {
         assert!(out.contains(line), "missing {line:?} in:\n{out}");
     }
@@ -872,10 +873,10 @@ fn pq_fsck_fido2_pin_state() {
     }
     f.server.replug();
     let (out, _) = f.expect(0, &[], &["fsck"]);
-    assert!(out.contains("warning: set, 3 tries left"), "{out}");
+    assert!(out.contains("warning: set, 3/8 tries left"), "{out}");
     let (out, _) = f.expect(0, &[], &["fsck"]);
     assert!(
-        out.contains("warning: set, 3 tries left"),
+        out.contains("warning: set, 3/8 tries left"),
         "an attempt was used:\n{out}"
     );
 

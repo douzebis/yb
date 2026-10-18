@@ -503,9 +503,9 @@ Default output (no flags):
 YubiKey <serial> \(em firmware <version>
 
 PIV application \(em protects this store
-  PIN              ok (3/3 tries left)
-  PUK              ok (3/3 tries left)
-  Management key   3DES, kept on the YubiKey (PRINTED), unlocked by the PIV PIN
+  PIN              set, 3/3 tries left
+  PUK              set, 3/3 tries left
+  Management key   set, 3DES, kept on the YubiKey (PRINTED), unlocked by the PIV PIN
   Store key        slot 0x82: EC P-256, generated on card, certificate CN=YBLOB ECCP256
   Key/certificate  not checked (use \-\-check\-key)
 
@@ -518,7 +518,7 @@ Store: legacy, <n> objects, age <n>
   blob-name-2          UNSIGNED
   old-blob             CORRUPTED
 
-Integrity: <n> verified, <n> unsigned, <n> corrupted (signatures need no PIN)
+Integrity: <n> verified, <n> unsigned, <n> corrupted
 .fi
 .RE
 .PP
@@ -555,9 +555,9 @@ object count than the store's (it does not belong to the store, and yb
 ignores it), and warns when the store's 24-bit age counter nears its end
 (stores then fail; reformatting resets it).
 .PP
-With \fB\-\-nvm\fR, an additional NVM breakdown line is printed after the
-integrity summary, showing bytes attributed to the yb store, to other
-PIV objects, and the estimated free space.  This issues approximately
+With \fB\-\-nvm\fR, a line on the YubiKey's memory is printed after the
+integrity summary: the bytes used by the yb store, by other PIV objects,
+and the estimated free space.  This issues approximately
 290 read-only APDUs and may take a few seconds on real hardware.
 .PP
 With \fB\-\-verbose\fR, structural warnings (orphaned continuation chunks,
@@ -572,7 +572,7 @@ yb fsck
 .fi
 .RE
 .PP
-Audit with NVM breakdown:
+Audit with the YubiKey's memory:
 .RS
 .nf
 yb fsck \-\-nvm

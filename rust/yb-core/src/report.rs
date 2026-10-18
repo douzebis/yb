@@ -267,9 +267,10 @@ impl CardReport {
             Fido2State::Pin { retries: 0 } => {
                 let mut i = item(
                     "PIN",
-                    "blocked (a FIDO2 reset clears it, and destroys this store's encrypted \
-                     blobs)"
-                        .to_owned(),
+                    format!(
+                        "blocked, 0/{FIDO2_MAX_TRIES} tries left (a FIDO2 reset clears it, and \
+                         destroys this store's encrypted blobs)"
+                    ),
                     Severity::Error,
                 );
                 if f.unencrypted_blobs {
@@ -280,7 +281,7 @@ impl CardReport {
             Fido2State::Pin { retries } if *retries <= 3 => {
                 let mut i = item(
                     "PIN",
-                    format!("set, {retries} tries left"),
+                    format!("set, {retries}/{FIDO2_MAX_TRIES} tries left"),
                     Severity::Warning,
                 );
                 i.hint = vec![
@@ -289,9 +290,11 @@ impl CardReport {
                 ];
                 i
             }
-            Fido2State::Pin { retries } => {
-                item("PIN", format!("set, {retries} tries left"), Severity::Ok)
-            }
+            Fido2State::Pin { retries } => item(
+                "PIN",
+                format!("set, {retries}/{FIDO2_MAX_TRIES} tries left"),
+                Severity::Ok,
+            ),
             Fido2State::PinNotSet => {
                 let mut i = item("PIN", "not set (FIDO2 reset?)".to_owned(), Severity::Error);
                 if f.unencrypted_blobs {
@@ -391,15 +394,21 @@ impl CardReport {
                 )
             }
         };
-        let mut parts = vec![algo];
+        // The state first, as for the PINs (spec 0051 S4).
+        let mut parts = Vec::new();
+        match self.management_key {
+            Some(md) if md.is_default => {
+                parts.push("factory default".to_owned());
+                severity = severity.max(Severity::Warning);
+            }
+            Some(_) => parts.push("set".to_owned()),
+            None => {}
+        }
+        parts.push(algo);
         if !protection.is_empty() {
             parts.push(protection.to_owned());
         }
         if let Some(md) = self.management_key {
-            if md.is_default {
-                parts.push("factory default".to_owned());
-                severity = severity.max(Severity::Warning);
-            }
             match md.touch {
                 TouchPolicy::Always => {
                     parts.push("touch always required".to_owned());
@@ -487,10 +496,15 @@ fn item(label: &str, text: String, severity: Severity) -> Item {
     }
 }
 
+/// The FIDO2 PIN's tries on a YubiKey, which CTAP 2 sets (the YubiKey does
+/// not report it).
+const FIDO2_MAX_TRIES: u32 = 8;
+
 fn credential_item(label: &str, md: Option<CredentialMetadata>) -> Item {
     let Some(md) = md else {
         return item(label, "unknown (firmware < 5.3)".to_owned(), Severity::Ok);
     };
+    // The state first, then the tries (spec 0051 S4).
     let tries = format!("{}/{} tries left", md.retries_left, md.retries_total);
     if md.retries_left == 0 {
         // A blocked PUK only stops PIN resets: not an error.
@@ -499,16 +513,16 @@ fn credential_item(label: &str, md: Option<CredentialMetadata>) -> Item {
         } else {
             Severity::Warning
         };
-        return item(label, format!("blocked ({tries})"), severity);
+        return item(label, format!("blocked, {tries}"), severity);
     }
     if md.is_default {
         return item(
             label,
-            format!("factory default ({tries})"),
+            format!("factory default, {tries}"),
             Severity::Warning,
         );
     }
-    item(label, format!("ok ({tries})"), Severity::Ok)
+    item(label, format!("set, {tries}"), Severity::Ok)
 }
 
 fn read_slot_certificate(reader: &str, piv: &dyn PivBackend, slot: u8) -> SlotCertificate {
@@ -553,9 +567,9 @@ mod tests {
             "YubiKey 99999999 — firmware 5.4.3\n\
              \n\
              PIV application\n\
-             \x20 PIN              warning: factory default (3/3 tries left)\n\
-             \x20 PUK              warning: factory default (3/3 tries left)\n\
-             \x20 Management key   warning: 3DES, factory default\n\
+             \x20 PIN              warning: factory default, 3/3 tries left\n\
+             \x20 PUK              warning: factory default, 3/3 tries left\n\
+             \x20 Management key   warning: factory default, 3DES\n\
              \x20 Store key        slot 0x82: empty\n\
              \x20 Key/certificate  not checked (use --check-key)\n"
         );
@@ -606,7 +620,7 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("  PIN              set, 8 tries left\n"),
+            text.contains("  PIN              set, 8/8 tries left\n"),
             "{text}"
         );
         assert!(
@@ -618,7 +632,7 @@ mod tests {
         report.fido2 = Some(fido2(Fido2State::Pin { retries: 2 }));
         assert!(report
             .render(None, true)
-            .contains("warning: set, 2 tries left"));
+            .contains("warning: set, 2/8 tries left"));
         report.fido2 = Some(fido2(Fido2State::Pin { retries: 0 }));
         let text = report.render(None, true);
         assert!(text.contains("ERROR: blocked"), "{text}");

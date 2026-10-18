@@ -613,7 +613,7 @@ mod fsck_tests {
             "\nFIDO2 application — not used by this store\n",
             "\nStore: legacy, 8 objects, age ",
             "  Blobs            1 stored, 7 objects free (~",
-            "(signatures need no PIN)",
+            "\nIntegrity: 0 verified, 0 unsigned, 0 corrupted\n",
         ] {
             assert!(out.contains(line), "missing {line:?} in:\n{out}");
         }
@@ -2784,7 +2784,7 @@ mod guided_tests {
         let (healthy, text) = fsck(&ctx, true);
         assert!(healthy, "{text}");
         assert!(
-            text.contains("  PIN              warning: factory default (3/3 tries left)"),
+            text.contains("  PIN              warning: factory default, 3/3 tries left"),
             "{text}"
         );
         assert!(
@@ -2847,7 +2847,7 @@ mod guided_tests {
                  \n\
                  \x20 blob                           VERIFIED\n\
                  \n\
-                 Integrity: 1 verified, 0 unsigned, 0 corrupted (signatures need no PIN)\n"
+                 Integrity: 1 verified, 0 unsigned, 0 corrupted\n"
             )
         );
     }
@@ -3115,7 +3115,7 @@ mod rotation_tests {
         assert!(healthy, "a hint is not a warning");
         assert!(
             text.contains(
-                "  Management key   3DES, not stored on the YubiKey\n\
+                "  Management key   set, 3DES, not stored on the YubiKey\n\
                  \x20                  yb store and yb remove need it each time \
                  (YB_MANAGEMENT_KEY).\n\
                  \x20                  To have yb keep it on the YubiKey, unlocked by your PIN:\n\
