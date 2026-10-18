@@ -3304,7 +3304,7 @@ dependencies = [
 
 [[package]]
 name = "yb"
-version = "0.8.0-dev"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "atty",
@@ -3325,7 +3325,7 @@ dependencies = [
 
 [[package]]
 name = "yb-core"
-version = "0.8.0-dev"
+version = "0.7.1"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -3391,7 +3391,7 @@ dependencies = [
 
 [[package]]
 name = "yubiblob"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "anyhow",
  "p256 0.13.2",

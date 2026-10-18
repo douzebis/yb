@@ -5,7 +5,7 @@
 [package]
 name         = "yubiblob"
 # Its own version (spec 0039): the C interface's, not the yb command's.
-version      = "0.5.0"
+version      = "0.5.1"
 edition      = "2021"
 rust-version = "1.86"
 license      = "MIT"

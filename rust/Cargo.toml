@@ -10,10 +10,10 @@ members = ["yb-core", "yb", "yb-piv-harness", "clap-complete-rawline", "yubiblob
 # reads it; bump both lines together (crates.io needs a version on the
 # path dependency).
 [workspace.package]
-version = "0.8.0-dev"
+version = "0.7.1"
 
 [workspace.dependencies]
-yb-core = { path = "yb-core", version = "0.8.0-dev" }
+yb-core = { path = "yb-core", version = "0.7.1" }
 # Its own version (spec 0036): to become a standalone project.
 clap-complete-rawline = { path = "clap-complete-rawline", version = "0.1.0" }
 
