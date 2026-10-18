@@ -52,9 +52,9 @@ Stated here so that no document claims them:
   genuine version of itself, or a whole store restored to an older
   state, is not detected (spec 0028 non-goal); writing either needs the
   management key, or a PIV reset, which invariant 0015 detects.
-- **Secrets off command lines:** the deprecated `--pin` and `--key`
-  options still accept them (spec 0034 non-goal), and `yb self-test`
-  passes its own test PIN to its children as `YB_PIN`.
+- **Secrets off command lines:** `yb self-test` passes its own test PIN
+  to its children as `YB_PIN` (the `--pin` and `--key` options that took
+  secrets on the command line were removed in yb 0.7).
 
 ## Adding one
 

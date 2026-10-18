@@ -164,9 +164,10 @@ fn pin_without_newline() {
     assert_eq!((code, out), (0, b"x".to_vec()));
 }
 
-/// The deprecated `--pin` still works in 0.6, and announces its removal.
+/// `--pin`, removed in 0.7, is refused with its replacement named, and no
+/// PIN is used.
 #[test]
-fn deprecated_pin_option_announces_its_removal() {
+fn removed_pin_option_is_refused() {
     let dir = TempDir::new().unwrap();
     let card = card(&dir);
     let out = Command::new(env!("CARGO_BIN_EXE_yb"))
@@ -182,8 +183,9 @@ fn deprecated_pin_option_announces_its_removal() {
         ])
         .output()
         .unwrap();
-    assert!(out.status.success());
-    assert_eq!(out.stdout, b"x");
+    assert_eq!(out.status.code(), Some(1));
+    assert!(out.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("will be removed in yb 0.7"), "{stderr}");
+    assert!(stderr.contains("--pin was removed in yb 0.7"), "{stderr}");
+    assert!(stderr.contains("--pin-stdin"), "{stderr}");
 }

@@ -49,13 +49,13 @@ pub struct Cli {
     #[arg(long = "allow-low-pin-attempts")]
     pub allow_low_pin_attempts: bool,
 
-    /// YubiKey PIN [deprecated, removed in yb 0.7: use YB_PIN, --pin-stdin, or the prompt].
+    /// Removed in yb 0.7: refused with a message naming its replacement.
     #[arg(long = "pin", hide = true)]
-    pub pin_deprecated: Option<String>,
+    pub pin_removed: Option<String>,
 
-    /// Management key [deprecated, removed in yb 0.7: use YB_MANAGEMENT_KEY].
+    /// Removed in yb 0.7: refused with a message naming its replacement.
     #[arg(short = 'k', long = "key", hide = true)]
-    pub key_deprecated: Option<String>,
+    pub key_removed: Option<String>,
 
     #[command(subcommand)]
     pub command: Commands,

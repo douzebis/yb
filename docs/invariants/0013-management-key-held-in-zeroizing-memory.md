@@ -11,7 +11,7 @@ SPDX-License-Identifier: MIT
 ## Invariant
 
 yb holds the management key only in `Zeroizing` buffers, overwritten
-when dropped: from `YB_MANAGEMENT_KEY` or `--key`, from PRINTED, when
+when dropped: from `YB_MANAGEMENT_KEY`, from PRINTED, when
 generated, and when decoded for authentication.
 
 ## Why

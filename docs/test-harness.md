@@ -261,8 +261,8 @@ package, no fixture files to ship (spec 0029 §5).
 | `pin_from_env` | `YB_PIN` env var is used for PIN |
 | `pin_from_stdin` | `--pin-stdin` reads PIN from stdin |
 | `quiet_suppresses_stderr` | `-q` suppresses informational stderr |
-| `deprecated_pin_flag_warns` | `--pin` flag prints deprecation warning |
-| `deprecated_key_flag_warns` | `--key` flag prints deprecation warning |
+| `removed_pin_flag_is_refused` | `--pin` (removed in 0.7) is refused, naming its replacement |
+| `removed_key_flag_is_refused` | `--key` (removed in 0.7) is refused, naming its replacement |
 | `deprecated_extract_flag_warns` | `--extract` (removed) warns appropriately |
 | `completion_script_bash_exits_0` | `YB_COMPLETE=bash yb` exits 0 |
 | `completion_script_zsh_exits_0` | `YB_COMPLETE=zsh yb` exits 0 |

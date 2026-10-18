@@ -10,6 +10,81 @@ All notable changes to yb are recorded here.  The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and yb uses
 [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Upgrading
+
+- **`--pin` and `--key` are removed,** as 0.5 and 0.6 announced: a
+  secret on the command line is visible to other users.  yb now refuses
+  them, naming the replacement: `YB_PIN`, `--pin-stdin` or the prompt for
+  the PIN; `YB_MANAGEMENT_KEY`, or the key kept on the YubiKey
+  (`yb rotate-management-key`), for the management key.
+- **Update every program that writes to the same YubiKey** (yb,
+  libyubiblob's programs such as KeePassYB): concurrent access is now
+  safe (see Added), but only between programs of this version or later;
+  older versions take no lock.
+- **libyubiblob 0.5.0, interface version 1:** `yubiblob_remove` takes a
+  `flags` argument.  Programs built for an older libyubiblob must be
+  rebuilt; they refuse the new library rather than call it wrongly.
+- **`yb fsck`'s output** is reworded (see Changed): scripts that read it
+  may need adjusting.
+
+### Added
+
+- **Post-quantum stores** (spec 0028): `yb format --post-quantum` makes a
+  store protected by the YubiKey's FIDO2 application (its `hmac-secret`
+  extension and the FIDO2 PIN) rather than by PIV's elliptic-curve
+  cryptography, which a quantum computer could break.  Each blob needs
+  the FIDO2 PIN and one touch to read or write; `yb management-key set`
+  follows a management key changed with ykman; `--allow-low-pin-attempts`
+  lets yb try a FIDO2 PIN with 3 attempts or fewer left; `yb fsck
+  --seals` checks the credential, the management key and every blob's
+  seal.
+- **Concurrent access** (spec 0048): yb holds the YubiKey's PC/SC lock
+  for every whole-store read and every write, so several programs using
+  one YubiKey at once get the outcome of running one at a time
+  (invariant 0020).  A program waiting for another one says so after a
+  second.  A seeded concurrency fuzzer checks it, with a nightly long
+  run.
+- **Reading unencrypted blobs without any PIN** (spec 0044): `yb fetch
+  --no-check` reads an unencrypted blob of a post-quantum store with its
+  checksum only (a legacy store's signature needs no PIN anyway), for a
+  YubiKey whose PIN is blocked or whose FIDO2 application was reset
+  (invariant 0019).
+- **`yb fsck`'s report by application** (spec 0045): the PIV and FIDO2
+  applications, what each holds or protects, their PINs and keys.
+- **libyubiblob 0.2 to 0.5:** post-quantum stores
+  (`yubiblob_store_info`'s kind, `yubiblob_set_touch_callback`), reads
+  without any PIN (`yubiblob_fetch_unencrypted`), snapshot sessions
+  (`YUBIBLOB_OPEN_SNAPSHOT`, `yubiblob_refresh`; spec 0049),
+  `YUBIBLOB_STORE_IF_UNCHANGED` and `YUBIBLOB_REMOVE_IF_UNCHANGED`
+  (`YUBIBLOB_ERR_CHANGED` when the blob changed since the snapshot), and
+  `yubiblob_set_touched_callback` (the YubiKey no longer waits for a
+  touch).
+- **Windows** (spec 0043, a preview): yb and libyubiblob for legacy
+  stores, tested in CI and attached to the GitHub release as zip files.
+
+### Changed
+
+- **`yb fsck`'s wording:** PINs as `set, 3/3 tries left` (or `factory
+  default`, `blocked`), the management key's state first, one "Not
+  checked" line pointing to `yb fsck --seals`, and `YubiKey memory: …`
+  instead of `NVM: …`.  `--seals` announces its touches, then numbers
+  each one with what it checks.
+- **Faster:** a whole-store read uses one connection, about 65 ms on a
+  YubiKey 5 instead of about a second; a connection that only read
+  leaves the card as it is instead of resetting it.
+- **`yb fsck --nvm`** scans the YubiKey's memory under the lock, with the
+  store read under the same lock.
+- **Builds:** the FIDO2 emulator of the tests takes OpenSK from a fork
+  without its 750 MB of submodules; nothing shipped depends on it.
+
+### Fixed
+
+- **Several programs using one YubiKey at once** could lose a blob, read
+  a store in the middle of a write, or fail; a connection that finds the
+  card reset by another program reconnects.
+
 ## [0.6.0] — 2026-10-14
 
 ### Upgrading

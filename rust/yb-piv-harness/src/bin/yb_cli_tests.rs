@@ -421,12 +421,10 @@ fn pin_from_stdin() {
     assert_eq!(stdout.as_bytes(), b"pintest");
 }
 
-fn deprecated_pin_flag_warns() {
+/// `--pin`, removed in yb 0.7: refused, naming its replacement.
+fn removed_pin_flag_is_refused() {
     let f = Fixture::new();
     f.format();
-    f.store_file("x", b"x");
-
-    // Use --pin explicitly (deprecated flag).
     let out = Command::new(yb_bin())
         .env("YB_FIXTURE", f.path())
         .env("YB_SKIP_DEFAULT_CHECK", "1")
@@ -435,19 +433,15 @@ fn deprecated_pin_flag_warns() {
         .args(["--pin", PIN, "list"])
         .output()
         .unwrap();
-
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(out.status.success());
-    assert!(
-        stderr.contains("--pin is deprecated"),
-        "expected deprecation warning, got: {stderr}"
-    );
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("--pin was removed in yb 0.7"), "{stderr}");
 }
 
-fn deprecated_key_flag_warns() {
+/// `--key`, removed in yb 0.7: refused, naming its replacement.
+fn removed_key_flag_is_refused() {
     let f = Fixture::new();
     f.format();
-
     let out = Command::new(yb_bin())
         .env("YB_FIXTURE", f.path())
         .env("YB_SKIP_DEFAULT_CHECK", "1")
@@ -455,13 +449,10 @@ fn deprecated_key_flag_warns() {
         .args(["--key", MGMT, "list"])
         .output()
         .unwrap();
-
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(out.status.success());
-    assert!(
-        stderr.contains("--key is deprecated"),
-        "expected deprecation warning, got: {stderr}"
-    );
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("--key was removed in yb 0.7"), "{stderr}");
+    assert!(stderr.contains("YB_MANAGEMENT_KEY"), "{stderr}");
 }
 
 fn deprecated_extract_flag_warns() {
@@ -1261,8 +1252,8 @@ fn main() {
         test!(quiet_suppresses_stderr),
         test!(pin_from_env),
         test!(pin_from_stdin),
-        test!(deprecated_pin_flag_warns),
-        test!(deprecated_key_flag_warns),
+        test!(removed_pin_flag_is_refused),
+        test!(removed_key_flag_is_refused),
         test!(deprecated_extract_flag_warns),
         test!(store_no_name_stdin_exits_1),
         test!(store_duplicate_basename_exits_1),

@@ -83,7 +83,7 @@ command handler.
 pub struct Context {
     pub reader: String,           // PC/SC reader name
     pub serial: u32,              // YubiKey serial
-    pub management_key: Option<String>, // explicit --key (48 hex chars)
+    pub management_key: Option<String>, // YB_MANAGEMENT_KEY (48 hex chars)
     pin: RefCell<Option<Zeroizing<String>>>, // zeroed on drop; private
     pin_fn: Box<dyn Fn() -> Result<Option<String>>>, // lazy TTY prompt
     pub piv: Arc<dyn PivBackend>,
@@ -118,7 +118,7 @@ pub struct Context {
 
 **Management key resolution** (`Context::management_key_for_write`):
 
-- Explicit `--key` takes priority.
+- An explicit key (`YB_MANAGEMENT_KEY`) takes priority.
 - If `pin_protected`, decrypt the management key from the PRINTED object
   using the PIN.
 - Otherwise return `None` (YubiKey uses its own default key — only
@@ -539,15 +539,13 @@ The `chrono` feature adds `BlobInfo::mtime_local() -> chrono::DateTime<Local>`.
 | `--pin-stdin` | Read PIN from stdin (one line) |
 | `--debug` | Enable debug output |
 | `--allow-defaults` | Skip default-credential check |
-| `--pin` | Hidden, deprecated — use `YB_PIN`, `--pin-stdin`, or TTY prompt |
-| `--key`/`-k` | Hidden, deprecated — use `YB_MANAGEMENT_KEY` |
+| `--pin`, `--key`/`-k` | Removed in 0.7: refused, naming `YB_PIN`, `--pin-stdin` and the prompt, or `YB_MANAGEMENT_KEY` |
 
 **PIN resolution order** (first match wins):
-`--pin-stdin` → deprecated `--pin` → `YB_PIN` env var → interactive
+`--pin-stdin` → `YB_PIN` env var → interactive
 `rpassword` TTY prompt → `None` (operations requiring PIN will fail).
 
-**Management key resolution:** deprecated `--key` → `YB_MANAGEMENT_KEY`
-env var → `None`.
+**Management key resolution:** `YB_MANAGEMENT_KEY` env var → `None`.
 
 **`list-readers` is dispatched before `Context::new`** — it works even
 when no YubiKey is connected.  It also honors `YB_FIXTURE` in a

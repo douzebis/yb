@@ -49,7 +49,7 @@ pub struct ContextOptions {
 /// step 4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeySource {
-    /// `YB_MANAGEMENT_KEY` (or the deprecated `--key`).
+    /// `YB_MANAGEMENT_KEY`.
     Explicit,
     /// PRINTED tag `89`.
     Printed,

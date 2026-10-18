@@ -57,23 +57,23 @@ fn run(cli: Cli) -> Result<()> {
         return cli::select::run(&args);
     }
 
-    // Emit deprecation warnings for legacy flags.
-    if cli.pin_deprecated.is_some() {
-        eprintln!(
-            "Warning: --pin is deprecated and will be removed in yb 0.7 (a PIN on the command \
-             line is visible to other users); use YB_PIN, --pin-stdin, or the prompt"
+    // Removed in 0.7, as 0.5 and 0.6 announced: a secret on the command line
+    // is visible to other users.  Refused, naming the replacement.
+    if cli.pin_removed.is_some() {
+        anyhow::bail!(
+            "--pin was removed in yb 0.7 (a PIN on the command line is visible to other users): \
+             use YB_PIN, --pin-stdin, or the prompt"
         );
     }
-    if cli.key_deprecated.is_some() {
-        eprintln!(
-            "Warning: --key is deprecated and will be removed in yb 0.7 (a key on the command \
-             line is visible to other users); use YB_MANAGEMENT_KEY, or keep the key on the \
-             YubiKey (yb rotate-management-key)"
+    if cli.key_removed.is_some() {
+        anyhow::bail!(
+            "--key was removed in yb 0.7 (a key on the command line is visible to other users): \
+             use YB_MANAGEMENT_KEY, or keep the key on the YubiKey (yb rotate-management-key)"
         );
     }
 
-    let (pin, pin_fn) = make_pin_resolver(cli.pin_stdin, cli.pin_deprecated)?;
-    let management_key = resolve_management_key(cli.key_deprecated);
+    let (pin, pin_fn) = make_pin_resolver(cli.pin_stdin)?;
+    let management_key = resolve_management_key();
     let device_picker = make_device_picker();
 
     let ctx = Context::new(
@@ -169,10 +169,7 @@ fn make_device_picker() -> DevicePicker {
 
 type PinFn = Box<dyn Fn() -> Result<Option<String>>>;
 
-fn make_pin_resolver(
-    pin_stdin: bool,
-    pin_deprecated: Option<String>,
-) -> Result<(Option<String>, PinFn)> {
+fn make_pin_resolver(pin_stdin: bool) -> Result<(Option<String>, PinFn)> {
     if pin_stdin {
         // Spec 0037: the PIN is the first line of standard input, read
         // here, before any command runs; a payload read from standard
@@ -186,10 +183,6 @@ fn make_pin_resolver(
             .trim_end_matches('\r')
             .to_owned();
         return Ok((Some(pin), Box::new(|| Ok(None))));
-    }
-
-    if let Some(p) = pin_deprecated {
-        return Ok((Some(p), Box::new(|| Ok(None))));
     }
 
     if let Ok(v) = std::env::var("YB_PIN") {
@@ -213,12 +206,9 @@ fn make_pin_resolver(
     ))
 }
 
-/// The management key from `--key` or `YB_MANAGEMENT_KEY`, held in
-/// zeroizing memory from here on (spec 0034 G1).
-fn resolve_management_key(key_deprecated: Option<String>) -> Option<Zeroizing<String>> {
-    if let Some(k) = key_deprecated {
-        return Some(Zeroizing::new(k));
-    }
+/// The management key from `YB_MANAGEMENT_KEY`, held in zeroizing memory
+/// from here on (spec 0034 G1).
+fn resolve_management_key() -> Option<Zeroizing<String>> {
     let v = Zeroizing::new(std::env::var("YB_MANAGEMENT_KEY").ok()?);
     (!v.is_empty()).then_some(v)
 }
