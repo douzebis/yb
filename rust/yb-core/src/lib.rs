@@ -70,3 +70,8 @@ pub use zeroize::Zeroizing;
 
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
+
+/// The README's example, compiled as a doctest, so that it stays true.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+pub struct ReadmeDoctests;

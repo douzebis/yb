@@ -11,7 +11,7 @@ license     = "MIT"
 description = "Secure blob storage on a YubiKey — core library"
 repository  = "https://github.com/douzebis/yb"
 homepage    = "https://github.com/douzebis/yb"
-readme      = "../../README.md"
+readme      = "README.md"
 keywords    = ["yubikey", "piv", "encryption", "security"]
 categories  = ["cryptography", "hardware-support"]
 

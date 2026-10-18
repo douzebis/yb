@@ -15,9 +15,9 @@ using its PIV application. Blobs are stored under human-friendly names,
 optionally encrypted with hardware-backed hybrid cryptography.
 
 > **Installing with `cargo install`?**  It builds yb from source.  On Linux,
-> install `pkg-config` and the PC/SC library (pcsclite) first; on NixOS,
-> build in a `nix-shell` that provides them.  See
-> [Installation](#installation).  On macOS, nothing extra is needed.
+> install `pkg-config` and the development files of PC/SC (pcsclite) and
+> libfido2 first; on NixOS, build in a `nix-shell` that provides them; on
+> macOS, libfido2 from Homebrew.  See [Installation](#installation).
 
 **GitHub**: https://github.com/douzebis/yb
 
@@ -37,7 +37,7 @@ optionally encrypted with hardware-backed hybrid cryptography.
 - **Management key kept on the YubiKey**, unlocked by the PIN: writes need
   only the PIN
 - **Shell completions** for bash, zsh, and fish (dynamic blob-name completion)
-- No runtime dependencies beyond PC/SC — a single binary
+- No runtime dependencies beyond PC/SC and libfido2 — a single binary
 
 ---
 
@@ -71,20 +71,22 @@ nix-shell
 
 ### cargo install (Debian, Arch, Fedora, NixOS, macOS, …)
 
-`cargo install` builds yb from source.  On Linux, it needs `pkg-config` and
-the PC/SC development library; install them first:
+`cargo install` builds yb from source.  It needs `pkg-config` and the
+development files of PC/SC and libfido2 (for post-quantum stores); install
+them first:
 
 ```shell
 # Debian / Ubuntu
-sudo apt install pkgconf libpcsclite-dev
+sudo apt install pkgconf libpcsclite-dev libfido2-dev
 
 # Arch
-sudo pacman -S pkgconf pcsclite
+sudo pacman -S pkgconf pcsclite libfido2
 
 # Fedora
-sudo dnf install pkgconf pcsc-lite-devel
+sudo dnf install pkgconf pcsc-lite-devel libfido2-devel
 
-# macOS — PC/SC is built into the OS; no extra library needed
+# macOS — PC/SC is built into the OS
+brew install pkgconf libfido2
 ```
 
 Then:
@@ -97,7 +99,7 @@ On NixOS, libraries are not installed globally: build in a shell that
 provides them, in one step:
 
 ```shell
-nix-shell -p cargo rustc pkg-config pcsclite --run 'cargo install --locked yb'
+nix-shell -p cargo rustc pkg-config pcsclite libfido2 --run 'cargo install --locked yb'
 ```
 
 `--locked` is recommended: it uses the dependency versions yb was tested

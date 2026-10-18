@@ -12,6 +12,24 @@ All notable changes to yb are recorded here.  The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **A YubiKey not set up for yb:** `yb store`, `yb ls` and `yb fetch`
+  said "the YubiKey rejected read object 0x5F0000 (this is unexpected —
+  please report it…)".  They now say that there is no store on this
+  YubiKey, and to run `yb format`, as `yb fsck` does.
+- **Install instructions:** building yb needs libfido2's development
+  files since 0.7.0 (post-quantum stores); the README did not say so
+  (Debian and Ubuntu: `libfido2-dev`; Fedora: `libfido2-devel`; Arch,
+  Homebrew, nixpkgs: `libfido2`).
+
+### Changed
+
+- **crates.io pages:** `yb` and `yb-core` each have a README of their
+  own, instead of the repository's, and libyubiblob's is rewritten: what
+  the crate is for, its guarantees, an example (yb-core's is compiled as
+  a doctest), how to build it.
+
 ## [0.7.0] — 2026-10-18
 
 ### Upgrading
