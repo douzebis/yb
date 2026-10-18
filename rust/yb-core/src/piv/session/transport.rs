@@ -13,10 +13,18 @@ use std::ffi::CString;
 // ---------------------------------------------------------------------------
 
 pub(crate) struct PcscSession {
-    pub(crate) card: pcsc::Card,
+    /// The connection; `None` only while closing (see `Drop`).
+    card: Option<pcsc::Card>,
+    /// Whether a command may have changed the card's security state (a
+    /// PIN verified, the management key authenticated): the card is then
+    /// reset when the connection closes.
+    secured: bool,
     /// Management key algorithm, detected on first use and cached for the
     /// lifetime of the session (spec 0021 §1).
     pub(super) mgmt_algo: Option<crate::piv::MgmtAlgo>,
+    /// The management key this session last authenticated with, so that a
+    /// sequence of writes on one connection authenticates once (spec 0048).
+    pub(super) authenticated: Option<zeroize::Zeroizing<String>>,
 }
 
 impl PcscSession {
@@ -31,8 +39,10 @@ impl PcscSession {
         let card = connect_reader_mode(&ctx, reader, mode)?;
 
         let mut session = Self {
-            card,
+            card: Some(card),
+            secured: false,
             mgmt_algo: None,
+            authenticated: None,
         };
         session.select_piv()?;
         Ok(session)
@@ -44,14 +54,17 @@ impl PcscSession {
         Ok(())
     }
 
+    /// The connection.
+    pub(crate) fn card(&self) -> &pcsc::Card {
+        self.card.as_ref().expect("an open connection")
+    }
+
     /// Send an APDU and return the full response (including SW).
     pub(crate) fn transmit_raw(&mut self, apdu: &[u8]) -> Result<Vec<u8>> {
-        let mut buf = vec![0u8; pcsc::MAX_BUFFER_SIZE_EXTENDED];
-        let resp = self
-            .card
-            .transmit(apdu, &mut buf)
-            .map_err(|e| CardError::pcsc(PcscOp::Transmit, e))?;
-        Ok(resp.to_vec())
+        if !apdu.get(1).is_some_and(|ins| READ_ONLY_INS.contains(ins)) {
+            self.secured = true;
+        }
+        transmit_raw_card(self.card(), apdu)
     }
 
     /// What this session knows, for error reports (spec 0025 §1).
@@ -100,6 +113,32 @@ impl PcscSession {
     }
 }
 
+/// Closing the connection: the card is reset after a command that may have
+/// changed its security state, so that the next program does not inherit
+/// a verified PIN or an authenticated management key.  A connection that
+/// only read is closed leaving the card as it is: resetting it would make
+/// every other program's connection reconnect (spec 0048).
+impl Drop for PcscSession {
+    fn drop(&mut self) {
+        if let Some(card) = self.card.take() {
+            let disposition = if self.secured {
+                pcsc::Disposition::ResetCard
+            } else {
+                pcsc::Disposition::LeaveCard
+            };
+            // On failure, the card is dropped, which resets it.
+            let _ = card.disconnect(disposition);
+        }
+    }
+}
+
+/// Instructions that change nothing on the card: SELECT, GET DATA, GET
+/// RESPONSE, GET METADATA, GET SERIAL, GET VERSION.
+const READ_ONLY_INS: [u8; 6] = [0xA4, 0xCB, 0xC0, 0xF7, 0xF8, 0xFD];
+
+/// How long to keep reconnecting after other programs reset the card.
+const RESET_PATIENCE: std::time::Duration = std::time::Duration::from_secs(30);
+
 // ---------------------------------------------------------------------------
 // Low-level PC/SC helpers
 // ---------------------------------------------------------------------------
@@ -115,6 +154,11 @@ pub(crate) fn transmit_raw_card(card: &pcsc::Card, apdu: &[u8]) -> Result<Vec<u8
     Ok(resp.to_vec())
 }
 
+/// Connect to `reader`, and hold the card lock while connected (spec
+/// 0048): PC/SC's transaction, which other programs' commands wait for.
+/// The transaction ends when the connection closes (`SCardDisconnect`, or
+/// the process ending), so its guard is not kept: a `pcsc::Transaction`
+/// borrows the card, which a session must own.
 pub(crate) fn connect_reader_mode(
     ctx: &pcsc::Context,
     reader: &str,
@@ -122,7 +166,26 @@ pub(crate) fn connect_reader_mode(
 ) -> Result<pcsc::Card> {
     // No reader name in errors: it can identify the device (spec 0025 §3).
     let cstring = CString::new(reader).map_err(|_| anyhow::anyhow!("invalid reader name"))?;
-    Ok(ctx
-        .connect(&cstring, mode, pcsc::Protocols::ANY)
-        .map_err(|e| CardError::pcsc(PcscOp::Connect, e))?)
+    // pcsc-lite's SCardConnect, too, waits while another program holds the
+    // card: the notice covers both.
+    crate::piv::lock::waiting(|| {
+        let mut card = ctx
+            .connect(&cstring, mode, pcsc::Protocols::ANY)
+            .map_err(|e| CardError::pcsc(PcscOp::Connect, e))?;
+        // A program that resets the card when it closes its connection (yb
+        // does, after verifying the PIN) makes the connections opened
+        // before then reconnect.  Each reset means another program got its
+        // turn, so keep at it for a while.
+        let start = std::time::Instant::now();
+        loop {
+            match card.transaction().map(std::mem::forget) {
+                Ok(()) => return Ok(card),
+                Err(pcsc::Error::ResetCard) if start.elapsed() < RESET_PATIENCE => {
+                    card.reconnect(mode, pcsc::Protocols::ANY, pcsc::Disposition::LeaveCard)
+                        .map_err(|e| CardError::pcsc(PcscOp::Connect, e))?;
+                }
+                Err(e) => return Err(CardError::pcsc(PcscOp::Lock, e).into()),
+            }
+        }
+    })
 }

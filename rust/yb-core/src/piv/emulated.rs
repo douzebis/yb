@@ -10,6 +10,7 @@
 //! per-object storage.  Supports optional random write failures (ejection
 //! simulation) for reliability testing.
 
+use super::lock::{CardLock, SimulatedLock};
 use super::{DeviceInfo, PivBackend};
 use anyhow::{anyhow, bail, Result};
 use std::collections::HashMap;
@@ -28,6 +29,8 @@ pub struct EmulatedPiv {
     state: Arc<Mutex<DeviceState>>,
     /// If Some(p), each write_object call fails with probability p (0.0–1.0).
     ejection_probability: Option<f64>,
+    /// The card lock (spec 0048), taken by every command.
+    card: SimulatedLock,
 }
 
 impl EmulatedPiv {
@@ -38,6 +41,7 @@ impl EmulatedPiv {
             version: "5.4.3".to_owned(),
             state: Arc::new(Mutex::new(DeviceState::default())),
             ejection_probability: None,
+            card: SimulatedLock::default(),
         }
     }
 
@@ -52,11 +56,20 @@ impl EmulatedPiv {
 }
 
 impl PivBackend for EmulatedPiv {
+    fn exclusive(&self, reader: &str) -> Result<CardLock<'_>> {
+        if reader != self.reader {
+            bail!("emulated: unknown reader '{reader}'");
+        }
+        Ok(self.card.exclusive())
+    }
+
     fn list_readers(&self) -> Result<Vec<String>> {
+        let _card = self.card.command()?;
         Ok(vec![self.reader.clone()])
     }
 
     fn list_devices(&self) -> Result<Vec<DeviceInfo>> {
+        let _card = self.card.command()?;
         Ok(vec![DeviceInfo {
             serial: self.serial,
             version: self.version.clone(),
@@ -65,6 +78,7 @@ impl PivBackend for EmulatedPiv {
     }
 
     fn read_object(&self, reader: &str, id: u32) -> Result<Vec<u8>> {
+        let _card = self.card.command()?;
         if reader != self.reader {
             bail!("emulated: unknown reader '{reader}'");
         }
@@ -83,6 +97,7 @@ impl PivBackend for EmulatedPiv {
         data: &[u8],
         _management_key: &str,
     ) -> Result<()> {
+        let _card = self.card.command()?;
         if reader != self.reader {
             bail!("emulated: unknown reader '{reader}'");
         }
@@ -97,6 +112,7 @@ impl PivBackend for EmulatedPiv {
     }
 
     fn authenticate_management_key(&self, reader: &str, _management_key: &str) -> Result<()> {
+        let _card = self.card.command()?;
         if reader != self.reader {
             bail!("emulated: unknown reader '{reader}'");
         }
@@ -104,6 +120,7 @@ impl PivBackend for EmulatedPiv {
     }
 
     fn verify_pin(&self, reader: &str, _pin: &str) -> Result<()> {
+        let _card = self.card.command()?;
         if reader != self.reader {
             bail!("emulated: unknown reader '{reader}'");
         }
@@ -111,6 +128,7 @@ impl PivBackend for EmulatedPiv {
     }
 
     fn send_apdu(&self, reader: &str, apdu: &[u8]) -> Result<Vec<u8>> {
+        let _card = self.card.command()?;
         if reader != self.reader {
             bail!("emulated: unknown reader '{reader}'");
         }
@@ -129,6 +147,7 @@ impl PivBackend for EmulatedPiv {
         _peer_point: &[u8],
         _pin: Option<&str>,
     ) -> Result<Vec<u8>> {
+        let _card = self.card.command()?;
         if reader != self.reader {
             bail!("emulated: unknown reader '{reader}'");
         }
@@ -142,6 +161,7 @@ impl PivBackend for EmulatedPiv {
         _digest: &[u8],
         _pin: Option<&str>,
     ) -> Result<[u8; 64]> {
+        let _card = self.card.command()?;
         if reader != self.reader {
             bail!("emulated: unknown reader '{reader}'");
         }
@@ -149,6 +169,7 @@ impl PivBackend for EmulatedPiv {
     }
 
     fn read_certificate(&self, reader: &str, slot: u8) -> Result<Vec<u8>> {
+        let _card = self.card.command()?;
         if reader != self.reader {
             bail!("emulated: unknown reader '{reader}'");
         }
@@ -161,6 +182,7 @@ impl PivBackend for EmulatedPiv {
         _slot: u8,
         _management_key: Option<&str>,
     ) -> Result<Vec<u8>> {
+        let _card = self.card.command()?;
         if reader != self.reader {
             bail!("emulated: unknown reader '{reader}'");
         }
@@ -175,6 +197,7 @@ impl PivBackend for EmulatedPiv {
         _management_key: &str,
         _pin: Option<&str>,
     ) -> Result<Vec<u8>> {
+        let _card = self.card.command()?;
         if reader != self.reader {
             bail!("emulated: unknown reader '{reader}'");
         }
@@ -182,6 +205,7 @@ impl PivBackend for EmulatedPiv {
     }
 
     fn read_printed_object_with_pin(&self, reader: &str, _pin: &str) -> Result<Vec<u8>> {
+        let _card = self.card.command()?;
         use crate::auxiliaries::OBJ_PRINTED;
         if reader != self.reader {
             bail!("emulated: unknown reader '{reader}'");
@@ -201,6 +225,7 @@ impl PivBackend for EmulatedPiv {
         _new_key_hex: &str,
         _algo: super::MgmtAlgo,
     ) -> Result<()> {
+        let _card = self.card.command()?;
         if reader != self.reader {
             bail!("emulated: unknown reader '{reader}'");
         }

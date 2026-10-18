@@ -144,6 +144,66 @@ fn t2_generate_certificate() {
     }));
 }
 
+/// Spec 0048: while one connection holds the card (`exclusive`), another
+/// connection's command waits for it, then succeeds.
+fn t2_exclusive_makes_others_wait() {
+    use std::time::{Duration, Instant};
+    skip_if_absent!(with_vsc(Options::default(), |reader| {
+        let piv = hardware_piv();
+        piv.write_object(reader, 0x5F_C105, b"lock", MGMT).unwrap();
+        std::thread::scope(|scope| {
+            let holder = scope.spawn(|| {
+                let _lock = piv.exclusive(reader).unwrap();
+                piv.read_object(reader, 0x5F_C105).unwrap();
+                std::thread::sleep(Duration::from_millis(1500));
+            });
+            std::thread::sleep(Duration::from_millis(300));
+            let start = Instant::now();
+            let other = hardware_piv();
+            assert_eq!(other.read_object(reader, 0x5F_C105).unwrap(), b"lock");
+            holder.join().unwrap();
+            assert!(start.elapsed() >= Duration::from_millis(1000));
+        });
+    }));
+}
+
+/// Spec 0048: `exclusive` is re-entrant, and writes under it go through
+/// its one connection.
+fn t2_exclusive_is_reentrant() {
+    skip_if_absent!(with_vsc(Options::default(), |reader| {
+        let piv = hardware_piv();
+        let _outer = piv.exclusive(reader).unwrap();
+        let _inner = piv.exclusive(reader).unwrap();
+        piv.write_object(reader, 0x5F_C105, b"one", MGMT).unwrap();
+        piv.write_object(reader, 0x5F_C105, b"two", MGMT).unwrap();
+        assert_eq!(piv.read_object(reader, 0x5F_C105).unwrap(), b"two");
+    }));
+}
+
+/// Spec 0048: concurrent readers and writers on separate connections all
+/// succeed (each waits its turn; a reset by one makes the others
+/// reconnect).
+fn t2_concurrent_connections() {
+    skip_if_absent!(with_vsc(Options::default(), |reader| {
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..4u8)
+                .map(|i| {
+                    scope.spawn(move || {
+                        let piv = hardware_piv();
+                        for j in 0..5u8 {
+                            piv.write_object(reader, 0x5F_C105, &[i, j], MGMT).unwrap();
+                            assert_eq!(piv.read_object(reader, 0x5F_C105).unwrap().len(), 2);
+                        }
+                    })
+                })
+                .collect();
+            for h in handles {
+                h.join().unwrap();
+            }
+        });
+    }));
+}
+
 // ---------------------------------------------------------------------------
 // Runner (libtest-mimic: libtest's output and flags, spec 0029 §4)
 // ---------------------------------------------------------------------------
@@ -168,6 +228,9 @@ fn main() {
         test!(t2_generate_key_no_auth),
         test!(t2_ecdh),
         test!(t2_generate_certificate),
+        test!(t2_exclusive_makes_others_wait),
+        test!(t2_exclusive_is_reentrant),
+        test!(t2_concurrent_connections),
     ];
     libtest_mimic::run(&libtest_mimic::Arguments::from_args(), tests).exit();
 }

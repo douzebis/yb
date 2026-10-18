@@ -192,7 +192,7 @@ impl Session {
 
     fn remove(&self, name: &str, pin: &[u8]) -> Status {
         let name = CString::new(name).unwrap();
-        unsafe { yubiblob_remove(self.0, name.as_ptr(), pin.as_ptr(), pin.len()) }
+        unsafe { yubiblob_remove(self.0, name.as_ptr(), 0, pin.as_ptr(), pin.len()) }
     }
 
     /// (name, encrypted, verdict) of every blob.

@@ -98,11 +98,28 @@ impl PcscSession {
     /// Authenticate the management key using GENERAL AUTHENTICATE (3-pass
     /// mutual auth), with the algorithm reported by the card.
     pub(crate) fn authenticate_management_key(&mut self, key_hex: &str) -> Result<()> {
+        self.authenticated = None;
         let key_bytes =
             zeroize::Zeroizing::new(hex::decode(key_hex).context("decoding management key")?);
         let algo = self.management_key_algorithm()?;
         algo.check_key_len(&key_bytes)?;
-        self.mutual_auth(algo, &key_bytes)
+        self.mutual_auth(algo, &key_bytes)?;
+        self.authenticated = Some(zeroize::Zeroizing::new(key_hex.to_owned()));
+        Ok(())
+    }
+
+    /// Forget the key this session authenticated with (it was replaced).
+    pub(crate) fn forget_authentication(&mut self) {
+        self.authenticated = None;
+    }
+
+    /// Authenticate with `key_hex`, unless this session already did with
+    /// that key: the writes of one locked sequence authenticate once.
+    pub(crate) fn authenticate_once(&mut self, key_hex: &str) -> Result<()> {
+        if self.authenticated.as_deref().map(String::as_str) == Some(key_hex) {
+            return Ok(());
+        }
+        self.authenticate_management_key(key_hex)
     }
 
     fn mutual_auth(&mut self, algo: MgmtAlgo, key_bytes: &[u8]) -> Result<()> {

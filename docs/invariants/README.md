@@ -33,6 +33,8 @@ test named there exists.
 | [0017](0017-the-fido2-pin-is-not-tried-with-few-attempts-left.md) | The FIDO2 PIN Is Not Tried With Few Attempts Left |
 | [0018](0018-release-files-are-built-tested-and-approved.md) | Release Files Are Built, Tested and Approved |
 | [0019](0019-unencrypted-blobs-are-readable-without-any-pin.md) | Unencrypted Blobs Are Readable Without Any PIN |
+| [0020](0020-operations-are-serializable.md) | yb's Operations Are Serializable |
+| [0021](0021-a-snapshot-never-plans-a-write.md) | A Snapshot Never Plans a Write |
 
 ## Not guaranteed
 

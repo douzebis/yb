@@ -447,6 +447,8 @@ pub fn enable_pin_protected_management_key(
 ) -> Result<()> {
     use anyhow::Context as _;
 
+    // The whole switch under the card lock (spec 0048).
+    let _lock = piv.exclusive(reader)?;
     let admin_payload = admin_data_with_stored_key(reader, piv, sw.clearing_legacy_flag)?;
 
     // B1a — save the new key, keeping the old one until the switch is done.

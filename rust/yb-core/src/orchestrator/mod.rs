@@ -72,6 +72,31 @@ pub fn store_blob(
     management_key: &str,
     pin: Option<&str>,
 ) -> Result<bool> {
+    store_blob_checked(
+        store,
+        piv,
+        name,
+        payload,
+        options,
+        management_key,
+        pin,
+        None,
+    )
+}
+
+/// [`store_blob`], with `before_write` checked on the store read under the
+/// card lock (see [`store_blob_with_checked`]).
+#[allow(clippy::too_many_arguments)]
+pub fn store_blob_checked(
+    store: &mut Store,
+    piv: &dyn PivBackend,
+    name: &str,
+    payload: &[u8],
+    options: StoreOptions<'_>,
+    management_key: &str,
+    pin: Option<&str>,
+    before_write: Option<BeforeWrite<'_>>,
+) -> Result<bool> {
     let (encrypt, encryption_key) = match options.encryption {
         Encryption::None => (false, None),
         Encryption::Encrypted(pk) => (true, Some(pk)),
@@ -86,7 +111,7 @@ pub fn store_blob(
         pin,
         debug: false,
     };
-    store_blob_with(
+    store_blob_with_checked(
         store,
         piv,
         &protection,
@@ -95,6 +120,7 @@ pub fn store_blob(
         encrypt,
         options.compression,
         Some(management_key),
+        before_write,
     )
 }
 
@@ -115,6 +141,97 @@ pub fn store_blob_with(
     encrypt: bool,
     compression: Compression,
     management_key: Option<&str>,
+) -> Result<bool> {
+    store_blob_with_checked(
+        store,
+        piv,
+        protection,
+        name,
+        payload,
+        encrypt,
+        compression,
+        management_key,
+        None,
+    )
+}
+
+/// What a write checks on the store it reads under the card lock, before
+/// writing anything: an error stops the write (spec 0049, S4).
+pub type BeforeWrite<'a> = &'a dyn Fn(&Store) -> Result<()>;
+
+/// The blob changed on the YubiKey since the snapshot a write was asked
+/// to check against (spec 0049, S4): the write wrote nothing.
+#[derive(Debug)]
+pub struct BlobChanged(pub String);
+
+impl std::fmt::Display for BlobChanged {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "'{}' changed on the YubiKey since it was read; nothing was written",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for BlobChanged {}
+
+/// A [`BeforeWrite`] check (spec 0049, S4): fails with [`BlobChanged`] if
+/// the blob `name` in the store read under the lock (its head object,
+/// bytes and age) differs from the blob in `snapshot`: rewritten, removed,
+/// or created since.
+pub fn unchanged_since<'a>(snapshot: &Store, name: &'a str) -> impl Fn(&Store) -> Result<()> + 'a {
+    let head = |store: &Store| store.find_head(name).map(|h| (h.index(), h.to_bytes()));
+    let before = head(snapshot);
+    move |now: &Store| {
+        if head(now) == before {
+            Ok(())
+        } else {
+            Err(BlobChanged(name.to_owned()).into())
+        }
+    }
+}
+
+/// Read the whole store again, under the card lock the caller holds, and
+/// plan from that read (spec 0048, S2): `store` becomes the store as it is.
+/// Fails, writing nothing, if it is no longer the same store (formatted
+/// again since `store` was read).
+fn reload_for_write(store: &mut Store, piv: &dyn PivBackend) -> Result<()> {
+    let fresh = Store::from_device(&store.reader, piv)?;
+    let identity = |s: &Store| {
+        (
+            s.kind.is_post_quantum(),
+            s.object_count,
+            s.store_key_slot,
+            s.descriptor().map(|d| d.to_bytes()),
+        )
+    };
+    if identity(&fresh) != identity(store) {
+        bail!("the store was formatted again meanwhile; nothing was written");
+    }
+    *store = fresh;
+    Ok(())
+}
+
+/// [`store_blob_with`], with `before_write` checked on the store read
+/// under the card lock.
+///
+/// The order (spec 0048, S2): the room, from `store` as the caller read
+/// it; the protection, which may wait for the user (PIN, touch); then,
+/// under the card lock, a whole read of the store, `before_write`, the
+/// room again, and the writes.  `store` is left as that read found it,
+/// with this write applied.
+#[allow(clippy::too_many_arguments)]
+pub fn store_blob_with_checked(
+    store: &mut Store,
+    piv: &dyn PivBackend,
+    protection: &dyn Protection,
+    name: &str,
+    payload: &[u8],
+    encrypt: bool,
+    compression: Compression,
+    management_key: Option<&str>,
+    before_write: Option<BeforeWrite<'_>>,
 ) -> Result<bool> {
     validate_name(name)?;
 
@@ -168,6 +285,18 @@ pub fn store_blob_with(
     let data = protected.stored;
     let blob_key_slot = protected.key_byte;
     let blob_size = data.len() as u32;
+
+    // Under the card lock, plan from the store as it is (spec 0048): the
+    // protection above does not depend on where the blob goes.
+    let _lock = piv.exclusive(&store.reader)?;
+    reload_for_write(store, piv)?;
+    if let Some(check) = before_write {
+        check(store)?;
+    }
+    if store.free_count() < needed {
+        return Ok(false);
+    }
+    store.ensure_age_room(needed)?;
 
     // Clean up first (spec 0038): the leftovers loading reset, and objects
     // a card out of memory deleted, are written before any new data, so
@@ -389,6 +518,24 @@ pub fn remove_blobs<S: AsRef<str>>(
     names: &[S],
     management_key: &str,
 ) -> Result<usize> {
+    remove_blobs_checked(store, piv, names, management_key, None)
+}
+
+/// [`remove_blobs`], under the card lock from a whole read of the store
+/// (spec 0048), with `before_write` checked on that read.  `store` is left
+/// as that read found it, with the removal applied.
+pub fn remove_blobs_checked<S: AsRef<str>>(
+    store: &mut Store,
+    piv: &dyn PivBackend,
+    names: &[S],
+    management_key: &str,
+    before_write: Option<BeforeWrite<'_>>,
+) -> Result<usize> {
+    let _lock = piv.exclusive(&store.reader)?;
+    reload_for_write(store, piv)?;
+    if let Some(check) = before_write {
+        check(store)?;
+    }
     let heads: Vec<u8> = names
         .iter()
         .filter_map(|name| store.find_head(name.as_ref()).map(|h| h.index))

@@ -1128,17 +1128,24 @@ mod fsck_tests {
     /// next store fails before writing anything; fsck warns near the end.
     #[test]
     fn store_refused_when_ages_run_out() {
-        use yb_core::store::MAX_AGE;
+        use yb_core::store::{constants::OBJECT_AGE_O, MAX_AGE};
         use yb_core::{store_blob, Compression, Encryption, StoreOptions};
         let ctx = setup_signed_store();
         let plain = || StoreOptions {
             encryption: Encryption::None,
             compression: Compression::None,
         };
-        let mut store = Store::from_device(&ctx.reader, ctx.piv.as_ref()).unwrap();
-        // One object of data, one for the signature's spill: none here.
-        store.store_age = MAX_AGE - 1;
         let piv = ctx.piv.as_ref();
+        // One object of data, one for the signature's spill: none here.
+        // A write plans its ages from the card (spec 0048), so the card
+        // holds the next-to-last age: a blob whose head is patched to it.
+        let mut store = Store::from_device(&ctx.reader, piv).unwrap();
+        assert!(store_blob(&mut store, piv, "first", b"x", plain(), MGMT, Some(PIN)).unwrap());
+        let head = u32::from(store.find_head("first").unwrap().index());
+        let mut raw = read_raw(&ctx, head);
+        raw[OBJECT_AGE_O..OBJECT_AGE_O + 3].copy_from_slice(&(MAX_AGE - 1).to_le_bytes()[..3]);
+        write_raw(&ctx, head, &raw);
+        let mut store = Store::from_device(&ctx.reader, piv).unwrap();
         assert!(store_blob(&mut store, piv, "last", b"x", plain(), MGMT, Some(PIN)).unwrap());
         let store = Store::from_device(&ctx.reader, piv).unwrap();
         assert_eq!(store.store_age, MAX_AGE);

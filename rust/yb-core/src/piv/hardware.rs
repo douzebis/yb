@@ -5,25 +5,74 @@
 //! Hardware PIV backend — communicates directly with the YubiKey PIV applet
 //! via PC/SC APDUs (NIST SP 800-73-4).  No external subprocesses required.
 
-use super::{session, tlv, DeviceInfo, FlashHandle, MgmtAlgo, PinRef, PivBackend};
+use super::{session, tlv, CardLock, DeviceInfo, FlashHandle, MgmtAlgo, PinRef, PivBackend};
 use crate::errors::{CardError, CardOp, PcscOp};
 use anyhow::{bail, Context, Result};
 use session::{serial_from_reader, version_from_reader, PcscSession, SELECT_PIV};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
+    Arc, Mutex,
 };
+use std::thread::ThreadId;
 
 // ---------------------------------------------------------------------------
-// HardwarePiv — stateless struct implementing PivBackend
+// HardwarePiv — PivBackend over PC/SC
 // ---------------------------------------------------------------------------
 
-pub struct HardwarePiv;
+/// The PC/SC backend.  Each command opens its own connection, which holds
+/// the card lock while open (spec 0048), unless the calling thread holds
+/// the card through [`PivBackend::exclusive`]: its commands then go through
+/// that one, locked connection.
+pub struct HardwarePiv {
+    held: Mutex<Vec<Held>>,
+}
+
+/// A connection kept open by [`PivBackend::exclusive`].
+struct Held {
+    reader: String,
+    thread: ThreadId,
+    depth: usize,
+    session: PcscSession,
+}
 
 impl HardwarePiv {
     pub fn new() -> Self {
-        Self
+        Self {
+            held: Mutex::new(Vec::new()),
+        }
     }
+
+    /// Run `f` on the calling thread's held connection to `reader`, or on
+    /// a connection of its own.
+    fn with_session<T>(
+        &self,
+        reader: &str,
+        f: impl FnOnce(&mut PcscSession) -> Result<T>,
+    ) -> Result<T> {
+        {
+            let mut held = self.held.lock().unwrap();
+            if let Some(h) = find_held(&mut held, reader) {
+                return f(&mut h.session);
+            }
+        }
+        f(&mut self.open(reader)?)
+    }
+
+    /// A new connection to `reader`.  Refused while the calling thread
+    /// holds the card: the new connection would wait for that thread's own
+    /// lock.
+    fn open(&self, reader: &str) -> Result<PcscSession> {
+        if find_held(&mut self.held.lock().unwrap(), reader).is_some() {
+            bail!("a second connection to the YubiKey while holding it (bug)");
+        }
+        PcscSession::open(reader)
+    }
+}
+
+fn find_held<'a>(held: &'a mut [Held], reader: &str) -> Option<&'a mut Held> {
+    let me = std::thread::current().id();
+    held.iter_mut()
+        .find(|h| h.reader == reader && h.thread == me)
 }
 
 impl Default for HardwarePiv {
@@ -33,6 +82,38 @@ impl Default for HardwarePiv {
 }
 
 impl PivBackend for HardwarePiv {
+    fn exclusive(&self, reader: &str) -> Result<CardLock<'_>> {
+        let release = {
+            let reader = reader.to_owned();
+            move || {
+                let me = std::thread::current().id();
+                let mut held = self.held.lock().unwrap();
+                if let Some(i) = held
+                    .iter()
+                    .position(|h| h.reader == reader && h.thread == me)
+                {
+                    held[i].depth -= 1;
+                    if held[i].depth == 0 {
+                        // Closing the connection ends its transaction.
+                        held.swap_remove(i);
+                    }
+                }
+            }
+        };
+        if let Some(h) = find_held(&mut self.held.lock().unwrap(), reader) {
+            h.depth += 1;
+            return Ok(CardLock::new(release));
+        }
+        let session = PcscSession::open(reader)?;
+        self.held.lock().unwrap().push(Held {
+            reader: reader.to_owned(),
+            thread: std::thread::current().id(),
+            depth: 1,
+            session,
+        });
+        Ok(CardLock::new(release))
+    }
+
     fn list_readers(&self) -> Result<Vec<String>> {
         let ctx = pcsc::Context::establish(pcsc::Scope::User)
             .map_err(|e| CardError::pcsc(PcscOp::Establish, e))?;
@@ -64,40 +145,41 @@ impl PivBackend for HardwarePiv {
     }
 
     fn read_object(&self, reader: &str, id: u32) -> Result<Vec<u8>> {
-        let mut session = PcscSession::open(reader)?;
-        session.get_data(id)
+        self.with_session(reader, |session| session.get_data(id))
     }
 
     fn write_object(&self, reader: &str, id: u32, data: &[u8], management_key: &str) -> Result<()> {
-        let mut session = PcscSession::open(reader)?;
-        session.authenticate_management_key(management_key)?;
-        session.put_data(id, data)
+        self.with_session(reader, |session| {
+            session.authenticate_once(management_key)?;
+            session.put_data(id, data)
+        })
     }
 
     fn authenticate_management_key(&self, reader: &str, management_key: &str) -> Result<()> {
-        let mut session = PcscSession::open(reader)?;
-        session.authenticate_management_key(management_key)
+        self.with_session(reader, |session| {
+            session.authenticate_management_key(management_key)
+        })
     }
 
     fn verify_pin(&self, reader: &str, pin: &str) -> Result<()> {
-        let mut session = PcscSession::open(reader)?;
-        session.verify_pin(pin)
+        self.with_session(reader, |session| session.verify_pin(pin))
     }
 
     fn send_apdu(&self, reader: &str, apdu: &[u8]) -> Result<Vec<u8>> {
-        let mut session = PcscSession::open(reader)?;
-        session.transmit_check(apdu, CardOp::Command)
+        self.with_session(reader, |session| {
+            session.transmit_check(apdu, CardOp::Command)
+        })
     }
 
     fn change_reference(&self, reader: &str, which: PinRef, old: &str, new: &str) -> Result<()> {
-        let mut session = PcscSession::open(reader)?;
-        session.change_reference(which, old, new)
+        self.with_session(reader, |session| session.change_reference(which, old, new))
     }
 
     fn reset_blocked_piv(&self, reader: &str) -> Result<()> {
-        let mut session = PcscSession::open(reader)?;
-        session.transmit_check(&[0x00, 0xFB, 0x00, 0x00], CardOp::ResetPiv)?;
-        Ok(())
+        self.with_session(reader, |session| {
+            session.transmit_check(&[0x00, 0xFB, 0x00, 0x00], CardOp::ResetPiv)?;
+            Ok(())
+        })
     }
 
     fn ecdh(
@@ -107,11 +189,12 @@ impl PivBackend for HardwarePiv {
         peer_point: &[u8],
         pin: Option<&str>,
     ) -> Result<Vec<u8>> {
-        let mut session = PcscSession::open(reader)?;
-        if let Some(p) = pin {
-            session.verify_pin(p)?;
-        }
-        session.general_authenticate_ecdh(slot, peer_point)
+        self.with_session(reader, |session| {
+            if let Some(p) = pin {
+                session.verify_pin(p)?;
+            }
+            session.general_authenticate_ecdh(slot, peer_point)
+        })
     }
 
     fn ecdsa_sign(
@@ -121,22 +204,23 @@ impl PivBackend for HardwarePiv {
         digest: &[u8],
         pin: Option<&str>,
     ) -> Result<[u8; 64]> {
-        let mut session = PcscSession::open(reader)?;
-        if let Some(p) = pin {
-            session.verify_pin(p)?;
-        }
-        session.general_authenticate_sign_raw(slot, digest)
+        self.with_session(reader, |session| {
+            if let Some(p) = pin {
+                session.verify_pin(p)?;
+            }
+            session.general_authenticate_sign_raw(slot, digest)
+        })
     }
 
     fn object_size(&self, reader: &str, id: u32) -> Result<Option<usize>> {
-        let mut session = PcscSession::open(reader)?;
-        session.try_get_data_size(id)
+        self.with_session(reader, |session| session.try_get_data_size(id))
     }
 
     fn read_certificate(&self, reader: &str, slot: u8) -> Result<Vec<u8>> {
         let object_id = slot_to_object_id(slot)?;
-        let mut session = PcscSession::open(reader)?;
-        let raw = session.get_data_as(object_id, CardOp::ReadCertificate(slot))?;
+        let raw = self.with_session(reader, |session| {
+            session.get_data_as(object_id, CardOp::ReadCertificate(slot))
+        })?;
         // Cert TLV: 53 <len> [ 70 <len> <DER cert> 71 01 00 FE 00 ]
         // get_data already stripped the outer 53 wrapper.
         // Now parse the inner TLV for tag 0x70.
@@ -153,23 +237,24 @@ impl PivBackend for HardwarePiv {
         slot: u8,
         management_key: Option<&str>,
     ) -> Result<Vec<u8>> {
-        let mut session = PcscSession::open(reader)?;
-        if let Some(key) = management_key {
-            session.authenticate_management_key(key)?;
-        }
-        session.generate_key(slot)
+        self.with_session(reader, |session| {
+            if let Some(key) = management_key {
+                session.authenticate_management_key(key)?;
+            }
+            session.generate_key(slot)
+        })
     }
 
     fn read_printed_object_with_pin(&self, reader: &str, pin: &str) -> Result<Vec<u8>> {
         use crate::auxiliaries::OBJ_PRINTED;
-        let mut session = PcscSession::open(reader)?;
-        session.verify_pin(pin)?;
-        session.get_data(OBJ_PRINTED)
+        self.with_session(reader, |session| {
+            session.verify_pin(pin)?;
+            session.get_data(OBJ_PRINTED)
+        })
     }
 
     fn management_key_algorithm(&self, reader: &str) -> Result<MgmtAlgo> {
-        let mut session = PcscSession::open(reader)?;
-        session.management_key_algorithm()
+        self.with_session(reader, |session| session.management_key_algorithm())
     }
 
     fn set_management_key(
@@ -183,24 +268,27 @@ impl PivBackend for HardwarePiv {
             hex::decode(new_key_hex).context("decoding new management key")?,
         );
         algo.check_key_len(&new_bytes)?;
-        let mut session = PcscSession::open(reader)?;
-        session.authenticate_management_key(old_key_hex)?;
-        // SET MANAGEMENT KEY: INS=0xFF, P1=0xFF, P2=0xFF (no touch)
-        // Data: <algorithm id> 9B (management key tag) <len> <key bytes>
-        let mut apdu = vec![
-            0x00,
-            0xFF,
-            0xFF,
-            0xFF,
-            (3 + new_bytes.len()) as u8,
-            algo.id(),
-            0x9B,
-            new_bytes.len() as u8,
-        ];
-        apdu.extend_from_slice(&new_bytes);
-        session.transmit_check(&apdu, CardOp::SetMgmtKey)?;
-        session.set_cached_management_key_algorithm(algo);
-        Ok(())
+        self.with_session(reader, |session| {
+            session.authenticate_management_key(old_key_hex)?;
+            // SET MANAGEMENT KEY: INS=0xFF, P1=0xFF, P2=0xFF (no touch)
+            // Data: <algorithm id> 9B (management key tag) <len> <key bytes>
+            let mut apdu = vec![
+                0x00,
+                0xFF,
+                0xFF,
+                0xFF,
+                (3 + new_bytes.len()) as u8,
+                algo.id(),
+                0x9B,
+                new_bytes.len() as u8,
+            ];
+            apdu.extend_from_slice(&new_bytes);
+            session.transmit_check(&apdu, CardOp::SetMgmtKey)?;
+            session.set_cached_management_key_algorithm(algo);
+            // Authenticated with the old key, which no longer is the card's.
+            session.forget_authentication();
+            Ok(())
+        })
     }
 
     fn generate_certificate(
@@ -219,7 +307,7 @@ impl PivBackend for HardwarePiv {
         use std::sync::Mutex;
 
         // ---- Step 1: authenticate, generate key ----
-        let mut session = PcscSession::open(reader)?;
+        let mut session = self.open(reader)?;
         session.authenticate_management_key(management_key)?;
         let mgmt_key_owned = management_key.to_owned();
         let pubkey_point = session.generate_key(slot)?;
@@ -252,7 +340,7 @@ impl PivBackend for HardwarePiv {
             }
         }
 
-        let mut sign_session = PcscSession::open(&reader_owned)?;
+        let mut sign_session = self.open(&reader_owned)?;
         if let Some(ref p) = pin_owned {
             sign_session.verify_pin(p)?;
         }
@@ -278,7 +366,7 @@ impl PivBackend for HardwarePiv {
 
         // ---- Step 3: import certificate ----
         let object_id = slot_to_object_id(slot)?;
-        let mut write_session = PcscSession::open(&reader_owned)?;
+        let mut write_session = self.open(&reader_owned)?;
         write_session.authenticate_management_key(&mgmt_key_owned)?;
         // Cert TLV: 53 <len> [ 70 <len> <DER> 71 01 00 FE 00 ]
         let mut inner = tlv::encode_tlv(0x70, &cert_der);

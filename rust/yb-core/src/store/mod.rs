@@ -395,6 +395,7 @@ impl StoreKind {
 }
 
 /// The full set of PIV objects that make up one yb store.
+#[derive(Clone)]
 pub struct Store {
     pub kind: StoreKind,
     pub reader: String,
@@ -433,6 +434,9 @@ impl Store {
     /// Read all objects from the device as they are, leftovers included:
     /// for `yb fsck`, which reports them.
     pub fn from_device_raw(reader: &str, piv: &dyn PivBackend) -> Result<Self> {
+        // A whole read under the card lock sees the store between two
+        // writes, never in the middle of one (spec 0048).
+        let _lock = piv.exclusive(reader)?;
         let first_id = OBJECT_ID_ZERO;
         let raw = piv
             .read_object(reader, first_id)
@@ -549,6 +553,7 @@ impl Store {
         store_key_slot: u8,
         management_key: &str,
     ) -> Result<Self> {
+        let _lock = piv.exclusive(reader)?;
         // Build a temporary store (no objects yet) so we can use make_object.
         let mut store = Self {
             kind: StoreKind::Legacy,
@@ -585,6 +590,7 @@ impl Store {
         descriptor: Descriptor,
         management_key: &str,
     ) -> Result<Self> {
+        let _lock = piv.exclusive(reader)?;
         let object_count = descriptor.object_count;
         let descriptor_bytes = descriptor.to_bytes();
         let mut store = Self {

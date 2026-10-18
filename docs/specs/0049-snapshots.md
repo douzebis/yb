@@ -6,9 +6,9 @@ SPDX-License-Identifier: MIT
 
 # 0049 — Snapshots
 
-**Status:** draft
+**Status:** implemented
 **App:** libyubiblob (yb-core underneath)
-**Implemented in:** <!-- YYYY-MM-DD, fill after implementation -->
+**Implemented in:** 2026-10-18
 
 ## Problem
 
@@ -118,8 +118,10 @@ after it.
   refreshed, so the client can fetch the current version and decide
   (merge, overwrite, give up).
 - **Exact,** because both sides are whole reads made under the lock:
-  `CHANGED` means another write of this blob took the lock between this
-  session's last refresh or write and this write.
+  `CHANGED` means the blob as this write reads it differs from the blob
+  in the snapshot, so another write of it took the lock in between.  A
+  blob created then removed since (absent both times) is unchanged:
+  nothing anyone wrote is lost by writing it.
 - Without the flag, the last writer wins, as today; nothing else is
   ever lost (invariant 0020).
 - In a session opened without `YUBIBLOB_OPEN_SNAPSHOT`, there is no
@@ -131,7 +133,9 @@ after it.
   with their documentation; `yubiblob_last_error` names the change.
 - Released with spec 0048 as libyubiblob **0.4.0**; the C example and
   the C API tests (spec 0039) cover a snapshot session.
-- `yubiblob_abi_version` is bumped if Q1 changes `yubiblob_remove`.
+- `yubiblob_abi_version` becomes 1: `yubiblob_remove` takes `flags`
+  (Q1), and a program built for the old call must refuse the new library
+  (KeePassYB compares the versions) rather than call it wrongly.
 
 ### Set aside: writes that check only what they touch
 
@@ -191,12 +195,26 @@ For a later spec, the reasoning so far:
     changed between that position and the write's; the final contents
     equal the model's.
 
+## Implementation notes (2026-10-18)
+
+- yb-core: `store_blob_checked`, `store_blob_with_checked` and
+  `remove_blobs_checked` take a `before_write` check, run on the whole
+  read under the lock; `unchanged_since` builds the `IF_UNCHANGED` one
+  (`BlobChanged`, mapped to `YUBIBLOB_ERR_CHANGED`).
+- libyubiblob 0.4.0: `YUBIBLOB_OPEN_SNAPSHOT` (0x4), `yubiblob_refresh`,
+  `YUBIBLOB_STORE_IF_UNCHANGED` (0x4), `YUBIBLOB_REMOVE_IF_UNCHANGED`
+  (0x1), `YUBIBLOB_ERR_CHANGED` (21); a snapshot session checks, before a
+  refresh or a write, that its YubiKey is still the one in the reader.
+- After a write that failed in the middle, the session reads the store
+  again; after one refused before writing, it keeps what the write read.
+- The fuzzer's oracle found that "a write of this blob since" is not
+  what `IF_UNCHANGED` checks (a blob created then removed passes); the
+  wording above says what it checks.  20,000 seeds pass.
+
 ## Open questions
 
-- **Q1: `yubiblob_remove` has no `flags` argument** (name and PIN only).
-  Add one (an ABI break: `yubiblob_abi_version` bumped), or a new
-  `yubiblob_remove_ext`?  Proposal: break it now, while KeePassYB is the
-  only known client.
+None.  (Decided 2026-10-18: Q1, `yubiblob_remove` takes `flags`; the
+interface version becomes 1.)
 
 ## References
 

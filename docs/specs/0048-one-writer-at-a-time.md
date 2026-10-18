@@ -6,9 +6,9 @@ SPDX-License-Identifier: MIT
 
 # 0048 — One Writer at a Time
 
-**Status:** draft
+**Status:** implemented
 **App:** yb (yb-core, yb, libyubiblob)
-**Implemented in:** <!-- YYYY-MM-DD, fill after implementation -->
+**Implemented in:** 2026-10-18
 
 ## Problem
 
@@ -266,16 +266,39 @@ The implementation's commit message and the release notes say plainly:
   - A tier-2 test with two `yb store` processes on the virtual PIV card
     (spec 0004).
 
+## Implementation notes (2026-10-18)
+
+- **What the real YubiKey showed** (a YubiKey 5, pcsc-lite):
+  - before this spec, six `yb` processes in parallel failed 59 of 60
+    commands (no YubiKey found, objects unreadable): concurrent access
+    did not work at all;
+  - `pcsc::Card` resets the card when dropped, and a reset makes every
+    other connection fail (`SCARD_W_RESET_CARD`).  A connection now
+    resets the card on closing only after a command that may change its
+    security state (anything but SELECT, GET DATA, GET RESPONSE, GET
+    METADATA, GET SERIAL, GET VERSION), so that no program inherits a
+    verified PIN or an authenticated management key; a read-only one
+    leaves it.  A connection that finds the card reset reconnects and
+    tries again, for up to 30 s;
+  - pcsc-lite's `SCardConnect` also waits while another program holds
+    the card: the wait notice covers the connection and the lock;
+  - with both, six processes in parallel: 360 commands, no failure;
+  - a whole-store read on one connection takes about 65 ms, against
+    about 0.95 s with a connection per object.
+- The lock is `PivBackend::exclusive` (re-entrant); `HardwarePiv` keeps
+  the held connection per thread and refuses a second connection from a
+  thread holding the card (it would wait for itself).
+- The CLI prints "yb: waiting for another program using the YubiKey…"
+  after a second's wait (`piv::set_wait_notice`), unless `--quiet`.
+- The fuzzer (S4): `rust/yb-core/tests/concurrency_tests.rs`; the long
+  run in `.github/workflows/fuzz.yaml`.  Checked by breaking the code:
+  without the lock, without the whole read under the lock, or with
+  unlocked whole reads, it fails at its first seeds.
+
 ## Open questions
 
-- **Q1: waiting for a held lock.**  pcsc-lite's `SCardBeginTransaction`
-  blocks with no timeout.  Wait silently, or say "Waiting for another
-  program using the YubiKey…" after a second?  Proposal: say it (stderr
-  for the CLI, a status for libyubiblob callers in a later spec), and
-  keep waiting.
-- **Q2: holding the lock during the touch** would save step 4's read on
-  post-quantum stores (not on Windows, which has none).  Proposal: no:
-  other PIV programs would wait up to 30 s for a touch.
+None.  (Decided 2026-10-18: Q1, a wait says so after a second, on
+stderr, the library staying quiet; Q2, the touch comes before the lock.)
 
 ## References
 

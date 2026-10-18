@@ -210,6 +210,9 @@ PIN prompts, touches, reads and writes.
 
 ### S3. Explicit saves
 
+Replaced by spec 0050 S2 (automatic saves when the normalized content
+changed, after a quiet delay); the unchanged-content check stays.
+
 For a vault on the YubiKey:
 
 - **No automatic saving:**

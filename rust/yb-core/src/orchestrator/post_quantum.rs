@@ -438,13 +438,15 @@ pub fn rewrap_management_key(
     let (nonce, wrapped) = wrap_management_key(k2[0].as_ref(), &updated.wrap_ad(), &key_bytes)?;
     updated.mgmt_nonce = nonce;
     updated.mgmt_wrapped = wrapped;
-    piv.write_object(
-        reader,
-        crate::store::constants::OBJECT_ID_ZERO,
-        &updated.to_bytes(),
-        new_key,
-    )
-    .context("writing the store descriptor")?;
+    // Under the card lock, the descriptor must still be the one read
+    // (spec 0048): else another program rewrote it meanwhile.
+    let zero = crate::store::constants::OBJECT_ID_ZERO;
+    let _lock = piv.exclusive(reader)?;
+    if piv.read_object(reader, zero)? != descriptor.to_bytes() {
+        bail!("the store descriptor changed meanwhile; nothing was written");
+    }
+    piv.write_object(reader, zero, &updated.to_bytes(), new_key)
+        .context("writing the store descriptor")?;
     Ok(updated)
 }
 

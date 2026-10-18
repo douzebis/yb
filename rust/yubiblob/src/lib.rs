@@ -31,8 +31,9 @@ use yb_core::report::StorePresence;
 use yb_core::store::Store;
 use yb_core::{
     context::OutputOptions, fetch_blob, list_blobs, parse_ec_public_key_from_cert_der,
-    remove_blobs, store_blob, Compression, Context, ContextOptions, DevicePicker, Encryption,
-    SecretOp, SlotKeyCheck, StoreOptions, Zeroizing,
+    remove_blobs_checked, store_blob_checked, unchanged_since, BeforeWrite, BlobChanged,
+    Compression, Context, ContextOptions, DevicePicker, Encryption, SecretOp, SlotKeyCheck,
+    StoreOptions, Zeroizing,
 };
 use zeroize::Zeroize;
 
@@ -41,8 +42,10 @@ use zeroize::Zeroize;
 // ---------------------------------------------------------------------------
 
 /// The interface's version: 0 until 1.0, where changes may break callers
-/// between minor versions (spec 0039 G7).
-pub const YUBIBLOB_ABI_VERSION: u32 = 0;
+/// between minor versions (spec 0039 G7); 1 since `yubiblob_remove` took
+/// `flags` (0.4.0, spec 0049), so that a program built for the old call
+/// refuses the new library rather than call it wrongly.
+pub const YUBIBLOB_ABI_VERSION: u32 = 1;
 
 /// What a function returned.
 pub type Status = i32;
@@ -93,6 +96,11 @@ pub const YUBIBLOB_ERR_NO_FIDO2_ACCESS: Status = 19;
 /// `yubiblob_fetch_unencrypted`: the blob is encrypted, so it needs the
 /// PIN (`yubiblob_fetch`); nothing was returned (spec 0044).
 pub const YUBIBLOB_ERR_ENCRYPTED: Status = 20;
+/// `YUBIBLOB_STORE_IF_UNCHANGED`, `YUBIBLOB_REMOVE_IF_UNCHANGED`: the blob
+/// changed on the YubiKey since the session's snapshot (rewritten,
+/// removed, or created); nothing was written, and the snapshot is
+/// refreshed (spec 0049).
+pub const YUBIBLOB_ERR_CHANGED: Status = 21;
 
 /// A blob's signature, as checked with the store's certificate.
 pub type SignatureVerdict = i32;
@@ -113,6 +121,14 @@ pub const YUBIBLOB_OPEN_ALLOW_DEFAULT_CREDENTIALS: u32 = 0x1;
 /// `yubiblob_open` flag: try the FIDO2 PIN even with 3 attempts or fewer
 /// left (post-quantum stores; a blocked FIDO2 PIN cannot be unblocked).
 pub const YUBIBLOB_OPEN_ALLOW_LOW_PIN_ATTEMPTS: u32 = 0x2;
+/// `yubiblob_open` flag: keep a snapshot of the store (spec 0049).  The
+/// store is read once, at open; questions (`yubiblob_list`,
+/// `yubiblob_stat`, `yubiblob_store_info`, `yubiblob_fetch_unencrypted`,
+/// and the stored bytes of `yubiblob_fetch`) are answered from the
+/// snapshot, as of its last refresh, without reading the YubiKey again.
+/// `yubiblob_refresh` reads it again; a store or a removal reads it again
+/// anyway, under the card lock, and leaves the snapshot up to date.
+pub const YUBIBLOB_OPEN_SNAPSHOT: u32 = 0x4;
 
 /// `StoreInfo.kind`: a legacy store, protected by PIV (the PIV PIN).
 pub const YUBIBLOB_KIND_LEGACY: u32 = 0;
@@ -123,6 +139,13 @@ pub const YUBIBLOB_KIND_POST_QUANTUM: u32 = 1;
 pub const YUBIBLOB_STORE_ENCRYPT: u32 = 0x1;
 /// `yubiblob_store` flag: compress if it makes the blob smaller.
 pub const YUBIBLOB_STORE_COMPRESS: u32 = 0x2;
+/// `yubiblob_store` flag, in a snapshot session: fail with
+/// `YUBIBLOB_ERR_CHANGED`, writing nothing, if the blob changed on the
+/// YubiKey since the snapshot (spec 0049).
+pub const YUBIBLOB_STORE_IF_UNCHANGED: u32 = 0x4;
+/// `yubiblob_remove` flag, in a snapshot session: as
+/// `YUBIBLOB_STORE_IF_UNCHANGED`.
+pub const YUBIBLOB_REMOVE_IF_UNCHANGED: u32 = 0x1;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -167,6 +190,74 @@ pub struct StoreInfo {
 /// A session on one YubiKey (opaque).
 pub struct Session {
     ctx: Context,
+    /// With `YUBIBLOB_OPEN_SNAPSHOT`: the store as the session last read
+    /// it under the card lock, or as its own writes left it (spec 0049).
+    snapshot: Option<RefCell<Store>>,
+}
+
+impl Session {
+    /// The store a question is answered from: the snapshot, or a read.
+    fn store(&self) -> Outcome<Store> {
+        match &self.snapshot {
+            Some(snapshot) => Ok(snapshot.borrow().clone()),
+            None => load_store(&self.ctx),
+        }
+    }
+
+    /// Before a refresh or a write in a snapshot session: the YubiKey is
+    /// still the session's (another one may sit in the same reader now).
+    fn check_yubikey(&self) -> Outcome<()> {
+        if self.snapshot.is_none() {
+            return Ok(());
+        }
+        let devices = self
+            .ctx
+            .piv
+            .list_devices()
+            .map_err(|e| from_error(e, YUBIBLOB_ERR_NO_DEVICE))?;
+        match devices.iter().find(|d| d.reader == self.ctx.reader) {
+            Some(d) if d.serial == self.ctx.serial => Ok(()),
+            _ => Err(fail(
+                YUBIBLOB_ERR_NO_DEVICE,
+                "the session's YubiKey is no longer connected",
+            )),
+        }
+    }
+
+    /// After a write from `working` (a copy of the snapshot): keep what it
+    /// left, which the write read under the card lock, unless the write
+    /// failed in the middle: then read the store again.
+    fn after_write(&self, working: Store, outcome: &Outcome<()>) {
+        let Some(snapshot) = &self.snapshot else {
+            return;
+        };
+        let nothing_written = |status| {
+            matches!(
+                status,
+                YUBIBLOB_ERR_NOT_FOUND
+                    | YUBIBLOB_ERR_STORE_FULL
+                    | YUBIBLOB_ERR_WRONG_PIN
+                    | YUBIBLOB_ERR_PIN_BLOCKED
+                    | YUBIBLOB_ERR_DEFAULT_CREDENTIALS
+                    | YUBIBLOB_ERR_INVALID_ARGUMENT
+                    | YUBIBLOB_ERR_NO_TOUCH
+                    | YUBIBLOB_ERR_FEW_PIN_ATTEMPTS
+                    | YUBIBLOB_ERR_REPLUG
+                    | YUBIBLOB_ERR_NO_CREDENTIAL
+                    | YUBIBLOB_ERR_NO_FIDO2_ACCESS
+                    | YUBIBLOB_ERR_CHANGED
+            )
+        };
+        match outcome {
+            Ok(()) => *snapshot.borrow_mut() = working,
+            Err(f) if nothing_written(f.status) => *snapshot.borrow_mut() = working,
+            Err(_) => {
+                if let Ok(fresh) = load_store(&self.ctx) {
+                    *snapshot.borrow_mut() = fresh;
+                }
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -216,6 +307,10 @@ fn from_error(e: anyhow::Error, default: Status) -> Failure {
     for cause in e.chain() {
         if cause.downcast_ref::<SeveralDevices>().is_some() {
             status = YUBIBLOB_ERR_SEVERAL_DEVICES;
+            break;
+        }
+        if cause.downcast_ref::<BlobChanged>().is_some() {
+            status = YUBIBLOB_ERR_CHANGED;
             break;
         }
         match cause.downcast_ref::<NoPinFetchError>() {
@@ -525,7 +620,7 @@ fn blob_infos(ctx: &Context, store: &Store) -> Vec<BlobInfo> {
 mod post_quantum {
     use super::*;
     use yb_core::context::PostQuantumSession;
-    use yb_core::orchestrator::{fetch_blob_with, store_blob_with};
+    use yb_core::orchestrator::{fetch_blob_with, store_blob_with_checked};
 
     /// The FIDO2 side of the session's YubiKey, with the PIN (refused when
     /// few attempts are left, D10).
@@ -569,11 +664,12 @@ mod post_quantum {
         content: &[u8],
         encrypt: bool,
         compression: Compression,
+        check: Option<BeforeWrite<'_>>,
     ) -> Outcome<bool> {
         let session = session(ctx)?;
         let descriptor = descriptor(store)?.clone();
         let protection = session.protection(ctx, &descriptor);
-        store_blob_with(
+        store_blob_with_checked(
             store,
             ctx.piv.as_ref(),
             &protection,
@@ -582,6 +678,7 @@ mod post_quantum {
             encrypt,
             compression,
             None,
+            check,
         )
         .map_err(|e| failure(&session, e))
     }
@@ -618,6 +715,7 @@ mod post_quantum {
         _: &[u8],
         _: bool,
         _: Compression,
+        _: Option<BeforeWrite<'_>>,
     ) -> Outcome<bool> {
         unsupported()
     }
@@ -728,7 +826,10 @@ pub unsafe extern "C" fn yubiblob_open(
 ) -> Status {
     run(|| {
         not_null(session, "session")?;
-        if flags & !(YUBIBLOB_OPEN_ALLOW_DEFAULT_CREDENTIALS | YUBIBLOB_OPEN_ALLOW_LOW_PIN_ATTEMPTS)
+        if flags
+            & !(YUBIBLOB_OPEN_ALLOW_DEFAULT_CREDENTIALS
+                | YUBIBLOB_OPEN_ALLOW_LOW_PIN_ATTEMPTS
+                | YUBIBLOB_OPEN_SNAPSHOT)
             != 0
         {
             return Err(fail(YUBIBLOB_ERR_INVALID_ARGUMENT, "unknown flags"));
@@ -749,22 +850,47 @@ pub unsafe extern "C" fn yubiblob_open(
         )
         .map_err(|e| from_error(e, YUBIBLOB_ERR_NO_DEVICE))?;
         ctx.allow_low_pin_attempts = flags & YUBIBLOB_OPEN_ALLOW_LOW_PIN_ATTEMPTS != 0;
-        match StorePresence::probe(&ctx.reader, ctx.piv.as_ref()) {
-            StorePresence::Present(_) => {}
-            StorePresence::None => {
+        // A snapshot session reads the store once, here; the probe below
+        // runs only to say why it could not.
+        let snapshot = if flags & YUBIBLOB_OPEN_SNAPSHOT != 0 {
+            Store::from_device(&ctx.reader, ctx.piv.as_ref()).ok()
+        } else {
+            None
+        };
+        let present = match snapshot {
+            Some(_) => None,
+            None => Some(StorePresence::probe(&ctx.reader, ctx.piv.as_ref())),
+        };
+        match present {
+            None | Some(StorePresence::Present(_)) => {}
+            Some(StorePresence::None) => {
                 return Err(fail(
                     YUBIBLOB_ERR_NO_STORE,
                     "this YubiKey is not set up for yb (yb format)",
                 ))
             }
-            StorePresence::Unreadable(reason) => {
+            Some(StorePresence::Unreadable(reason)) => {
                 return Err(fail(
                     YUBIBLOB_ERR_NO_STORE,
                     format!("the store is unreadable: {reason}"),
                 ))
             }
         }
-        *session = Box::into_raw(Box::new(Session { ctx }));
+        if flags & YUBIBLOB_OPEN_SNAPSHOT != 0 && snapshot.is_none() {
+            // The probe found a store that the whole read could not use.
+            let reason = load_store(&ctx)
+                .err()
+                .map(|f| f.message)
+                .unwrap_or_default();
+            return Err(fail(
+                YUBIBLOB_ERR_NO_STORE,
+                format!("the store is unreadable: {reason}"),
+            ));
+        }
+        *session = Box::into_raw(Box::new(Session {
+            ctx,
+            snapshot: snapshot.map(RefCell::new),
+        }));
         Ok(())
     })
 }
@@ -828,10 +954,11 @@ pub unsafe extern "C" fn yubiblob_list(
     count: *mut usize,
 ) -> Status {
     run(|| {
-        let ctx = &session_ref(session)?.ctx;
+        let s = session_ref(session)?;
+        let ctx = &s.ctx;
         not_null(blobs, "blobs")?;
         not_null(count, "count")?;
-        let store = load_store(ctx)?;
+        let store = s.store()?;
         let (p, n) = owned_array(blob_infos(ctx, &store));
         *blobs = p;
         *count = n;
@@ -864,10 +991,11 @@ pub unsafe extern "C" fn yubiblob_stat(
     info: *mut BlobInfo,
 ) -> Status {
     run(|| {
-        let ctx = &session_ref(session)?.ctx;
+        let s = session_ref(session)?;
+        let ctx = &s.ctx;
         let name = text(name, "the name")?;
         not_null(info, "info")?;
-        let store = load_store(ctx)?;
+        let store = s.store()?;
         let mut found = None;
         for b in blob_infos(ctx, &store) {
             if found.is_none() && CStr::from_ptr(b.name).to_str() == Ok(name) {
@@ -905,9 +1033,9 @@ pub unsafe extern "C" fn yubiblob_store_info(
     info: *mut StoreInfo,
 ) -> Status {
     run(|| {
-        let ctx = &session_ref(session)?.ctx;
+        let s = session_ref(session)?;
         not_null(info, "info")?;
-        let store = load_store(ctx)?;
+        let store = s.store()?;
         info.write(StoreInfo {
             object_count: u32::from(store.object_count),
             free_objects: store.free_count() as u32,
@@ -941,12 +1069,13 @@ pub unsafe extern "C" fn yubiblob_fetch(
     len: *mut usize,
 ) -> Status {
     run(|| {
-        let ctx = &session_ref(session)?.ctx;
+        let s = session_ref(session)?;
+        let ctx = &s.ctx;
         let name = text(name, "the name")?;
         let pin = pin_text(pin, pin_len)?;
         not_null(data, "data")?;
         not_null(len, "len")?;
-        let store = load_store(ctx)?;
+        let store = s.store()?;
         let post_quantum = store.kind.is_post_quantum();
         let _scope = PinScope::new(ctx, &pin, post_quantum);
         let head = store
@@ -1010,12 +1139,13 @@ pub unsafe extern "C" fn yubiblob_fetch_unencrypted(
     verdict: *mut SignatureVerdict,
 ) -> Status {
     run(|| {
-        let ctx = &session_ref(session)?.ctx;
+        let s = session_ref(session)?;
+        let ctx = &s.ctx;
         let name = text(name, "the name")?;
         not_null(data, "data")?;
         not_null(len, "len")?;
         not_null(verdict, "verdict")?;
-        let store = load_store(ctx)?;
+        let store = s.store()?;
         let (content, v) = fetch_unencrypted(&store, ctx.piv.as_ref(), &ctx.reader, name)
             .map_err(|e| from_error(e, YUBIBLOB_ERR_INTERNAL))?
             .ok_or_else(|| fail(YUBIBLOB_ERR_NOT_FOUND, format!("no blob named {name}")))?;
@@ -1061,49 +1191,72 @@ pub unsafe extern "C" fn yubiblob_store(
     pin_len: usize,
 ) -> Status {
     run(|| {
-        let ctx = &session_ref(session)?.ctx;
+        let s = session_ref(session)?;
+        let ctx = &s.ctx;
         let name = text(name, "the name")?;
         let content = bytes(data, len, "the data")?;
         let pin = pin_text(pin, pin_len)?;
-        if flags & !(YUBIBLOB_STORE_ENCRYPT | YUBIBLOB_STORE_COMPRESS) != 0 {
+        if flags & !(YUBIBLOB_STORE_ENCRYPT | YUBIBLOB_STORE_COMPRESS | YUBIBLOB_STORE_IF_UNCHANGED)
+            != 0
+        {
             return Err(fail(YUBIBLOB_ERR_INVALID_ARGUMENT, "unknown flags"));
         }
+        let if_unchanged = if_unchanged(s, flags & YUBIBLOB_STORE_IF_UNCHANGED != 0)?;
         let compression = if flags & YUBIBLOB_STORE_COMPRESS != 0 {
             Compression::Auto
         } else {
             Compression::None
         };
-        let mut store = load_store(ctx)?;
-        let post_quantum = store.kind.is_post_quantum();
-        let _scope = PinScope::new(ctx, &pin, post_quantum);
-
-        let stored = if post_quantum {
-            post_quantum::store(
-                ctx,
-                &mut store,
-                name,
-                content,
-                flags & YUBIBLOB_STORE_ENCRYPT != 0,
-                compression,
-            )?
-        } else {
-            store_legacy(ctx, &mut store, name, content, flags, compression, &pin)?
-        };
-        if !stored {
-            return Err(fail(
-                YUBIBLOB_ERR_STORE_FULL,
-                format!("not enough free objects to store {name}; nothing was written"),
-            ));
-        }
-        if !post_quantum {
-            ctx.complete_pending_repairs();
-        }
-        Ok(())
+        s.check_yubikey()?;
+        // A snapshot session starts from its snapshot, and leaves the store
+        // as the write read it under the card lock (spec 0049).
+        let mut store = s.store()?;
+        let check = if_unchanged.then(|| unchanged_since(&store, name));
+        let check = check.as_ref().map(|c| c as BeforeWrite<'_>);
+        let outcome = (|| {
+            let post_quantum = store.kind.is_post_quantum();
+            let _scope = PinScope::new(ctx, &pin, post_quantum);
+            let stored = if post_quantum {
+                post_quantum::store(
+                    ctx,
+                    &mut store,
+                    name,
+                    content,
+                    flags & YUBIBLOB_STORE_ENCRYPT != 0,
+                    compression,
+                    check,
+                )?
+            } else {
+                store_legacy(
+                    ctx,
+                    &mut store,
+                    name,
+                    content,
+                    flags,
+                    compression,
+                    &pin,
+                    check,
+                )?
+            };
+            if !stored {
+                return Err(fail(
+                    YUBIBLOB_ERR_STORE_FULL,
+                    format!("not enough free objects to store {name}; nothing was written"),
+                ));
+            }
+            if !post_quantum {
+                ctx.complete_pending_repairs();
+            }
+            Ok(())
+        })();
+        s.after_write(store, &outcome);
+        outcome
     })
 }
 
 /// Store into a legacy store: the PIV credentials' policy (spec 0024), the
 /// slot's key checked (invariant 0008).
+#[allow(clippy::too_many_arguments)]
 fn store_legacy(
     ctx: &Context,
     store: &mut Store,
@@ -1112,6 +1265,7 @@ fn store_legacy(
     flags: u32,
     compression: Compression,
     pin: &str,
+    check: Option<BeforeWrite<'_>>,
 ) -> Outcome<bool> {
     ctx.enforce_default_policy(SecretOp::Store)
         .map_err(|e| from_error(e, YUBIBLOB_ERR_DEFAULT_CREDENTIALS))?;
@@ -1147,7 +1301,7 @@ fn store_legacy(
         },
         compression,
     };
-    store_blob(
+    store_blob_checked(
         store,
         ctx.piv.as_ref(),
         name,
@@ -1155,11 +1309,15 @@ fn store_legacy(
         options,
         &management_key,
         Some(pin),
+        check,
     )
     .map_err(|e| from_error(e, YUBIBLOB_ERR_INTERNAL))
 }
 
-/// Remove a blob.
+/// Remove a blob.  `flags`: 0, or `YUBIBLOB_REMOVE_IF_UNCHANGED` in a
+/// snapshot session.  `YUBIBLOB_ERR_NOT_FOUND` if the blob is not in the
+/// store (in a snapshot session: not in the snapshot, or no longer on the
+/// YubiKey).
 ///
 /// # Safety
 /// `session` came from `yubiblob_open`; `name` is a string; `pin` points
@@ -1168,35 +1326,84 @@ fn store_legacy(
 pub unsafe extern "C" fn yubiblob_remove(
     session: *mut Session,
     name: *const c_char,
+    flags: u32,
     pin: *const u8,
     pin_len: usize,
 ) -> Status {
     run(|| {
-        let ctx = &session_ref(session)?.ctx;
+        let s = session_ref(session)?;
+        let ctx = &s.ctx;
         let name = text(name, "the name")?;
         let pin = pin_text(pin, pin_len)?;
-        let mut store = load_store(ctx)?;
-        let post_quantum = store.kind.is_post_quantum();
-        let _scope = PinScope::new(ctx, &pin, post_quantum);
-        if store.find_head(name).is_none() {
-            return Err(fail(
-                YUBIBLOB_ERR_NOT_FOUND,
-                format!("no blob named {name}"),
-            ));
+        if flags & !YUBIBLOB_REMOVE_IF_UNCHANGED != 0 {
+            return Err(fail(YUBIBLOB_ERR_INVALID_ARGUMENT, "unknown flags"));
         }
-        let management_key = if post_quantum {
-            post_quantum::management_key(ctx, &store)?
-        } else {
-            ctx.management_key_for_write()
-                .map_err(|e| from_error(e, YUBIBLOB_ERR_INTERNAL))?
-        };
-        remove_blobs(&mut store, ctx.piv.as_ref(), &[name], &management_key)
+        let if_unchanged = if_unchanged(s, flags & YUBIBLOB_REMOVE_IF_UNCHANGED != 0)?;
+        s.check_yubikey()?;
+        let mut store = s.store()?;
+        let check = if_unchanged.then(|| unchanged_since(&store, name));
+        let check = check.as_ref().map(|c| c as BeforeWrite<'_>);
+        let outcome = (|| {
+            let post_quantum = store.kind.is_post_quantum();
+            let _scope = PinScope::new(ctx, &pin, post_quantum);
+            let not_found = || fail(YUBIBLOB_ERR_NOT_FOUND, format!("no blob named {name}"));
+            if store.find_head(name).is_none() {
+                return Err(not_found());
+            }
+            let management_key = if post_quantum {
+                post_quantum::management_key(ctx, &store)?
+            } else {
+                ctx.management_key_for_write()
+                    .map_err(|e| from_error(e, YUBIBLOB_ERR_INTERNAL))?
+            };
+            let removed = remove_blobs_checked(
+                &mut store,
+                ctx.piv.as_ref(),
+                &[name],
+                &management_key,
+                check,
+            )
             .map_err(|e| from_error(e, YUBIBLOB_ERR_INTERNAL))?;
-        if !post_quantum {
-            ctx.complete_pending_repairs();
+            if !post_quantum {
+                ctx.complete_pending_repairs();
+            }
+            // Removed by another program meanwhile.
+            if removed == 0 {
+                return Err(not_found());
+            }
+            Ok(())
+        })();
+        s.after_write(store, &outcome);
+        outcome
+    })
+}
+
+/// Read the store again, under the card lock, into the session's snapshot
+/// (spec 0049).  Without `YUBIBLOB_OPEN_SNAPSHOT`: nothing to do.
+///
+/// # Safety
+/// `session` came from `yubiblob_open`.
+#[no_mangle]
+pub unsafe extern "C" fn yubiblob_refresh(session: *mut Session) -> Status {
+    run(|| {
+        let s = session_ref(session)?;
+        if let Some(snapshot) = &s.snapshot {
+            s.check_yubikey()?;
+            *snapshot.borrow_mut() = load_store(&s.ctx)?;
         }
         Ok(())
     })
+}
+
+/// `IF_UNCHANGED`, which needs a snapshot to compare with (spec 0049).
+fn if_unchanged(s: &Session, asked: bool) -> Outcome<bool> {
+    if asked && s.snapshot.is_none() {
+        return Err(fail(
+            YUBIBLOB_ERR_INVALID_ARGUMENT,
+            "IF_UNCHANGED needs a session opened with YUBIBLOB_OPEN_SNAPSHOT",
+        ));
+    }
+    Ok(asked)
 }
 
 #[cfg(test)]
@@ -1242,6 +1449,10 @@ mod tests {
         assert_eq!(
             status_of(SeveralDevices.into()).0,
             YUBIBLOB_ERR_SEVERAL_DEVICES
+        );
+        assert_eq!(
+            status_of(BlobChanged("vault".into()).into()).0,
+            YUBIBLOB_ERR_CHANGED
         );
         assert_eq!(status_of(anyhow::anyhow!("other")).0, YUBIBLOB_ERR_INTERNAL);
     }

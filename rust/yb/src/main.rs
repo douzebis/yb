@@ -26,6 +26,12 @@ fn main() {
         .complete();
 
     let cli = Cli::parse();
+    // Another program holding the YubiKey makes yb wait (spec 0048).
+    if !cli.quiet {
+        yb_core::piv::set_wait_notice(|| {
+            eprintln!("yb: waiting for another program using the YubiKey…");
+        });
+    }
 
     let result = run(cli);
     if let Err(e) = result {

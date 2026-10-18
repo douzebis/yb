@@ -622,6 +622,11 @@ impl Context {
             None => return,
         };
         let (reader, piv) = (self.reader.as_str(), self.piv.as_ref());
+        // The repairs read and rewrite objects: under the card lock (spec
+        // 0048).  Without it, they wait for the next write.
+        let Ok(_lock) = piv.exclusive(reader) else {
+            return;
+        };
         let note = |msg: &str| {
             if !self.quiet {
                 eprintln!("yb: note: {msg}");

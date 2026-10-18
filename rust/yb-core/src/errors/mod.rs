@@ -80,6 +80,8 @@ pub enum PcscOp {
     Establish,
     ListReaders,
     Connect,
+    /// Taking the card lock (spec 0048).
+    Lock,
     Transmit,
 }
 
@@ -89,6 +91,7 @@ impl PcscOp {
             Self::Establish => "PC/SC context",
             Self::ListReaders => "listing PC/SC readers",
             Self::Connect => "connecting to the YubiKey",
+            Self::Lock => "waiting for the YubiKey",
             Self::Transmit => "exchanging data with the YubiKey",
         }
     }

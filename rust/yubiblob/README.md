@@ -31,6 +31,15 @@ FIDO2 application was reset: legacy stores check its signature as usual;
 post-quantum stores check its checksum only, which detects corruption
 but not forgery.
 
+Since 0.4.0, programs may use one YubiKey at once: every read and write
+holds the card lock (PC/SC's transaction), so concurrent operations are
+serializable (spec 0048).  A session opened with `YUBIBLOB_OPEN_SNAPSHOT`
+reads the store once and answers questions from that snapshot until
+`yubiblob_refresh()` or a write; `YUBIBLOB_STORE_IF_UNCHANGED` (and
+`YUBIBLOB_REMOVE_IF_UNCHANGED`) refuse to overwrite a blob changed on the
+YubiKey since (`YUBIBLOB_ERR_CHANGED`, spec 0049).  `yubiblob_remove()`
+takes a `flags` argument: the interface version is now 1.
+
 ## Building
 
 With [cargo-c](https://github.com/lu-zero/cargo-c):

@@ -15,6 +15,7 @@
 //! test key material**.  Never use these keys to protect real data and never
 //! confuse them with production YubiKey credentials.
 
+use super::lock::{CardLock, CardScheduler, SimulatedLock};
 use super::{DeviceInfo, MgmtAlgo, PinRef, PivBackend};
 use crate::errors::{CardError, CardOp, ErrCtx, PcscCode, PcscOp};
 use anyhow::{anyhow, bail, Result};
@@ -297,6 +298,8 @@ pub mod fixtures {
 /// trait with real P-256 cryptography but no hardware or PC/SC dependency.
 pub struct VirtualPiv {
     state: Arc<Mutex<VirtualState>>,
+    /// The card lock (spec 0048), taken by every command.
+    card: SimulatedLock,
 }
 
 impl VirtualPiv {
@@ -307,6 +310,7 @@ impl VirtualPiv {
             state: Arc::new(Mutex::new(VirtualState::default_state(
                 id.serial, id.reader, id.version,
             ))),
+            card: SimulatedLock::default(),
         }
     }
 
@@ -370,7 +374,14 @@ impl VirtualPiv {
 
         Ok(Self {
             state: Arc::new(Mutex::new(state)),
+            card: SimulatedLock::default(),
         })
+    }
+
+    /// Order this card's clients with `scheduler` (spec 0048), for tests
+    /// that choose how concurrent clients interleave.
+    pub fn set_scheduler(&self, scheduler: Arc<dyn CardScheduler>) {
+        self.card.set_scheduler(scheduler);
     }
 
     /// Return the reader name this virtual device responds to.
@@ -472,11 +483,19 @@ impl Default for VirtualPiv {
 }
 
 impl PivBackend for VirtualPiv {
+    fn exclusive(&self, reader: &str) -> Result<CardLock<'_>> {
+        let lock = self.card.exclusive();
+        check_reader(&self.state.lock().unwrap(), reader)?;
+        Ok(lock)
+    }
+
     fn list_readers(&self) -> Result<Vec<String>> {
+        let _card = self.card.command()?;
         Ok(vec![self.state.lock().unwrap().reader.clone()])
     }
 
     fn list_devices(&self) -> Result<Vec<DeviceInfo>> {
+        let _card = self.card.command()?;
         let s = self.state.lock().unwrap();
         Ok(vec![DeviceInfo {
             serial: s.serial,
@@ -486,6 +505,7 @@ impl PivBackend for VirtualPiv {
     }
 
     fn read_object(&self, reader: &str, id: u32) -> Result<Vec<u8>> {
+        let _card = self.card.command()?;
         let s = self.state.lock().unwrap();
         check_reader(&s, reader)?;
         s.objects
@@ -495,12 +515,14 @@ impl PivBackend for VirtualPiv {
     }
 
     fn object_size(&self, reader: &str, id: u32) -> Result<Option<usize>> {
+        let _card = self.card.command()?;
         let s = self.state.lock().unwrap();
         check_reader(&s, reader)?;
         Ok(s.objects.get(&id).map(|v| v.len()))
     }
 
     fn write_object(&self, reader: &str, id: u32, data: &[u8], management_key: &str) -> Result<()> {
+        let _card = self.card.command()?;
         let mut s = self.state.lock().unwrap();
         check_reader(&s, reader)?;
         do_authenticate_management_key(&mut s, management_key)?;
@@ -537,12 +559,14 @@ impl PivBackend for VirtualPiv {
     }
 
     fn authenticate_management_key(&self, reader: &str, management_key: &str) -> Result<()> {
+        let _card = self.card.command()?;
         let mut s = self.state.lock().unwrap();
         check_reader(&s, reader)?;
         do_authenticate_management_key(&mut s, management_key)
     }
 
     fn verify_pin(&self, reader: &str, pin: &str) -> Result<()> {
+        let _card = self.card.command()?;
         let mut s = self.state.lock().unwrap();
         check_reader(&s, reader)?;
         do_verify_pin(&mut s, pin)
@@ -553,6 +577,7 @@ impl PivBackend for VirtualPiv {
     /// the key slots (algorithm EC P-256, origin; `6A82` for an empty
     /// slot).  Every other APDU returns empty data.
     fn send_apdu(&self, reader: &str, apdu: &[u8]) -> Result<Vec<u8>> {
+        let _card = self.card.command()?;
         let s = self.state.lock().unwrap();
         check_reader(&s, reader)?;
         let is_default = |current: &str, factory: &str| u8::from(current == factory);
@@ -611,6 +636,7 @@ impl PivBackend for VirtualPiv {
         digest: &[u8],
         pin: Option<&str>,
     ) -> Result<[u8; 64]> {
+        let _card = self.card.command()?;
         use p256::ecdsa::{signature::hazmat::PrehashSigner, SigningKey};
         let mut s = self.state.lock().unwrap();
         check_reader(&s, reader)?;
@@ -637,6 +663,7 @@ impl PivBackend for VirtualPiv {
         peer_point: &[u8],
         pin: Option<&str>,
     ) -> Result<Vec<u8>> {
+        let _card = self.card.command()?;
         let mut s = self.state.lock().unwrap();
         check_reader(&s, reader)?;
         if let Some(p) = pin {
@@ -657,6 +684,7 @@ impl PivBackend for VirtualPiv {
     }
 
     fn read_certificate(&self, reader: &str, slot: u8) -> Result<Vec<u8>> {
+        let _card = self.card.command()?;
         let s = self.state.lock().unwrap();
         check_reader(&s, reader)?;
         s.key_slots
@@ -671,6 +699,7 @@ impl PivBackend for VirtualPiv {
         slot: u8,
         management_key: Option<&str>,
     ) -> Result<Vec<u8>> {
+        let _card = self.card.command()?;
         let mut s = self.state.lock().unwrap();
         check_reader(&s, reader)?;
         if let Some(key) = management_key {
@@ -693,6 +722,7 @@ impl PivBackend for VirtualPiv {
         management_key: &str,
         pin: Option<&str>,
     ) -> Result<Vec<u8>> {
+        let _card = self.card.command()?;
         use crate::auxiliaries::parse_subject_dn;
         use rcgen::{CertificateParams, KeyPair};
 
@@ -751,6 +781,7 @@ impl PivBackend for VirtualPiv {
     }
 
     fn read_printed_object_with_pin(&self, reader: &str, pin: &str) -> Result<Vec<u8>> {
+        let _card = self.card.command()?;
         use crate::auxiliaries::OBJ_PRINTED;
         let mut s = self.state.lock().unwrap();
         check_reader(&s, reader)?;
@@ -762,6 +793,7 @@ impl PivBackend for VirtualPiv {
     }
 
     fn management_key_algorithm(&self, reader: &str) -> Result<MgmtAlgo> {
+        let _card = self.card.command()?;
         let s = self.state.lock().unwrap();
         check_reader(&s, reader)?;
         Ok(s.mgmt_algo)
@@ -774,6 +806,7 @@ impl PivBackend for VirtualPiv {
         new_key_hex: &str,
         algo: MgmtAlgo,
     ) -> Result<()> {
+        let _card = self.card.command()?;
         let mut s = self.state.lock().unwrap();
         check_reader(&s, reader)?;
         do_authenticate_management_key(&mut s, old_key_hex)?;
@@ -808,6 +841,7 @@ impl PivBackend for VirtualPiv {
     }
 
     fn change_reference(&self, reader: &str, which: PinRef, old: &str, new: &str) -> Result<()> {
+        let _card = self.card.command()?;
         let mut s = self.state.lock().unwrap();
         check_reader(&s, reader)?;
         let op = match which {
@@ -868,6 +902,7 @@ impl PivBackend for VirtualPiv {
     /// to the factory values of the firmware (AES-192 management key from
     /// 5.7).
     fn reset_blocked_piv(&self, reader: &str) -> Result<()> {
+        let _card = self.card.command()?;
         let mut s = self.state.lock().unwrap();
         check_reader(&s, reader)?;
         if s.pin_retries != 0 || s.puk_retries != 0 {

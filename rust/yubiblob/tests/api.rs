@@ -234,11 +234,90 @@ fn store_list_fetch_remove() {
     assert!(room.free_objects < 16);
 
     assert_eq!(
-        unsafe { yubiblob_remove(s, name.as_ptr(), PIN.as_ptr(), PIN.len()) },
+        unsafe { yubiblob_remove(s, name.as_ptr(), 0, PIN.as_ptr(), PIN.len()) },
         YUBIBLOB_OK
     );
     assert!(list(s).is_empty());
     unsafe { yubiblob_close(s) };
+}
+
+fn remove(s: *mut yubiblob::Session, name: &str, flags: u32) -> Status {
+    let name = CString::new(name).unwrap();
+    unsafe { yubiblob_remove(s, name.as_ptr(), flags, PIN.as_ptr(), PIN.len()) }
+}
+
+/// Spec 0049: a snapshot session answers from its snapshot, which its own
+/// writes keep up to date; IF_UNCHANGED passes when nothing else wrote.
+#[test]
+fn snapshot_session() {
+    let dir = TempDir::new().unwrap();
+    let s = open(&standard_card(&dir), YUBIBLOB_OPEN_SNAPSHOT).unwrap();
+    assert!(list(s).is_empty());
+    assert_eq!(
+        store(s, "vault", b"one", YUBIBLOB_STORE_IF_UNCHANGED, PIN),
+        YUBIBLOB_OK,
+        "{}",
+        last_error()
+    );
+    // The session's own write is in its snapshot: no refresh needed.
+    let first = list(s);
+    assert_eq!(first.len(), 1);
+    assert_eq!(fetch(s, "vault", PIN).unwrap(), b"one");
+    assert_eq!(
+        store(s, "vault", b"two", YUBIBLOB_STORE_IF_UNCHANGED, PIN),
+        YUBIBLOB_OK,
+        "{}",
+        last_error()
+    );
+    assert_ne!(list(s)[0].generation, first[0].generation);
+    assert_eq!(fetch(s, "vault", PIN).unwrap(), b"two");
+    assert_eq!(unsafe { yubiblob_refresh(s) }, YUBIBLOB_OK);
+    assert_eq!(fetch(s, "vault", PIN).unwrap(), b"two");
+    assert_eq!(
+        remove(s, "vault", YUBIBLOB_REMOVE_IF_UNCHANGED),
+        YUBIBLOB_OK,
+        "{}",
+        last_error()
+    );
+    assert!(list(s).is_empty());
+    assert_eq!(remove(s, "vault", 0), YUBIBLOB_ERR_NOT_FOUND);
+    unsafe { yubiblob_close(s) };
+}
+
+/// Spec 0049: IF_UNCHANGED needs a snapshot to compare with; unknown
+/// flags are refused; refreshing a plain session does nothing.
+#[test]
+fn if_unchanged_needs_a_snapshot_session() {
+    let dir = TempDir::new().unwrap();
+    let s = open(&standard_card(&dir), 0).unwrap();
+    assert_eq!(
+        store(s, "x", b"data", YUBIBLOB_STORE_IF_UNCHANGED, PIN),
+        YUBIBLOB_ERR_INVALID_ARGUMENT
+    );
+    assert!(last_error().contains("YUBIBLOB_OPEN_SNAPSHOT"));
+    assert_eq!(store(s, "x", b"data", 0, PIN), YUBIBLOB_OK);
+    assert_eq!(
+        remove(s, "x", YUBIBLOB_REMOVE_IF_UNCHANGED),
+        YUBIBLOB_ERR_INVALID_ARGUMENT
+    );
+    assert_eq!(remove(s, "x", 0x80), YUBIBLOB_ERR_INVALID_ARGUMENT);
+    assert_eq!(unsafe { yubiblob_refresh(s) }, YUBIBLOB_OK);
+    assert_eq!(remove(s, "x", 0), YUBIBLOB_OK);
+    unsafe { yubiblob_close(s) };
+}
+
+/// Spec 0049: a snapshot session opens only on a readable store, as a
+/// plain one does.
+#[test]
+fn snapshot_session_needs_a_store() {
+    let dir = TempDir::new().unwrap();
+    let piv = VirtualPiv::from_fixture_yaml(fixtures::WITH_KEY).unwrap();
+    let path = dir.path().join("blank.yaml");
+    piv.save_fixture(&path).unwrap();
+    assert_eq!(
+        open(&path, YUBIBLOB_OPEN_SNAPSHOT).err(),
+        Some(YUBIBLOB_ERR_NO_STORE)
+    );
 }
 
 #[test]
@@ -263,7 +342,7 @@ fn not_found() {
     );
     assert_eq!(fetch(s, "missing", PIN), Err(YUBIBLOB_ERR_NOT_FOUND));
     assert_eq!(
-        unsafe { yubiblob_remove(s, name.as_ptr(), PIN.as_ptr(), PIN.len()) },
+        unsafe { yubiblob_remove(s, name.as_ptr(), 0, PIN.as_ptr(), PIN.len()) },
         YUBIBLOB_ERR_NOT_FOUND
     );
     unsafe { yubiblob_close(s) };

@@ -12,8 +12,10 @@ fn query_card_apdu(reader: &str, query: &[u8]) -> Result<Vec<u8>> {
     let card = connect_reader_mode(&ctx, reader, pcsc::ShareMode::Shared)?;
     let mut buf = vec![0u8; 258];
     let _ = card.transmit(SELECT_PIV, &mut buf)?;
-    let resp = card.transmit(query, &mut buf)?;
-    Ok(resp.to_vec())
+    let resp = card.transmit(query, &mut buf)?.to_vec();
+    // Read-only: leave the card as it is (spec 0048), rather than reset it.
+    let _ = card.disconnect(pcsc::Disposition::LeaveCard);
+    Ok(resp)
 }
 
 pub(crate) fn serial_from_reader(reader: &str) -> Result<u32> {

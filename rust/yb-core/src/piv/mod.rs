@@ -6,11 +6,13 @@
 
 pub mod emulated;
 pub mod hardware;
+pub mod lock;
 pub mod mgmt;
 pub mod session;
 pub(crate) mod tlv;
 pub mod virtual_piv;
 
+pub use lock::{set_wait_notice, CardLock, CardScheduler};
 pub use mgmt::MgmtAlgo;
 pub use virtual_piv::{Fault, VirtualPiv};
 
@@ -75,6 +77,17 @@ pub trait PivBackend: Send + Sync {
 
     /// List connected YubiKey devices.
     fn list_devices(&self) -> Result<Vec<DeviceInfo>>;
+
+    /// Hold the card until the returned lock is dropped (spec 0048): the
+    /// calling thread's commands to `reader` meanwhile are the only ones
+    /// that reach it; other programs', and other threads', wait.
+    /// Re-entrant.  Every whole-store read and every write runs under it.
+    ///
+    /// The default holds nothing, for backends that model no card lock.
+    fn exclusive(&self, reader: &str) -> Result<CardLock<'_>> {
+        let _ = reader;
+        Ok(CardLock::none())
+    }
 
     /// Read a PIV data object by its numeric ID.
     fn read_object(&self, reader: &str, id: u32) -> Result<Vec<u8>>;

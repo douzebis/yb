@@ -87,7 +87,7 @@ int main(int argc, char** argv)
     CHECK(yubiblob_fetch(s, "smoke-test", p, pin_len, &data, &len));
     yubiblob_buffer_free(data, len);
 
-    CHECK(yubiblob_remove(s, "smoke-test", p, pin_len));
+    CHECK(yubiblob_remove(s, "smoke-test", 0, p, pin_len));
     EXPECT(touches == 0); /* a legacy store asks for no touch */
     EXPECT(yubiblob_fetch(s, "smoke-test", p, pin_len, &data, &len) == YUBIBLOB_ERR_NOT_FOUND);
 

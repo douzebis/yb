@@ -1,0 +1,43 @@
+# SPDX-FileCopyrightText: 2026 Frederic Ruget <fred@atlant.is> (GitHub: @douzebis)
+#
+# SPDX-License-Identifier: MIT
+
+name: Fuzz
+
+# The concurrency fuzzer's long run (specs 0048 and 0049): random seeds,
+# each a seeded interleaving of several clients on a simulated YubiKey,
+# checked against a serial model.  A failure prints its seed; replay it
+# with YB_FUZZ_FIRST=<seed> YB_FUZZ_SEEDS=1 (and YB_FUZZ_TRACE=1 for the
+# operations in lock order).
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      seeds:
+        description: "How many seeds"
+        default: "20000"
+
+permissions:
+  contents: read
+
+jobs:
+  concurrency:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install PC/SC and libfido2
+        run: sudo apt-get install -y libpcsclite-dev libfido2-dev
+
+      - name: Run the concurrency fuzzer
+        env:
+          YB_FUZZ_SEEDS: ${{ inputs.seeds || '20000' }}
+        run: >-
+          cargo test --locked --release --manifest-path rust/Cargo.toml
+          -p yb-core --test concurrency_tests fuzz_long -- --ignored --nocapture

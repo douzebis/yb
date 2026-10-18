@@ -7,7 +7,7 @@
 use super::transport::{transmit_raw_card, PcscSession};
 use crate::errors::{CardError, CardOp};
 use crate::piv::tlv::{encode_tlv, parse_tlv53};
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 
 impl PcscSession {
     /// GET DATA — fetch a PIV data object by 3-byte object ID.
@@ -107,11 +107,7 @@ impl PcscSession {
         let mut data_field = vec![0x5C, 0x03, id[1], id[2], id[3]];
         data_field.append(&mut content);
 
-        let tx = self
-            .card
-            .transaction()
-            .context("SCardBeginTransaction for PUT DATA")?;
-
+        // The session holds the card's transaction (spec 0048).
         let mut remaining = data_field.as_slice();
         loop {
             let chunk_len = remaining.len().min(0xFF);
@@ -121,7 +117,7 @@ impl PcscSession {
             apdu.extend_from_slice(&remaining[..chunk_len]);
             remaining = &remaining[chunk_len..];
 
-            let resp = transmit_raw_card(&tx, &apdu)?;
+            let resp = transmit_raw_card(self.card(), &apdu)?;
             let n = resp.len();
             if n < 2 {
                 return Err(CardError::protocol(
@@ -133,7 +129,6 @@ impl PcscSession {
             let sw1 = resp[n - 2];
             let sw2 = resp[n - 1];
             if is_last {
-                drop(tx);
                 if sw1 == 0x90 && sw2 == 0x00 {
                     return Ok(true);
                 }
@@ -142,7 +137,6 @@ impl PcscSession {
                 }
                 return Err(fail(sw1, sw2).into());
             } else if (sw1 == 0x6A && sw2 == 0x84) || (sw1 == 0x67 && sw2 == 0x00) {
-                drop(tx);
                 return Ok(false);
             } else if sw1 != 0x90 || sw2 != 0x00 {
                 return Err(fail(sw1, sw2).into());
@@ -165,11 +159,8 @@ impl PcscSession {
 
         // yubico-piv-tool wraps every write in SCardBeginTransaction so that
         // pcsclite accepts the SCardTransmit calls.  Without a transaction,
-        // pcsclite returns SCARD_E_NOT_TRANSACTED on some platforms.
-        let tx = self
-            .card
-            .transaction()
-            .context("SCardBeginTransaction for PUT DATA")?;
+        // pcsclite returns SCARD_E_NOT_TRANSACTED on some platforms.  The
+        // session holds one from its connection on (spec 0048).
 
         // Send via command chaining (CLA |= 0x10, 255-byte chunks) — the same
         // approach used by yubico-piv-tool.  Extended-Lc APDUs are not used
@@ -183,7 +174,7 @@ impl PcscSession {
             apdu.extend_from_slice(&remaining[..chunk_len]);
             remaining = &remaining[chunk_len..];
 
-            let resp = transmit_raw_card(&tx, &apdu)?;
+            let resp = transmit_raw_card(self.card(), &apdu)?;
             let n = resp.len();
             if n < 2 {
                 return Err(CardError::protocol(
@@ -204,13 +195,11 @@ impl PcscSession {
             }
         }
 
-        // Transaction drops here with SCARD_LEAVE_CARD (pcsc crate default).
         Ok(())
     }
 
-    /// Builds the error for a failed PUT DATA of `object_id`.  Captures the
-    /// session context up front: the write runs inside a PC/SC transaction
-    /// that borrows the card.
+    /// Builds the error for a failed PUT DATA of `object_id`, with the
+    /// session's context.
     fn write_error(&self, object_id: u32) -> impl Fn(u8, u8) -> CardError {
         let ctx = self.err_ctx();
         move |sw1, sw2| CardError::status(CardOp::WriteObject(object_id), sw1, sw2).with_ctx(ctx)

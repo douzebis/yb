@@ -6,9 +6,9 @@ SPDX-License-Identifier: MIT
 
 # 0050 — KeePassYB: Snapshots and Automatic Saves
 
-**Status:** draft
+**Status:** implemented
 **App:** KeePassYB (`douzebis/keepassyb`, branch `keepassyb`)
-**Implemented in:** <!-- YYYY-MM-DD, fill after implementation -->
+**Implemented in:** 2026-10-18
 
 ## Problem
 
@@ -98,14 +98,22 @@ Spec 0047's host test (post-quantum store, KDBX 4 vault):
   save of the unlocked session and kept until lock (spec 0047); a
   post-quantum store asks one touch per save, with the progress dialog
   (spec 0047 S4).
-- **`YUBIBLOB_ERR_CHANGED`:** "Passwords.kdbx was changed on the YubiKey
-  since it was opened."
-  - **Merge:** read the YubiKey's version (the master key is the same,
-    or the user is asked for it), merge it into the open vault
-    (KeePassXC's merge, as for a file changed on disk), then save;
-  - **Overwrite:** save without the flag;
-  - **Save as a file**;
+- **A vault changed on the YubiKey since this database read or saved
+  it:** nothing is written, and KeePassXC's own question for a file
+  changed on disk follows ("was modified externally"):
+  - **Merge all changes then save:** the YubiKey's version is read (with
+    the same master key), merged with the open vault, and saved;
+  - **Overwrite:** saved without the check;
+  - **Discard unsaved changes:** the YubiKey's version is loaded;
   - **Cancel:** the vault stays open and modified.
+- **How a change is found,** as for a file: the vault as KeePassYB last
+  saw it (the snapshot) must still be the version this database is based
+  on (the hash of its first block, KeePassXC's `fileBlockHash`); and the
+  YubiKey must not have changed since the snapshot
+  (`YUBIBLOB_STORE_IF_UNCHANGED`).  The first check is needed because a
+  refresh (another dialog opening, a refused save) brings another
+  program's change into the snapshot, after which `IF_UNCHANGED` alone
+  would no longer see it.
 - **A failed automatic save** (PIN prompt cancelled, touch timeout,
   YubiKey absent): the vault stays modified, the database's message bar
   says why, with a Retry button.  No new attempt until the next change,
@@ -131,34 +139,53 @@ A legacy store: the same, with the PIV PIN and no touch.
 
 ## Tests
 
-In `tests/TestDeviceStorage.cpp` (the fake backend gains snapshot
-semantics: a refresh counter, and a way to change the store from
-"another program"):
+The fake backend (`tests/mock/FakeDeviceBackend.h`) is a snapshot
+session: questions answer from the store as last read, a write reads the
+card again and honors `IF_UNCHANGED`, and a test changes the card behind
+the session's back as another program would.
 
-- `testOneReadToOpen`: the unlock dialog and unlock cost one refresh.
-- `testSaveIsOneStoreCall`: a save is one store call, no listing or
-  refresh around it.
-- `testAutoSaveAfterQuietDelay`: three changes in a burst, one save
-  after the delay.
-- `testNoAutoSaveForViewChanges`: expand a group, select another; the
-  delay ends, nothing is written, the vault is clean.
-- `testChangedOnTheYubiKey`: another program stores the vault meanwhile;
-  the save reports it, Overwrite writes, Cancel keeps it modified.
-- `testFailedAutoSaveDoesNotRetry`: a refused touch; no second prompt
-  until the next change.
-- `testLockSavesWithoutAsking` and `testLockAsksWhenAutoSaveOnExitIsOff`.
+- `tests/TestDeviceStorage.cpp`:
+  - `testOneReadToOpen`: the unlock dialog's refresh serves its
+    questions, the header read and the unlock: one read;
+  - `testSnapshotUntilRefresh`: another program's vault is seen after a
+    refresh; a vault missing from the snapshot is looked for again;
+  - `testSaveIsOneStoreCall`;
+  - `testChangedOnTheYubiKey`: nothing written, the question asked,
+    Overwrite writes;
+  - `testChangeSeenByARefreshIsStillAConflict`.
+- `tests/TestDeviceAutoSave.cpp` (a `DatabaseWidget` on the fake
+  YubiKey; the quiet delay's slot is called rather than waited for):
+  - `testAutoSaveAfterQuietDelay`: three changes, one save;
+  - `testNoAutoSaveForViewChanges`;
+  - `testFailedAutoSaveDoesNotRetry`;
+  - `testLockSavesWithoutAsking`, `testLockAsksWhenAutoSaveOnExitIsOff`;
+  - `testChangedOnTheYubiKeyAsks`: the automatic save asks; Overwrite
+    saves.
+
+## Implementation notes (2026-10-18)
+
+- `DeviceStorage`'s listing cache, store-kind cache and their lifetime
+  are gone; the backend keeps a libyubiblob snapshot session per serial,
+  closed when the YubiKey is gone (`NoDevice`, `CardRemoved`, `NoStore`,
+  `SeveralDevices`), and `DeviceStorage::refresh` reads it again.
+- The refresh points: the unlock dialog (`DatabaseOpenWidget::load`), the
+  "Open from YubiKey" dialog, and "Save as" (`chooseSaveLocation`); a
+  read that does not find its vault refreshes once and looks again.
+- Automatic saves: `DatabaseWidget::onDeviceSaveDelayTimeout`, started by
+  each change for at least 10 s (the database's own autosave delay, if
+  longer); postponed while a modal dialog is open or a reload or a save
+  runs.  A failed automatic save puts Retry on its message and waits for
+  the next change, Save, lock or exit.
+- The conflict signal is sent once the save is over: sent from inside
+  the save, it reached KeePassXC's reload while the save was still in
+  progress, which ignored it.
+- KeePassYB needs libyubiblob 0.4.0 (interface version 1).
 
 ## Open questions
 
-- **Q1: `D`, the minimum quiet delay.**  Proposal: 10 s.  Shorter saves
-  sooner but may ask for a touch in the middle of typing; longer leaves
-  more unsaved work if the computer crashes.
-- **Q2: the first automatic save asks for the PIN** in the middle of
-  editing.  Accept (proposal: it is once per unlock), or ask the PIN at
-  the first change rather than at the first save?
-- **Q3: Merge's master key:** KeePassXC's merge of a file changed on
-  disk reuses the open database's key; do the same, and ask only if it
-  fails?  Proposal: yes.
+None.  (Decided by implementing the proposals, 2026-10-18: Q1, 10 s; Q2,
+the PIN is asked at the first save, once per unlock; Q3, the merge
+reuses the open vault's master key, as KeePassXC's reload does.)
 
 ## References
 
