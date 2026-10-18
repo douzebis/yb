@@ -36,16 +36,25 @@ impl PcscSession {
     pub(super) fn open_with_mode(reader: &str, mode: pcsc::ShareMode) -> Result<Self> {
         let ctx = pcsc::Context::establish(pcsc::Scope::User)
             .map_err(|e| CardError::pcsc(PcscOp::Establish, e))?;
-        let card = connect_reader_mode(&ctx, reader, mode)?;
-
-        let mut session = Self {
-            card: Some(card),
-            secured: false,
-            mgmt_algo: None,
-            authenticated: None,
-        };
-        session.select_piv()?;
-        Ok(session)
+        // A program resetting the card as it closes (once it releases the
+        // lock, pcsc-lite's SCardDisconnect) may do so just as this
+        // connection takes the lock: its first command, SELECT, then fails.
+        // Nothing was done yet: connect again (spec 0048).
+        let mut attempts = 0;
+        loop {
+            let card = connect_reader_mode(&ctx, reader, mode)?;
+            let mut session = Self {
+                card: Some(card),
+                secured: false,
+                mgmt_algo: None,
+                authenticated: None,
+            };
+            match session.select_piv() {
+                Ok(()) => return Ok(session),
+                Err(e) if attempts < RESET_RETRIES && is_reset(&e) => attempts += 1,
+                Err(e) => return Err(e),
+            }
+        }
     }
 
     /// SELECT PIV applet (AID A0 00 00 03 08).
@@ -135,6 +144,24 @@ impl Drop for PcscSession {
 /// Instructions that change nothing on the card: SELECT, GET DATA, GET
 /// RESPONSE, GET METADATA, GET SERIAL, GET VERSION.
 const READ_ONLY_INS: [u8; 6] = [0xA4, 0xCB, 0xC0, 0xF7, 0xF8, 0xFD];
+
+/// How many times a first command failed by a reset is tried again.
+pub(crate) const RESET_RETRIES: u32 = 10;
+
+/// Whether `e` is the card reset by another program under this connection:
+/// `SCARD_W_RESET_CARD`, or, from pcsc-lite, a protocol mismatch.
+pub(crate) fn is_reset(e: &anyhow::Error) -> bool {
+    matches!(
+        e.downcast_ref::<CardError>(),
+        Some(CardError::Pcsc {
+            code: crate::errors::PcscCode::ResetCard,
+            ..
+        })
+    ) || matches!(
+        e.downcast_ref::<CardError>(),
+        Some(CardError::Pcsc { code: crate::errors::PcscCode::Other(c), .. }) if c == "ProtoMismatch"
+    )
+}
 
 /// How long to keep reconnecting after other programs reset the card.
 const RESET_PATIENCE: std::time::Duration = std::time::Duration::from_secs(30);

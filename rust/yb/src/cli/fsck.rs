@@ -411,14 +411,10 @@ fn check_post_quantum_store(
     Ok(healthy)
 }
 
-/// The checks that need the FIDO2 PIN (`fsck --seals`, spec 0045 S3): the
-/// credential and the management key (one touch), then each blob's seal
-/// (one touch each).  Fills `lines` with (label, result); returns whether
-/// all passed.
-#[cfg(not(windows))]
 /// What `--seals` will ask for: one touch for the credential and the
 /// management key, then one per blob, as each blob is sealed with a key of
 /// its own (one FIDO2 assertion each).
+#[cfg(not(windows))]
 fn seals_notice(blobs: usize) -> String {
     match blobs {
         0 => "Checking the seals: 1 touch, for the credential and the management key.".to_owned(),
@@ -430,6 +426,11 @@ fn seals_notice(blobs: usize) -> String {
     }
 }
 
+/// The checks that need the FIDO2 PIN (`fsck --seals`, spec 0045 S3): the
+/// credential and the management key (one touch), then each blob's seal
+/// (one touch each).  Fills `lines` with (label, result); returns whether
+/// all passed.
+#[cfg(not(windows))]
 fn check_with_fido2(
     ctx: &Context,
     store: &Store,

@@ -4,14 +4,27 @@
 
 //! Card info queries: serial number, firmware version.
 
-use super::transport::{connect_reader_mode, SELECT_PIV};
+use super::transport::{connect_reader_mode, RESET_RETRIES, SELECT_PIV};
 use anyhow::{bail, Result};
 
 fn query_card_apdu(reader: &str, query: &[u8]) -> Result<Vec<u8>> {
     let ctx = pcsc::Context::establish(pcsc::Scope::User)?;
-    let card = connect_reader_mode(&ctx, reader, pcsc::ShareMode::Shared)?;
     let mut buf = vec![0u8; 258];
-    let _ = card.transmit(SELECT_PIV, &mut buf)?;
+    // As PcscSession::open: a reset by another program just as this
+    // connection takes the lock fails the first command; connect again.
+    let mut attempts = 0;
+    let card = loop {
+        let card = connect_reader_mode(&ctx, reader, pcsc::ShareMode::Shared)?;
+        match card.transmit(SELECT_PIV, &mut buf) {
+            Ok(_) => break card,
+            Err(pcsc::Error::ResetCard | pcsc::Error::ProtoMismatch)
+                if attempts < RESET_RETRIES =>
+            {
+                attempts += 1;
+            }
+            Err(e) => return Err(e.into()),
+        }
+    };
     let resp = card.transmit(query, &mut buf)?.to_vec();
     // Read-only: leave the card as it is (spec 0048), rather than reset it.
     let _ = card.disconnect(pcsc::Disposition::LeaveCard);
