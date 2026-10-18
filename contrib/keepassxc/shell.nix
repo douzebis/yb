@@ -2,17 +2,17 @@
 #
 # SPDX-License-Identifier: MIT
 
-# Build environment for KeePassXC with databases stored on a YubiKey
-# (branch feature/yubikey-storage of https://github.com/douzebis/keepassyb),
-# with libyubiblob and the yb command from yb's v0.6.0 release.
+# Build environment for KeePassYB, a KeePassXC with databases stored on a
+# YubiKey (https://github.com/douzebis/keepassyb, branch keepassyb), with
+# libyubiblob and the yb command from yb's v0.7.0 release.
 #
 # Everything comes from the nixpkgs that yb pins, so it works whatever the
 # host's channel, and libyubiblob and KeePassXC share their libraries.
 # To build against a local yb checkout instead: nix-shell --arg yb ../yb
 {
   yb ? builtins.fetchTarball {
-    url = "https://github.com/douzebis/yb/archive/refs/tags/v0.6.0.tar.gz";
-    sha256 = "1maaibmgi35iizmv8gmp5qjps6hg98m747fds73fwzma05h9qnwi";
+    url = "https://github.com/douzebis/yb/archive/refs/tags/v0.7.0.tar.gz";
+    sha256 = "0xpxnk9n6wzjh2ia4y3ca94a7zmp8rds08q2s2h92dgl4zlrhp9k";
   },
   pkgs ? (import yb { }).nixpkgs,
 }:
