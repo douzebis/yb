@@ -36,8 +36,13 @@ let
   # top-level files do not affect the hash).
   rustSrc = pkgs.lib.cleanSourceWith {
     src = pkgs.lib.cleanSource ./rust;
-    # Include Cargo sources plus YAML fixtures used by tests.
-    filter = path: type: crane.filterCargoSources path type || pkgs.lib.hasSuffix ".yaml" path;
+    # Include Cargo sources plus YAML fixtures used by tests, and the
+    # crates' READMEs (yb-core's example is a doctest).
+    filter =
+      path: type:
+      crane.filterCargoSources path type
+      || pkgs.lib.hasSuffix ".yaml" path
+      || pkgs.lib.hasSuffix "/README.md" path;
   };
 
   # The version, from the workspace manifest (spec 0029 §6).

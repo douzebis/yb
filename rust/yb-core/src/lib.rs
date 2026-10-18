@@ -72,6 +72,8 @@ pub use zeroize::Zeroizing;
 pub mod test_utils;
 
 /// The README's example, compiled as a doctest, so that it stays true.
-#[cfg(doctest)]
+/// Not on Windows: the example uses a post-quantum store, which needs
+/// libfido2 (spec 0028, D9).
+#[cfg(all(doctest, not(windows)))]
 #[doc = include_str!("../README.md")]
 pub struct ReadmeDoctests;
