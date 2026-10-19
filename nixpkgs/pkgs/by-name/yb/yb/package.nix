@@ -20,12 +20,12 @@ rustPlatform.buildRustPackage (finalAttrs: {
     owner = "douzebis";
     repo = "yb";
     tag = "v${finalAttrs.version}";
-    hash = "sha256-M12Y6Sf0NZGg0AIjoFtGt/6jSFJseKKigPJzY9O0/XY=";
+    hash = "sha256-nBhwfIj7EbyBpk2ya/mERiRvh2W2/FA6z8IlQinxG4E=";
   };
 
   cargoRoot = "rust";
 
-  cargoHash = "sha256-+Um+sKGqzp7691PAX3heQV6GDenfg4I97G1WNpcysaE=";
+  cargoHash = "sha256-b8JtkbIgXu14Asdlnshdoww+DiKN0icGBhalsMHFSk0=";
 
   # Build and test only the yb crate (not the yb-piv-harness test harness,
   # which requires a virtual smart card and runs in the NixOS VM test below).
