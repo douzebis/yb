@@ -331,19 +331,35 @@ The store age is the maximum `OBJECT_AGE` value across all chunks.
 ## 9. File Magic
 
 The yblob format is registered in the
-[`file` magic database](https://github.com/file/file)
-([bug #666](https://bugs.astron.com/view.php?id=666), merged June 2025):
+[`file` magic database](https://github.com/file/file): legacy stores
+([bug #666](https://bugs.astron.com/view.php?id=666), merged June 2025)
+and post-quantum stores (section 11;
+[bug #813](https://bugs.astron.com/view.php?id=813), merged October 2026):
 
 ```
-# yblob object store
+# YBLOB mini object storage
 0    lelong    0xF2ED5F0B    yblob object store image data
+
+# YBLOB post-quantum object storage
+0    lelong    0xF2EDF0B2    yblob post-quantum object store image data
+>5   ubyte     1             \b, store descriptor
+>>6  ubyte     x             \b, version %u
+>>4  ubyte     x             \b, %u chunks
+>5   ubyte     0             \b, chunk
+>>9  ubyte     x             \b, in use
+>>9  default   x             \b, empty
 ```
 
-A raw PIV object dump is identified automatically:
+The post-quantum rule tells the store descriptor (`TYPE`, byte 0x05, is
+1; section 11) from a chunk (byte 0x05 is 0), and an empty chunk
+(exactly 9 bytes) from one in use.  A raw PIV object dump is identified automatically:
 
 ```shell
-$ file yubikey_object_dump.bin
-yubikey_object_dump.bin: yblob object store image data
+$ file legacy.bin descriptor.bin chunk00.bin chunk01.bin
+legacy.bin:     yblob object store image data
+descriptor.bin: yblob post-quantum object store image data, store descriptor, version 1, 16 chunks
+chunk00.bin:    yblob post-quantum object store image data, chunk, in use
+chunk01.bin:    yblob post-quantum object store image data, chunk, empty
 ```
 
 ---

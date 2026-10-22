@@ -397,18 +397,23 @@ objects can interoperate with a yblob store without using `yb` itself.
 ## File Format Recognition
 
 The yblob binary format is registered in the
-[`file` magic database](https://github.com/file/file) (merged June 2025,
-[bug #666](https://bugs.astron.com/view.php?id=666)).  On any system with an
-up-to-date `file` installation, raw PIV object dumps are identified
+[`file` magic database](https://github.com/file/file): legacy stores since
+June 2025 ([bug #666](https://bugs.astron.com/view.php?id=666)),
+post-quantum stores since October 2026
+([bug #813](https://bugs.astron.com/view.php?id=813)).  On any system with
+an up-to-date `file` installation, raw PIV object dumps are identified
 automatically:
 
 ```shell
-$ file yubikey_object_dump.bin
-yubikey_object_dump.bin: yblob object store image data
+$ file legacy.bin descriptor.bin chunk00.bin
+legacy.bin:     yblob object store image data
+descriptor.bin: yblob post-quantum object store image data, store descriptor, version 1, 16 chunks
+chunk00.bin:    yblob post-quantum object store image data, chunk, in use
 ```
 
-The magic number is `0xF2ED5F0B` (little-endian u32 at offset 0), present in
-every PIV object written by yb.
+Every PIV object written by yb starts with a magic number (little-endian
+u32 at offset 0): `0xF2ED5F0B` in a legacy store, `0xF2EDF0B2` in a
+post-quantum store.
 
 ---
 

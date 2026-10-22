@@ -12,6 +12,20 @@ All notable changes to yb are recorded here.  The format follows
 
 ## [Unreleased]
 
+No change to yb, yb-core or libyubiblob: this release is for packagers.
+
+### Changed
+
+- **Builds:** the FIDO2 emulator of the tests takes OpenSK from
+  crates.io (`opensk` 0.1, with `sk-cbor` 0.2), no longer from a fork
+  pinned to a git commit.  A build that vendors the workspace's
+  dependencies (nixpkgs) no longer fetches OpenSK's repository, nor
+  OpenSSL, which OpenSK no longer declares.
+- **Documentation:** `file` recognizes post-quantum stores too (magic
+  `0xF2EDF0B2`, bug #813 of its magic database): "yblob post-quantum
+  object store image data", then "store descriptor, version 1, 16
+  chunks", or "chunk, in use" or "chunk, empty".
+
 ## [0.7.1] — 2026-10-18
 
 ### Fixed
